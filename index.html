@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LSYSTEM | Core</title>
+
+    <!-- ===== FAVICON ===== -->
+    <link rel="icon" type="image/png" href="assets/logo.png" />
+    <link rel="shortcut icon" type="image/png" href="assets/logo.png" />
+
+    <!-- ✅ PWA ===== -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="msapplication-TileImage" content="assets/logo.png" />
+
+    <!-- ===== СТИЛИ ===== -->
+    <link rel="stylesheet" href="assets/index.css" />
+    <link rel="stylesheet" href="core/SettingsModal/SettingsModal.css" />
+
+    <!-- ===== SVG SPRITES (с Promise-обёрткой) ===== -->
+    <script>
+        (function() {
+            'use strict';
+
+            // ✅ Promise, который резолвится, когда SVG-спрайты готовы.
+            // index.js должен await window.__svgReady перед init(),
+            // чтобы иконки гарантированно были в DOM.
+            var _resolve, _reject;
+            window.__svgReady = new Promise(function(resolve, reject) {
+                _resolve = resolve;
+                _reject = reject;
+            });
+
+            (async function loadSprites() {
+                try {
+                    var response = await fetch('assets/svg.html');
+                    if (!response.ok) {
+                        throw new Error('svg.html status: ' + response.status);
+                    }
+                    var html = await response.text();
+
+                    var div = document.createElement('div');
+                    div.innerHTML = html;
+
+                    // Стили — в <head>
+                    var styles = div.querySelectorAll('style');
+                    styles.forEach(function(style) {
+                        document.head.appendChild(style.cloneNode(true));
+                    });
+
+                    // SVG-спрайты — в <body>, в самое начало
+                    var svg = div.querySelector('svg');
+                    if (svg) {
+                        document.body.insertBefore(svg, document.body.firstChild);
+                    }
+
+                    console.log('[SVG Sprites] Loaded');
+                    _resolve(true);
+                } catch (error) {
+                    console.warn('[SVG Sprites] Failed to load:', error);
+                    // Не reject'им — приложение должно работать и без иконок.
+                    _resolve(false);
+                }
+            })();
+        })();
+    </script>
+
+    <!-- ===== CORE ===== -->
+    <script src="core/HistoryManager.js"></script>
+    <script src="core/RenderWindow.js"></script>
+    <script src="core/BaseWindow.js"></script>
+    <script src="core/API/ExtendedAPIInjector.js"></script>
+    <script src="core/API/PluginAPI.js"></script>
+    <script src="core/API/BaseWindowInstance.js"></script>
+    <script src="core/DataBus.js"></script>
+    <script src="core/MessageBus.js"></script>
+    <script src="core/ProjectManager.js"></script>
+    <script src="core/WindowRegistry.js"></script>
+    <script src="core/PluginSystem.js"></script>
+    <script src="core/LayoutManager.js"></script>
+    <script src="core/AppState.js"></script>
+    <script src="core/HotkeyRegistry.js"></script>
+    <script src="core/SettingsModal/SettingsModal.js"></script>
+
+    <!-- ===== MAIN APP ===== -->
+    <script src="index.js"></script>
+
+</head>
+<body>
+    <div class="app-container">
+
+        <!-- ===== HEADER ===== -->
+        <header class="header" id="appHeader">
+
+            <!-- LOGO + PROJECT NAME -->
+            <div class="logo">
+                <img src="assets/logo.png"
+                     alt="LSYSTEM"
+                     class="logo-img"
+                     onerror="this.style.display='none'" />
+                <span class="logo-text">LSYSTEM</span>
+                <span class="logo-sub">Core</span>
+                <!-- ✅ Пункт 1.3: имя проекта -->
+                <span id="projectNameDisplay" class="logo-project-name">Untitled</span>
+            </div>
+
+            <!-- MAIN MENU -->
+            <div class="main-menu">
+
+                <!-- Save -->
+                <button class="btn btn-primary btn-sm" id="saveBtn" title="Save Project (Ctrl+S)">
+                    <svg class="icon-svg"><use href="#icon-save"></use></svg>
+                    <span id="saveBtnLabel">Save</span>
+                </button>
+
+                <!-- New Project -->
+                <button class="btn btn-outline btn-sm" id="newProjectBtn" title="New Project (Ctrl+N)">
+                    <svg class="icon-svg"><use href="#icon-folder"></use></svg>
+                    <span>New Project</span>
+                </button>
+
+                <!-- Load Dropdown -->
+                <div class="dropdown-wrapper" id="loadDropdown">
+                    <button class="btn btn-outline btn-sm dropdown-toggle" id="loadBtn" title="Load Project (Ctrl+O)">
+                        <svg class="icon-svg"><use href="#icon-load"></use></svg>
+                        <span>Load</span>
+                    </button>
+                    <div class="dropdown-menu" id="loadMenu">
+                        <div class="dropdown-header">Recent Projects</div>
+                        <div id="recentProjectsList"></div>
+                        <div class="dropdown-divider"></div>
+                        <button class="dropdown-item" id="loadFromFileBtn">
+                            <span class="item-icon">
+                                <svg class="icon-svg"><use href="#icon-browse"></use></svg>
+                            </span>
+                            <span class="item-label">Browse Files...</span>
+                            <span class="item-shortcut">Ctrl+O</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- History Dropdown -->
+                <div id="historyDropdown" class="dropdown-wrapper">
+                    <button id="historyBtn" class="btn btn-outline btn-sm dropdown-toggle" title="История (Ctrl+Z / Ctrl+Y)">
+                        <svg class="icon-svg" style="width:14px;height:14px;">
+                            <use href="#icon-history"></use>
+                        </svg>
+                        <span>История</span>
+                    </button>
+                    <div id="historyMenu" class="dropdown-menu"></div>
+                </div>
+
+                <!-- New Window Dropdown -->
+                <div class="dropdown-wrapper" id="newWindowDropdown">
+                    <button class="btn btn-outline btn-sm dropdown-toggle" id="newWindowBtn" title="Add New Window">
+                        <svg class="icon-svg"><use href="#icon-plus"></use></svg>
+                        <span>Window</span>
+                    </button>
+                    <div class="dropdown-menu" id="windowTypeMenu">
+                        <!-- Пункты добавляются автоматически через JS -->
+                    </div>
+                </div>
+
+                <!-- Settings -->
+                <button id="settingsBtn" class="btn btn-outline btn-sm" title="Настройки (Ctrl+,)">
+                    <svg class="icon-svg"><use href="#icon-settings"></use></svg>
+                </button>
+
+            </div>
+        </header>
+
+        <!-- ===== WORKSPACE ===== -->
+        <div class="workspace" id="workspace"></div>
+
+    </div>
+</body>
+</html>

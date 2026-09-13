@@ -1,0 +1,8 @@
+{
+    "groups": {
+        "Примеры": [
+            { "file": "ExampleWindow.js", "hidden": false },
+            { "file": "ExampleMainWindow.js", "hidden": false }
+        ]
+    }
+}
