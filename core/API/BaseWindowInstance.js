@@ -1,13 +1,45 @@
 // core/API/BaseWindowInstance.js
-// Версия 1.0.2 — drag-source по data-action + guard от двойной регистрации
-// - _registerMenuDragSources: поиск по `.window-action-btn[data-action=...]`
-// - Guard: if (_dragUnsubs.length > 0) return
-// - _cssEscape: CSS.escape fallback
+// Версия 2.4.0
+// - Feature: static get dataMenu() — окно само решает содержимое data-dropdown (📊).
+//            Три режима:
+//              1. ничего не объявлено → сток ядра
+//              2. static get dataMenu() → массив или функция от дефолта
+//              3. onDataMenuOpen(anchorEl, dropdownEl) → полный контроль
+// - Feature: _closeDataMenu(), _renderDefaultDataMenu() — публичные хелперы.
+// - v2.3.0: recordHistory(label).
+// - v2.2.0: прокси-методы BaseWindow API, отложенные drag-source и headerItems-мутации.
+// - v2.1.1: публичные геттеры getSlotId / getId / getType / getTitle / getIcon / getBaseWindow.
+//
+// ВАЖНО ПРО ПОРЯДОК ВЫЗОВОВ
+//
+//   BaseWindowInstance.constructor:
+//     1) _buildRoot()
+//     2) _setupChannels()
+//     3) buildContent()            ← здесь this._baseWindow ещё null
+//     4) if (this._baseWindow) _initAfterBaseWindow()
+//
+//   _baseWindow присваивается ИЗВНЕ (WindowRegistry / LayoutManager) уже
+//   ПОСЛЕ конструктора, через instance._baseWindow = baseWindow, и затем
+//   вызывается _initAfterBaseWindow() повторно, если он не был вызван.
+//
+// ПРО dataMenu (v2.4.0)
+//
+//   static get dataMenu() — три формы:
+//     null          → сток ядра: Импорт / Экспорт / ─ / Новый слот / Привязать
+//     Array         → полная замена
+//     function(def) → принимает дефолтный массив, возвращает изменённый
+//
+//   Если у окна определён onDataMenuOpen(anchorEl, dropdownEl) — он получает
+//   полный контроль. Ядро вызывает его вместо рендера по dataMenu.
+//
+//   Хелперы для окна:
+//     this._closeDataMenu()            — закрыть data-dropdown
+//     this._renderDefaultDataMenu(el)  — нарисовать стоковый набор в el
 
 (function() {
     'use strict';
 
-    console.log('[BaseWindowInstance] Loading v1.0.2...');
+    console.log('[BaseWindowInstance] Loading v2.4.0...');
 
     class BaseWindowInstance {
         constructor(container, windowData, options = {}) {
@@ -43,6 +75,19 @@
             this._hotkeyUnsub = null;
             this._requestUnsubs = [];
 
+            // runtime-мутации headerItems
+            this._headerItemsRuntime = null;
+
+            // состояние polling drag-source
+            this._dragSourcesTimer = null;
+            this._dragSourcesAttempts = 0;
+            this._dragSourcesMaxAttempts = 20;
+
+            // отложенные операции, требующие _baseWindow
+            this._pendingDragSources = [];
+            this._pendingHeaderOps = [];
+            this._initAfterBaseWindowDone = false;
+
             this._buildRoot();
             this._setupChannels();
             this.buildContent(this._content);
@@ -55,7 +100,23 @@
         }
 
         // ============================================================
-        // 1. СОЗДАНИЕ DOM-КОРНЯ
+        // 0. STATIC: dataMenu
+        // ============================================================
+        //
+        // Переопределяется в окне. Формы:
+        //   null          → сток ядра
+        //   Array         → полная замена
+        //   function(def) → модифицировать дефолт
+        //
+        // Если нужно полностью контролировать рендер — определи метод
+        // onDataMenuOpen(anchorEl, dropdownEl) вместо/помимо этого.
+
+        static get dataMenu() {
+            return null;
+        }
+
+        // ============================================================
+        // 1. DOM-КОРЕНЬ
         // ============================================================
 
         _buildRoot() {
@@ -140,8 +201,19 @@
         }
 
         _initAfterBaseWindow() {
+            if (this._initAfterBaseWindowDone) {
+                this._flushPendingHeaderOps();
+                this._flushPendingDragSources();
+                return;
+            }
+            this._initAfterBaseWindowDone = true;
+
+            this._flushPendingHeaderOps();
+            this._applyHeaderItems();
+
             this._registerDropTarget();
             this._registerMenuDragSources();
+            this._flushPendingDragSources();
             this._registerHotkeys();
             this._loadFromSlot();
 
@@ -156,6 +228,247 @@
             }
 
             console.log(`[BaseWindowInstance #${this.id}] ready`);
+        }
+
+        // ============================================================
+        // 4.1. HEADER ITEMS
+        // ============================================================
+
+        getHeaderItems() {
+            if (Array.isArray(this._headerItemsRuntime)) {
+                return this._headerItemsRuntime.slice();
+            }
+
+            const menu = this.constructor.menu;
+            if (!menu || !Array.isArray(menu.headerItems)) {
+                return [];
+            }
+
+            return menu.headerItems.filter(x => x && typeof x === 'object');
+        }
+
+        _applyHeaderItems() {
+            if (!this._baseWindow) return false;
+
+            const items = this.getHeaderItems();
+
+            if (typeof this._baseWindow.refreshHeaderItems === 'function') {
+                try {
+                    this._baseWindow.refreshHeaderItems();
+                } catch (e) {
+                    console.error('[BaseWindowInstance] _applyHeaderItems error:', e);
+                    return false;
+                }
+                return true;
+            }
+
+            const rw = this._baseWindow.getRenderWindow?.();
+            if (rw && typeof rw.setHeaderItems === 'function') {
+                try {
+                    rw.setHeaderItems(items);
+                } catch (e) {
+                    console.error('[BaseWindowInstance] _applyHeaderItems error:', e);
+                    return false;
+                }
+                return true;
+            }
+
+            return false;
+        }
+
+        refreshHeaderItems() {
+            if (this._isDestroyed) return false;
+            return this._applyHeaderItems();
+        }
+
+        setHeaderItems(items) {
+            if (this._isDestroyed) return false;
+
+            if (items === null) {
+                this._headerItemsRuntime = null;
+            } else if (Array.isArray(items)) {
+                this._headerItemsRuntime = items.filter(x => x && typeof x === 'object');
+            } else {
+                console.warn('[BaseWindowInstance] setHeaderItems: expected array or null');
+                return false;
+            }
+
+            if (!this._baseWindow) {
+                this._pendingHeaderOps.push({ type: 'set', items: this._headerItemsRuntime });
+                return true;
+            }
+
+            return this._applyHeaderItems();
+        }
+
+        addHeaderItem(desc, index = undefined) {
+            if (this._isDestroyed) return false;
+            if (!desc || typeof desc !== 'object') {
+                console.warn('[BaseWindowInstance] addHeaderItem: desc must be object');
+                return false;
+            }
+
+            if (!Array.isArray(this._headerItemsRuntime)) {
+                this._headerItemsRuntime = this.getHeaderItems();
+            }
+
+            if (typeof index === 'number' && index >= 0 && index <= this._headerItemsRuntime.length) {
+                this._headerItemsRuntime.splice(index, 0, desc);
+            } else {
+                this._headerItemsRuntime.push(desc);
+            }
+
+            if (!this._baseWindow) {
+                this._pendingHeaderOps.push({ type: 'add', desc, index });
+                return true;
+            }
+
+            return this._applyHeaderItems();
+        }
+
+        removeHeaderItem(id) {
+            if (this._isDestroyed) return false;
+            if (!id) return false;
+
+            if (!Array.isArray(this._headerItemsRuntime)) {
+                this._headerItemsRuntime = this.getHeaderItems();
+            }
+
+            const before = this._headerItemsRuntime.length;
+            this._headerItemsRuntime = this._headerItemsRuntime.filter(d => d.id !== id);
+
+            if (this._headerItemsRuntime.length === before) {
+                return false;
+            }
+
+            if (!this._baseWindow) {
+                this._pendingHeaderOps.push({ type: 'remove', id });
+                return true;
+            }
+
+            return this._applyHeaderItems();
+        }
+
+        _flushPendingHeaderOps() {
+            if (!this._baseWindow) return;
+            if (this._pendingHeaderOps.length === 0) return;
+
+            this._pendingHeaderOps = [];
+            this._applyHeaderItems();
+        }
+
+        getRenderedHeaderItems() {
+            if (!this._baseWindow) return [];
+            const rw = this._baseWindow.getRenderWindow?.();
+            if (!rw || typeof rw.getHeaderItems !== 'function') return [];
+            return rw.getHeaderItems();
+        }
+
+        refreshDropdowns() {
+            if (!this._baseWindow) return;
+            const rw = this._baseWindow.getRenderWindow?.();
+            if (rw && typeof rw.refreshDropdowns === 'function') {
+                try { rw.refreshDropdowns(); } catch (e) {}
+            }
+        }
+
+        onHeaderItemClick(desc, payload) {
+            return false;
+        }
+
+        // ============================================================
+        // 4.2. DATA MENU (📊)
+        // ============================================================
+        //
+        // Разрешение содержимого data-dropdown. Возвращает массив пунктов.
+        //
+        // Форматы пункта:
+        //   { divider: true }
+        //   { header: 'текст' }
+        //   { icon, label, action, value?, payload?, danger?, disabled? }
+        //   { icon, label, onClick: (item, ctx) => void }
+        //
+        // Спец-action'ы ядра (обрабатываются в RenderWindow._buildDataMenuItem):
+        //   'import'    — Импорт JSON
+        //   'export'    — Экспорт JSON
+        //   'new-slot'  — Новый слот
+        //   'attach'    — Привязать (submenu)
+
+        _resolveDataMenu() {
+            const def = this.constructor.dataMenu;
+
+            const defaults = [
+                { icon: 'icon-import', label: 'Импорт', action: 'import' },
+                { icon: 'icon-export', label: 'Экспорт', action: 'export' },
+                { divider: true },
+                { icon: 'icon-plus',   label: 'Новый слот', action: 'new-slot' },
+                { icon: 'icon-link',   label: 'Привязать',  action: 'attach' }
+            ];
+
+            if (def == null) return defaults;
+
+            if (typeof def === 'function') {
+                try {
+                    const result = def(defaults);
+                    return Array.isArray(result) ? result : defaults;
+                } catch (e) {
+                    console.error('[BaseWindowInstance] dataMenu() error:', e);
+                    return defaults;
+                }
+            }
+
+            if (Array.isArray(def)) return def;
+
+            return defaults;
+        }
+
+        _hasCustomDataMenuOpen() {
+            return typeof this.onDataMenuOpen === 'function'
+                && this.onDataMenuOpen !== BaseWindowInstance.prototype.onDataMenuOpen;
+        }
+
+        /**
+         * Заглушка. Переопределяется в окне для полного контроля над
+         * data-dropdown (📊). Получает:
+         *   anchorEl    — кнопка 📊 (может быть null)
+         *   dropdownEl  — пустой <div class="window-dropdown data-dropdown">
+         *                 (уже display:block, opacity → 1 через rAF)
+         *
+         * Окно само наполняет dropdownEl. Ядро закроет dropdown по клику вне.
+         * Для ручного закрытия — this._closeDataMenu().
+         */
+        onDataMenuOpen(anchorEl, dropdownEl) {
+            // no-op
+        }
+
+        /**
+         * Закрыть data-dropdown. Используется из onDataMenuOpen.
+         */
+        _closeDataMenu() {
+            if (!this._baseWindow) return;
+            const rw = this._baseWindow.getRenderWindow?.();
+            if (rw && typeof rw._closeDataMenu === 'function') {
+                try { rw._closeDataMenu(); } catch (e) {}
+            }
+        }
+
+        /**
+         * Нарисовать стоковый набор (Импорт / Экспорт / ─ / Новый слот / Привязать)
+         * в переданный dropdownEl. Полезно в onDataMenuOpen, если хочется
+         * начать со стока и добавить свои.
+         */
+        _renderDefaultDataMenu(dropdownEl) {
+            if (!dropdownEl) return;
+            if (!this._baseWindow) return;
+
+            const rw = this._baseWindow.getRenderWindow?.();
+            if (!rw || typeof rw._buildDataMenuItem !== 'function') return;
+
+            const items = this._resolveDataMenu();
+            for (const item of items) {
+                const el = rw._buildDataMenuItem(item, this);
+                if (el) dropdownEl.appendChild(el);
+            }
         }
 
         // ============================================================
@@ -216,60 +529,78 @@
         }
 
         // ============================================================
-        // 6. DRAG-SOURCE ИЗ КНОПОК МЕНЮ (v1.0.2)
+        // 6. DRAG-SOURCE
         // ============================================================
 
         _registerMenuDragSources() {
+            if (this._isDestroyed) return;
+
             if (!this._baseWindow || typeof this._baseWindow.registerDragSource !== 'function') {
                 return;
             }
 
-            const menu = this.constructor.menu;
-            if (!menu || !Array.isArray(menu.headerButtons)) return;
+            const items = this.getHeaderItems();
+            if (!Array.isArray(items) || items.length === 0) return;
 
-            // Guard от двойной регистрации
             if (this._dragUnsubs.length > 0) return;
 
-            const headerEl = this._baseWindow.getRenderWindow?.()?.getHeader?.();
-            if (!headerEl) {
-                setTimeout(() => this._registerMenuDragSources(), 50);
+            if (this._dragSourcesAttempts >= this._dragSourcesMaxAttempts) {
+                if (this._dragSourcesAttempts === this._dragSourcesMaxAttempts) {
+                    console.warn(
+                        `[BaseWindowInstance #${this.id}] _registerMenuDragSources: ` +
+                        `header not found after ${this._dragSourcesMaxAttempts} attempts — giving up`
+                    );
+                    this._dragSourcesAttempts++;
+                }
                 return;
             }
 
-            // Проверяем, что все drag-source кнопки в DOM (по data-action)
+            const headerEl = this._baseWindow.getRenderWindow?.()?.getHeader?.();
+            if (!headerEl) {
+                this._dragSourcesAttempts++;
+                this._dragSourcesTimer = setTimeout(
+                    () => {
+                        this._dragSourcesTimer = null;
+                        this._registerMenuDragSources();
+                    },
+                    50
+                );
+                return;
+            }
+
+            const dragItems = items.filter(it => it && it.dragSource && it.action);
+            if (dragItems.length === 0) return;
+
             let allFound = true;
-            let hasAnyDragSource = false;
-
-            for (const btnConfig of menu.headerButtons) {
-                if (!btnConfig || !btnConfig.dragSource) continue;
-                if (!btnConfig.action) continue;
-                hasAnyDragSource = true;
-
-                const sel = `.window-action-btn[data-action="${this._cssEscape(btnConfig.action)}"]`;
+            for (const it of dragItems) {
+                const sel = `.window-action-btn[data-action="${this._cssEscape(it.action)}"]`;
                 if (!headerEl.querySelector(sel)) {
                     allFound = false;
                     break;
                 }
             }
 
-            if (!hasAnyDragSource) return;
-
             if (!allFound) {
-                setTimeout(() => this._registerMenuDragSources(), 50);
+                this._dragSourcesAttempts++;
+                this._dragSourcesTimer = setTimeout(
+                    () => {
+                        this._dragSourcesTimer = null;
+                        this._registerMenuDragSources();
+                    },
+                    50
+                );
                 return;
             }
 
-            // Регистрируем по data-action
-            for (const btnConfig of menu.headerButtons) {
-                if (!btnConfig || !btnConfig.dragSource) continue;
-                const action = btnConfig.action;
-                if (!action) continue;
+            this._dragSourcesAttempts = 0;
 
+            for (const it of dragItems) {
+                const action = it.action;
                 const sel = `.window-action-btn[data-action="${this._cssEscape(action)}"]`;
                 const btn = headerEl.querySelector(sel);
                 if (!btn) continue;
 
-                const ds = btnConfig.dragSource;
+                const ds = it.dragSource;
                 const unsub = this._baseWindow.registerDragSource(btn, {
                     type: ds.type || 'default',
                     getPayload: typeof ds.getPayload === 'function'
@@ -281,6 +612,33 @@
                 this._dragUnsubs.push(unsub);
 
                 console.log(`[BaseWindowInstance #${this.id}] drag-source registered on "${action}"`);
+            }
+        }
+
+        _flushPendingDragSources() {
+            if (!this._baseWindow) return;
+            if (this._pendingDragSources.length === 0) return;
+
+            if (typeof this._baseWindow.registerDragSource !== 'function') {
+                this._pendingDragSources = [];
+                return;
+            }
+
+            const queue = this._pendingDragSources;
+            this._pendingDragSources = [];
+
+            for (const { element, opts } of queue) {
+                if (!element || element.nodeType !== 1) continue;
+                try {
+                    const unsub = this._baseWindow.registerDragSource(element, opts);
+                    this._dragUnsubs.push(unsub);
+                } catch (e) {
+                    console.error('[BaseWindowInstance] pending makeDraggable error:', e);
+                }
+            }
+
+            if (queue.length > 0) {
+                console.log(`[BaseWindowInstance #${this.id}] applied ${queue.length} pending drag-source(s)`);
             }
         }
 
@@ -474,14 +832,210 @@
         onExport() { return null; }
 
         // ============================================================
-        // 10. ХЕЛПЕРЫ
+        // 10. ПРОКСИ-МЕТОДЫ к BaseWindow
         // ============================================================
+
+        getSlotId() {
+            if (this._baseWindow && typeof this._baseWindow.getSlotId === 'function') {
+                try {
+                    const sid = this._baseWindow.getSlotId();
+                    if (sid != null) return sid;
+                } catch (e) {}
+            }
+            return this.slotId || null;
+        }
+
+        getId() {
+            if (this._baseWindow && typeof this._baseWindow.getId === 'function') {
+                try {
+                    const id = this._baseWindow.getId();
+                    if (id != null) return id;
+                } catch (e) {}
+            }
+            return this.id;
+        }
+
+        getType() {
+            return this.type;
+        }
+
+        getTitle() {
+            if (this.windowData && this.windowData.title) {
+                return this.windowData.title;
+            }
+            if (this._baseWindow && typeof this._baseWindow.getTitle === 'function') {
+                try { return this._baseWindow.getTitle(); } catch (e) {}
+            }
+            const meta = this.constructor.meta;
+            return (meta && meta.name) || this.type || 'Window';
+        }
+
+        getIcon() {
+            if (this.windowData && this.windowData.icon) {
+                return this.windowData.icon;
+            }
+            if (this._baseWindow && typeof this._baseWindow.getIcon === 'function') {
+                try { return this._baseWindow.getIcon(); } catch (e) {}
+            }
+            const meta = this.constructor.meta;
+            return (meta && meta.icon) || '📄';
+        }
+
+        getBaseWindow() {
+            return this._baseWindow || null;
+        }
+
+        hasBaseWindow() {
+            return !!this._baseWindow;
+        }
+
+        getSlotWindows() {
+            if (this._baseWindow && typeof this._baseWindow.getSlotWindows === 'function') {
+                try { return this._baseWindow.getSlotWindows(); } catch (e) {}
+            }
+            if (this._dataBus && this.getSlotId()) {
+                try { return this._dataBus.getSlotWindows(this.getSlotId()); } catch (e) {}
+            }
+            return [];
+        }
+
+        attachTo(slotId) {
+            if (!slotId) {
+                console.warn('[BaseWindowInstance] attachTo: slotId is required');
+                return this;
+            }
+            if (this._baseWindow && typeof this._baseWindow.attachTo === 'function') {
+                try { this._baseWindow.attachTo(slotId); } catch (e) {
+                    console.error('[BaseWindowInstance] attachTo error:', e);
+                }
+                this.slotId = slotId;
+                return this;
+            }
+            console.warn('[BaseWindowInstance] attachTo: _baseWindow not attached yet');
+            return this;
+        }
+
+        createEmptySlot() {
+            if (this._baseWindow && typeof this._baseWindow.createEmptySlot === 'function') {
+                try { this._baseWindow.createEmptySlot(); } catch (e) {
+                    console.error('[BaseWindowInstance] createEmptySlot error:', e);
+                }
+                if (typeof this._baseWindow.getSlotId === 'function') {
+                    try { this.slotId = this._baseWindow.getSlotId(); } catch (e) {}
+                }
+                return this;
+            }
+            console.warn('[BaseWindowInstance] createEmptySlot: _baseWindow not attached yet');
+            return this;
+        }
+
+        minimize() {
+            if (this._baseWindow && typeof this._baseWindow.minimize === 'function') {
+                try { return this._baseWindow.minimize(); } catch (e) {}
+            }
+            return false;
+        }
+
+        isMinimized() {
+            if (this._baseWindow && typeof this._baseWindow.isMinimized === 'function') {
+                try { return this._baseWindow.isMinimized(); } catch (e) {}
+            }
+            return false;
+        }
+
+        setFullscreen() {
+            if (this._baseWindow && typeof this._baseWindow.setFullscreen === 'function') {
+                try { return this._baseWindow.setFullscreen(); } catch (e) {}
+            }
+            return false;
+        }
+
+        exitFullscreen() {
+            if (this._baseWindow && typeof this._baseWindow.exitFullscreen === 'function') {
+                try { return this._baseWindow.exitFullscreen(); } catch (e) {}
+            }
+            return false;
+        }
+
+        isFullscreen() {
+            if (this._baseWindow && typeof this._baseWindow.isFullscreen === 'function') {
+                try { return this._baseWindow.isFullscreen(); } catch (e) {}
+            }
+            return false;
+        }
+
+        toggleFullscreen() {
+            if (this._baseWindow && typeof this._baseWindow.toggleFullscreen === 'function') {
+                try { return this._baseWindow.toggleFullscreen(); } catch (e) {}
+            }
+            return false;
+        }
+
+        refreshHeader() {
+            if (this._baseWindow && typeof this._baseWindow.refreshHeader === 'function') {
+                try { this._baseWindow.refreshHeader(); } catch (e) {}
+            }
+        }
+
+        getRenderWindow() {
+            if (this._baseWindow && typeof this._baseWindow.getRenderWindow === 'function') {
+                try { return this._baseWindow.getRenderWindow(); } catch (e) {}
+            }
+            return null;
+        }
+
+        getBaseWindowRoot() {
+            if (this._baseWindow && typeof this._baseWindow.getRoot === 'function') {
+                try { return this._baseWindow.getRoot(); } catch (e) {}
+            }
+            return null;
+        }
 
         save() {
             if (this._baseWindow && typeof this._baseWindow.save === 'function') {
                 try { this._baseWindow.save(); } catch (e) {
                     console.error('[BaseWindowInstance] save error:', e);
                 }
+            }
+        }
+
+        // ============================================================
+        // 10.1. ИСТОРИЯ
+        // ============================================================
+
+        recordHistory(label = 'Действие') {
+            if (this._isDestroyed) return false;
+
+            this.save();
+
+            if (typeof window === 'undefined' || !window.historyManager) {
+                console.warn('[BaseWindowInstance] recordHistory: HistoryManager not available');
+                return false;
+            }
+
+            const hm = window.historyManager;
+
+            if (typeof hm.isRestoring === 'function' && hm.isRestoring()) {
+                return false;
+            }
+
+            const safeLabel = String(label || 'Действие');
+
+            try {
+                hm.record(safeLabel);
+
+                document.dispatchEvent(new CustomEvent('history-recorded', {
+                    detail: {
+                        label: safeLabel,
+                        windowId: this.id,
+                        type: this.type
+                    }
+                }));
+
+                return true;
+            } catch (e) {
+                console.error('[BaseWindowInstance] recordHistory error:', e);
+                return false;
             }
         }
 
@@ -524,7 +1078,7 @@
         sendToSlot(channel, data, slotId = null) {
             if (!this._messageBus) return false;
             return this._messageBus.sendToTypeAndSlot(
-                this.id, this.type, slotId || this.slotId, channel, data
+                this.id, this.type, slotId || this.getSlotId(), channel, data
             );
         }
 
@@ -625,9 +1179,20 @@
         // ============================================================
 
         makeDraggable(element, opts = {}) {
-            if (!this._baseWindow || typeof this._baseWindow.registerDragSource !== 'function') {
+            if (!element || element.nodeType !== 1) {
                 return () => {};
             }
+
+            if (!this._baseWindow || typeof this._baseWindow.registerDragSource !== 'function') {
+                this._pendingDragSources.push({ element, opts });
+                return () => {
+                    const idx = this._pendingDragSources.findIndex(p => p.element === element);
+                    if (idx !== -1) {
+                        this._pendingDragSources.splice(idx, 1);
+                    }
+                };
+            }
+
             const unsub = this._baseWindow.registerDragSource(element, opts);
             this._dragUnsubs.push(unsub);
             return unsub;
@@ -656,10 +1221,32 @@
             this._isDestroyed = true;
             this._isReady = false;
 
+            if (this._dragSourcesTimer) {
+                clearTimeout(this._dragSourcesTimer);
+                this._dragSourcesTimer = null;
+            }
+
             if (typeof this.onBeforeDestroy === 'function') {
                 try { this.onBeforeDestroy(); } catch (e) {
                     console.error('[BaseWindowInstance] onBeforeDestroy error:', e);
                 }
+            }
+
+            try {
+                const rendered = this.getRenderedHeaderItems();
+                if (Array.isArray(rendered)) {
+                    for (const item of rendered) {
+                        if (!item || !item.el) continue;
+                        const desc = item.desc;
+                        if (desc && typeof desc.destroy === 'function') {
+                            try { desc.destroy(item.el, this); } catch (e) {
+                                console.error('[BaseWindowInstance] headerItem.destroy error:', e);
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[BaseWindowInstance] headerItem cleanup error:', e);
             }
 
             if (window.hotkeyRegistry
@@ -692,15 +1279,48 @@
                 this._hotkeyUnsub = null;
             }
 
+            this._pendingDragSources = [];
+            this._pendingHeaderOps = [];
+
             if (this._root && this._root.parentNode) {
                 this._root.remove();
             }
             this._root = null;
             this._content = null;
+            this._headerItemsRuntime = null;
 
             console.log(`[BaseWindowInstance] Destroyed: ${this.type} (${this.id})`);
         }
     }
+
+    // ============================================================
+    // 17. СТАТИЧЕСКИЙ ПРОКИД
+    // ============================================================
+
+    BaseWindowInstance.registerHeaderItemType = function(type, builder) {
+        const RW = window.RenderWindow;
+        if (!RW || typeof RW.registerHeaderItemType !== 'function') {
+            console.error('[BaseWindowInstance] RenderWindow not available');
+            return false;
+        }
+        return RW.registerHeaderItemType(type, builder);
+    };
+
+    BaseWindowInstance.unregisterHeaderItemType = function(type) {
+        const RW = window.RenderWindow;
+        if (!RW || typeof RW.unregisterHeaderItemType !== 'function') return false;
+        return RW.unregisterHeaderItemType(type);
+    };
+
+    BaseWindowInstance.getHeaderItemTypes = function() {
+        const RW = window.RenderWindow;
+        if (!RW || typeof RW.getHeaderItemTypes !== 'function') return [];
+        return RW.getHeaderItemTypes();
+    };
+
+    // ============================================================
+    // ЭКСПОРТ
+    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { BaseWindowInstance };
@@ -708,7 +1328,7 @@
 
     if (typeof window !== 'undefined') {
         window.BaseWindowInstance = BaseWindowInstance;
-        console.log('[BaseWindowInstance] Registered globally v1.0.2');
+        console.log('[BaseWindowInstance] Registered globally v2.4.0');
     }
 
 })();

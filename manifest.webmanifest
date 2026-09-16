@@ -1,0 +1,16 @@
+{
+    "name": "LSYSTEM Core",
+    "short_name": "LSYSTEM",
+    "description": "Модульная оконная система",
+    "start_url": "./index.html",
+    "display": "standalone",
+    "background_color": "#0d0d0d",
+    "theme_color": "#cc2233",
+    "icons": [
+        {
+            "src": "core/assets/logo.ico",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}

@@ -1,38 +1,43 @@
 // core/BaseWindow.js
-// Версия 7.4.0 — RPC proxy + keyboard capture + findWindowByType
-// - request(channel, data, targetId, options) → Promise  (proxy на _messageBus)
-// - onRequest(channel, handler) → unsubscribe            (proxy на _messageBus)
-// - captureKeyboard() / releaseKeyboard() / isKeyboardCaptured()
-// - findWindowByType(typeId) / findWindowsByType(typeId)
-// - _requestUnsubs: [] — авто-отписка в destroy()
-// - destroy(): авто-release capture, отписка onRequest
-// - v7.3.0 логика (visibility, isVisible, save, onSlotChange) — без изменений
+// Версия 8.0.2
+// - Fix v8.0.2: registerDragSource — [data-no-drag] теперь учитывает значение:
+//     <el data-no-drag>            → блокирует (значение пустое)
+//     <el data-no-drag="true">     → блокирует
+//     <el data-no-drag="1">        → блокирует
+//     <el data-no-drag="false">    → НЕ блокирует
+//     <el data-no-drag="0">        → НЕ блокирует
+//     <el data-no-drag="no">       → НЕ блокирует
+//   Раньше closest('[data-no-drag]') матчил по факту наличия атрибута
+//   независимо от значения — это ломало случаи, когда разработчик писал
+//   data-no-drag="false" в расчёте на противоположное поведение.
+// - Fix v8.0.2: registerDragSource — добавлен preventDefault на 'dragstart'
+//   (защита от native HTML5 drag&drop, который мог перебить кастомный ghost).
+//   Если элементу нужен native drag — ставим data-allow-native-drag="true".
+// - v8.0.1: _setupDropTarget / _teardownDropTarget — корректная работа
+//           при reuse контейнера.
+// - v8.0.0: headerItems only.
 
 (function() {
     'use strict';
 
-    console.log('[BaseWindow] Loading v7.4.0...');
+    console.log('[BaseWindow] Loading v8.0.2...');
 
     class BaseWindow {
         constructor({ id, type, container, options = {} }) {
-            // ===== ОСНОВНЫЕ ПОЛЯ =====
             this.id = id;
             this.type = type;
             this.container = container;
             this.options = options;
 
-            // ===== Тема =====
             this._themeObserver = null;
             this._themeUnsubscribe = null;
 
-            // ===== DEPENDENCY INJECTION =====
             this._dataBus = options.dataBus || null;
             this._registry = options.registry || null;
             this._eventBus = options.eventBus || null;
             this._layoutManager = options.layoutManager || null;
             this._messageBus = options.messageBus || null;
 
-            // ===== РЕАЛЬНЫЙ ЭКЗЕМПЛЯР =====
             this._realInstance = options._realInstance || null;
             this._realInstanceSet = !!this._realInstance;
 
@@ -40,10 +45,8 @@
                 this._realInstance._baseWindow = this;
             }
 
-            // ===== СЛОТ =====
             this._slotId = options.slotId || null;
 
-            // ===== СОСТОЯНИЕ =====
             this._isReady = false;
             this._isDestroyed = false;
             this._isLoading = false;
@@ -52,41 +55,65 @@
             this._isVisible = true;
             this._visibilityObserver = null;
 
-            // ✅ Подписка на window-visibility-changed
             this._visibilityUnsub = null;
 
-            // ✅ НОВОЕ (v7.4.0): RPC-отписки
             this._requestUnsubs = [];
 
-            // ===== ДАННЫЕ =====
             this._metadata = {};
             this._data = null;
             this._config = {};
             this._uiState = {};
 
-            // ===== МЕТАДАННЫЕ ТИПА =====
             this._typeConfig = this._registry ? this._registry.getType(type) : null;
             this._title = this._typeConfig?.name || type || 'Window';
             this._icon = this._typeConfig?.icon || '📄';
 
-            // ===== RENDER WINDOW =====
             this._renderWindow = null;
 
-            // ===== SUBSCRIPTIONS =====
             this._subscriptions = [];
             this._slotUnsubscribe = null;
             this._messageUnsubscribe = null;
             this._layoutUnsubscribe = null;
             this._hotkeyUnsub = null;
 
-            // ===== DRAG / DROP =====
             this._dragState = null;
             this._dropHandlers = null;
             this._dropConfig = null;
             this._dropUnsub = null;
 
-            // ===== ИНИЦИАЛИЗАЦИЯ =====
             this._init();
+        }
+
+        // ============================================================
+        // 0. HEADER ITEMS RESOLVER
+        // ============================================================
+
+        _resolveHeaderItems() {
+            const realInstance = this.getRealInstance();
+            if (realInstance && realInstance !== this
+                && typeof realInstance.getHeaderItems === 'function') {
+                try {
+                    const items = realInstance.getHeaderItems();
+                    if (Array.isArray(items)) {
+                        return items.filter(x => x && typeof x === 'object');
+                    }
+                } catch (e) {
+                    console.warn('[BaseWindow] realInstance.getHeaderItems error:', e);
+                }
+            }
+
+            if (this._registry && typeof this._registry.getTypeHeaderItems === 'function') {
+                const items = this._registry.getTypeHeaderItems(this.type);
+                if (Array.isArray(items) && items.length > 0) {
+                    return items;
+                }
+            }
+
+            if (this._typeConfig && Array.isArray(this._typeConfig.headerItems)) {
+                return this._typeConfig.headerItems.slice();
+            }
+
+            return [];
         }
 
         // ============================================================
@@ -103,10 +130,8 @@
                 return;
             }
 
-            // ===== ПОЛУЧАЕМ КОНФИГ ТИПА =====
-            let typeConfig = null;
             if (this._registry) {
-                typeConfig = this._registry.getType(this.type);
+                const typeConfig = this._registry.getType(this.type);
                 if (typeConfig) {
                     this._typeConfig = typeConfig;
                     this._title = typeConfig.name || this._title;
@@ -114,24 +139,8 @@
                 }
             }
 
-            // ===== ВЫЗЫВАЕМ UI-ФАБРИКИ =====
-            let headerButtons = [];
             let contextMenu = [];
-            let dropdownMenu = null;
-
             if (this._typeConfig) {
-                if (typeof this._typeConfig.headerButtons === 'function') {
-                    try {
-                        const result = this._typeConfig.headerButtons(this, null, this._layoutManager);
-                        headerButtons = Array.isArray(result) ? result : [];
-                    } catch (e) {
-                        console.warn('[BaseWindow] headerButtons error:', e);
-                        headerButtons = [];
-                    }
-                } else if (Array.isArray(this._typeConfig.headerButtons)) {
-                    headerButtons = this._typeConfig.headerButtons;
-                }
-
                 if (typeof this._typeConfig.contextMenu === 'function') {
                     try {
                         const result = this._typeConfig.contextMenu(this, null, this._layoutManager);
@@ -143,20 +152,10 @@
                 } else if (Array.isArray(this._typeConfig.contextMenu)) {
                     contextMenu = this._typeConfig.contextMenu;
                 }
-
-                if (typeof this._typeConfig.dropdownMenu === 'function') {
-                    try {
-                        dropdownMenu = this._typeConfig.dropdownMenu(this, null, this._layoutManager) || null;
-                    } catch (e) {
-                        console.warn('[BaseWindow] dropdownMenu error:', e);
-                        dropdownMenu = null;
-                    }
-                } else {
-                    dropdownMenu = this._typeConfig.dropdownMenu || null;
-                }
             }
 
-            // ===== СОЗДАЁМ RENDER WINDOW =====
+            const headerItems = this._resolveHeaderItems();
+
             this._renderWindow = new RenderWindow({
                 container: this.container,
                 type: this.type,
@@ -166,14 +165,12 @@
                     icon: this._icon,
                     registry: this._registry,
                     layoutManager: this._layoutManager,
-                    headerButtons: headerButtons,
+                    headerItems: headerItems,
                     contextMenu: contextMenu,
-                    dropdownMenu: dropdownMenu,
                     baseWindow: this
                 }
             });
 
-            // Подписываемся на события RenderWindow
             this._renderWindow.on('close', () => this._onRenderClose());
             this._renderWindow.on('change-type', (data) => this._onRenderChangeType(data));
             this._renderWindow.on('layout-change', (data) => this._onRenderLayoutChange(data));
@@ -181,18 +178,15 @@
             this._renderWindow.on('resize', (data) => this._onRenderResize(data));
             this._renderWindow.on('swap', (data) => this._onRenderSwap(data));
 
-            // События данных
             this._renderWindow.on('data-import', () => this._onDataImport());
             this._renderWindow.on('data-export', () => this._onDataExport());
             this._renderWindow.on('data-new-slot', () => this._onDataNewSlot());
             this._renderWindow.on('data-attach', (data) => this._onDataAttach(data));
 
-            // Minimize/fullscreen
             this._renderWindow.on('minimize', () => this._onRenderMinimize());
             this._renderWindow.on('fullscreen', () => this._onRenderFullscreen());
             this._renderWindow.on('fullscreen-exit', () => this._onRenderFullscreenExit());
 
-            // Настройка зависимостей
             this._subscribeToSlot();
             this._subscribeToMessages();
             this._loadFromSlot();
@@ -203,7 +197,6 @@
             this._setupDropTarget();
             this._registerHotkeys();
 
-            // Синхронизируем fullscreen-состояние при инициализации
             this._syncFullscreenState();
 
             this._isReady = true;
@@ -223,7 +216,8 @@
             });
 
             console.log('[BaseWindow] ✅ Ready:', this.type, '(', this.id, ')',
-                'slot:', this._slotId);
+                'slot:', this._slotId,
+                'headerItems:', headerItems.length);
         }
 
         // ============================================================
@@ -444,13 +438,9 @@
         }
 
         // ============================================================
-        // 3.2. KEYBOARD CAPTURE (✅ НОВОЕ v7.4.0)
+        // 3.2. KEYBOARD CAPTURE
         // ============================================================
 
-        /**
-         * Захватить клавиатуру. Все keydown идут в это окно.
-         * @returns {boolean}
-         */
         captureKeyboard() {
             if (!window.hotkeyRegistry) {
                 console.warn('[BaseWindow] captureKeyboard: hotkeyRegistry not available');
@@ -459,37 +449,23 @@
             return window.hotkeyRegistry.captureKeyboard(this.id);
         }
 
-        /**
-         * Отпустить клавиатуру.
-         * @returns {boolean}
-         */
         releaseKeyboard() {
             if (!window.hotkeyRegistry) return false;
             return window.hotkeyRegistry.releaseKeyboard(this.id);
         }
 
-        /**
-         * Захвачено ли этим окном.
-         * @returns {boolean}
-         */
         isKeyboardCaptured() {
             if (!window.hotkeyRegistry) return false;
             return window.hotkeyRegistry.getCapturedWindow() === String(this.id);
         }
 
         // ============================================================
-        // 3.3. FIND WINDOW BY TYPE (✅ НОВОЕ v7.4.0)
+        // 3.3. FIND WINDOW BY TYPE
         // ============================================================
 
-        /**
-         * Найти первое окно нужного типа (включая свёрнутые).
-         * @param {string} typeId
-         * @returns {object|null} — { id, type, slotId, title, icon }
-         */
         findWindowByType(typeId) {
             if (!typeId || !this._layoutManager) return null;
 
-            // Исключаем себя
             const myId = String(this.id);
 
             if (typeof this._layoutManager.getVisibleWindowsByType === 'function') {
@@ -522,7 +498,6 @@
                 }
             }
 
-            // Fallback
             const all = this._layoutManager.getWindows();
             for (const w of all) {
                 if (w.type === typeId && String(w.id) !== myId) {
@@ -539,11 +514,6 @@
             return null;
         }
 
-        /**
-         * Найти все окна нужного типа (включая свёрнутые).
-         * @param {string} typeId
-         * @returns {Array<object>}
-         */
         findWindowsByType(typeId) {
             if (!typeId || !this._layoutManager) return [];
 
@@ -577,7 +547,6 @@
             }
 
             if (result.length === 0) {
-                // Fallback
                 for (const w of this._layoutManager.getWindows()) {
                     if (w.type === typeId && String(w.id) !== myId) {
                         result.push({
@@ -595,7 +564,7 @@
         }
 
         // ============================================================
-        // 4. УСТАНОВКА РЕАЛЬНОГО ЭКЗЕМПЛЯРА
+        // 4. РЕАЛЬНЫЙ ЭКЗЕМПЛЯР
         // ============================================================
 
         setRealInstance(instance) {
@@ -612,6 +581,7 @@
             }
 
             if (this._isReady && this._renderWindow) {
+                this.refreshHeaderItems();
                 this._updateContent();
                 this._renderWindow.resize();
             }
@@ -632,7 +602,32 @@
         }
 
         // ============================================================
-        // 5. ЖИЗНЕННЫЙ ЦИКЛ
+        // 5. HEADER ITEMS
+        // ============================================================
+
+        refreshHeaderItems() {
+            if (this._isDestroyed || !this._renderWindow) return false;
+
+            const items = this._resolveHeaderItems();
+
+            try {
+                this._renderWindow.setHeaderItems(items);
+            } catch (e) {
+                console.error('[BaseWindow] refreshHeaderItems error:', e);
+                return false;
+            }
+
+            return true;
+        }
+
+        getRenderedHeaderItems() {
+            if (!this._renderWindow) return [];
+            if (typeof this._renderWindow.getHeaderItems !== 'function') return [];
+            return this._renderWindow.getHeaderItems();
+        }
+
+        // ============================================================
+        // 6. ЖИЗНЕННЫЙ ЦИКЛ
         // ============================================================
 
         destroy() {
@@ -640,7 +635,6 @@
             this._isDestroyed = true;
             this._isReady = false;
 
-            // ✅ Авто-release keyboard capture
             if (window.hotkeyRegistry
                 && window.hotkeyRegistry.getCapturedWindow() === String(this.id)) {
                 try { window.hotkeyRegistry.releaseKeyboard(this.id); } catch (e) {}
@@ -651,6 +645,8 @@
                 this._dropUnsub = null;
             }
             this._dropConfig = null;
+
+            this._teardownDropTarget(this.container);
 
             if (this.isFullscreen()) {
                 try { this.exitFullscreen(); } catch (e) {}
@@ -710,21 +706,10 @@
                 this._visibilityObserver = null;
             }
 
-            // ✅ НОВОЕ: отписка от всех onRequest
             for (const unsub of this._requestUnsubs) {
                 try { unsub(); } catch (e) {}
             }
             this._requestUnsubs = [];
-
-            if (this.container && this._dropHandlers) {
-                const h = this._dropHandlers;
-                try { this.container.removeEventListener('dragenter', h.onDragEnter); } catch (e) {}
-                try { this.container.removeEventListener('dragover', h.onDragOver); } catch (e) {}
-                try { this.container.removeEventListener('dragleave', h.onDragLeave); } catch (e) {}
-                try { this.container.removeEventListener('drop', h.onDrop); } catch (e) {}
-                this.container.__lsDropBound = false;
-                this._dropHandlers = null;
-            }
 
             this._subscriptions.forEach(unsub => {
                 try { unsub(); } catch (e) {}
@@ -741,7 +726,7 @@
         }
 
         // ============================================================
-        // 6. RESIZE
+        // 7. RESIZE
         // ============================================================
 
         resize() {
@@ -776,7 +761,7 @@
         }
 
         // ============================================================
-        // 7. ОБНОВЛЕНИЕ КОНТЕНТА
+        // 8. ОБНОВЛЕНИЕ КОНТЕНТА
         // ============================================================
 
         _updateContent() {
@@ -911,7 +896,7 @@
         }
 
         // ============================================================
-        // 7.1. ХОТКЕИ ОКНА
+        // 8.1. ХОТКЕИ ОКНА
         // ============================================================
 
         _registerHotkeys() {
@@ -962,7 +947,7 @@
         }
 
         // ============================================================
-        // 7.2. DROP TARGET
+        // 8.2. DROP TARGET
         // ============================================================
 
         registerDropTarget(options) {
@@ -1105,7 +1090,13 @@
         _setupDropTarget() {
             if (!this.container) return;
 
-            if (this.container.__lsDropBound) return;
+            if (this.container.__lsDropBound) {
+                if (this.container.__lsDropHandlers === this._dropHandlers) {
+                    return;
+                }
+                this._teardownDropTarget(this.container);
+            }
+
             this.container.__lsDropBound = true;
 
             const onDragEnter = (e) => {
@@ -1155,6 +1146,24 @@
             this.container.addEventListener('drop', onDrop, false);
 
             this._dropHandlers = { onDragEnter, onDragOver, onDragLeave, onDrop };
+            this.container.__lsDropHandlers = this._dropHandlers;
+        }
+
+        _teardownDropTarget(container) {
+            if (!container || !this._dropHandlers) return;
+
+            const h = this._dropHandlers;
+            try { container.removeEventListener('dragenter', h.onDragEnter); } catch (e) {}
+            try { container.removeEventListener('dragover', h.onDragOver); } catch (e) {}
+            try { container.removeEventListener('dragleave', h.onDragLeave); } catch (e) {}
+            try { container.removeEventListener('drop', h.onDrop); } catch (e) {}
+
+            if (container.__lsDropHandlers === h) {
+                container.__lsDropBound = false;
+                container.__lsDropHandlers = null;
+            }
+
+            this._dropHandlers = null;
         }
 
         _shouldAcceptDrop(e) {
@@ -1244,8 +1253,52 @@
         }
 
         // ============================================================
-        // 7.3. DRAG SOURCE
+        // 8.3. DRAG SOURCE
         // ============================================================
+        //
+        // registerDragSource(element, options) — делает element источником drag.
+        //
+        // Семантика [data-no-drag]:
+        //   Значение интерпретируется как "no-drag", если оно пустое,
+        //   'true', '1' или 'yes'. Значения 'false', '0', 'no' считаются
+        //   "разрешить drag".
+        //
+        //   Это позволяет писать:
+        //     <div data-no-drag>               <!-- блокирует -->
+        //     <div data-no-drag="true">        <!-- блокирует -->
+        //     <div data-no-drag="false">       <!-- НЕ блокирует -->
+        //
+        //   Раньше closest('[data-no-drag]') матчил по факту наличия атрибута
+        //   и игнорировал значение — из-за этого data-no-drag="false" вело себя
+        //   как блокировка, что путало разработчиков.
+        //
+        // Native dragstart:
+        //   Мы вешаем preventDefault на 'dragstart', чтобы браузер не начинал
+        //   свой native drag (актуально для <img>, <a>, выделенного текста).
+        //   Если элементу нужен native drag — он должен иметь атрибут
+        //   data-allow-native-drag="true".
+
+        _isNoDragTarget(target) {
+            if (!target || typeof target.closest !== 'function') return false;
+
+            const el = target.closest('[data-no-drag]');
+            if (!el) return false;
+
+            const raw = el.getAttribute('data-no-drag');
+            const v = (raw == null ? '' : String(raw)).trim().toLowerCase();
+
+            // Пустое значение (атрибут без value) — блокирует.
+            if (v === '') return true;
+
+            // Явно блокирующие значения.
+            if (v === 'true' || v === '1' || v === 'yes') return true;
+
+            // Явно разрешающие значения — не блокируем.
+            if (v === 'false' || v === '0' || v === 'no') return false;
+
+            // Неизвестное значение — считаем блокирующим (безопасный default).
+            return true;
+        }
 
         registerDragSource(element, options = {}) {
             if (!element || element.nodeType !== 1) return () => {};
@@ -1256,9 +1309,12 @@
 
             const onMouseDown = (e) => {
                 if (e.button !== 0) return;
-                // ✅ v7.4.1: если drag-source сам — кнопка, не блокируем
+                // Если сам element — не кнопка, а клик пришёл по вложенной
+                // кнопке — не начинаем drag (это клик по кнопке).
                 if (!elementIsButton && e.target.closest('button')) return;
-                if (e.target.closest('[data-no-drag]')) return;
+
+                // [data-no-drag] с учётом значения
+                if (self._isNoDragTarget(e.target)) return;
 
                 const startX = e.clientX;
                 const startY = e.clientY;
@@ -1395,12 +1451,24 @@
                 e.preventDefault();
             };
 
+            // Защита от native HTML5 drag&drop (для <img>, <a>, текста).
+            // Если элементу нужен native drag — data-allow-native-drag="true".
+            const onDragStart = (e) => {
+                if (element.dataset && element.dataset.allowNativeDrag === 'true') {
+                    return;
+                }
+                e.preventDefault();
+            };
+
             element.addEventListener('mousedown', onMouseDown);
+            element.addEventListener('dragstart', onDragStart);
+
             element.classList.add('ls-drag-source');
             element.style.cursor = 'grab';
 
             return () => {
                 element.removeEventListener('mousedown', onMouseDown);
+                element.removeEventListener('dragstart', onDragStart);
                 element.classList.remove('ls-drag-source');
                 element.style.cursor = '';
             };
@@ -1515,7 +1583,7 @@
         }
 
         // ============================================================
-        // 8. РАБОТА С ДАННЫМИ
+        // 9. РАБОТА С ДАННЫМИ
         // ============================================================
 
         getAllData() {
@@ -1614,7 +1682,7 @@
         }
 
         // ============================================================
-        // 9. SLOT SUBSCRIPTION + LOAD/SAVE
+        // 10. SLOT SUBSCRIPTION + LOAD/SAVE
         // ============================================================
 
         _subscribeToSlot() {
@@ -1748,7 +1816,7 @@
         }
 
         // ============================================================
-        // 10. ИМПОРТ / ЭКСПОРТ
+        // 11. ИМПОРТ / ЭКСПОРТ
         // ============================================================
 
         _onDataImport() {
@@ -1896,7 +1964,7 @@
         }
 
         // ============================================================
-        // 11. MESSAGE BUS (base)
+        // 12. MESSAGE BUS
         // ============================================================
 
         _subscribeToMessages() {
@@ -1941,18 +2009,9 @@
         }
 
         // ============================================================
-        // 11.1. RPC PROXY (✅ НОВОЕ v7.4.0)
+        // 12.1. RPC PROXY
         // ============================================================
 
-        /**
-         * RPC-запрос другому окну. Прокси на _messageBus.request.
-         *
-         * @param {string} channel  — логический канал ('db-query')
-         * @param {object} data     — payload
-         * @param {string} targetId — id окна-получателя
-         * @param {object} [options] — { timeout?: number }
-         * @returns {Promise<any>}
-         */
         request(channel, data, targetId, options = {}) {
             if (!this._messageBus) {
                 return Promise.reject(new Error('[BaseWindow] MessageBus not available'));
@@ -1960,17 +2019,6 @@
             return this._messageBus.request(this.id, targetId, channel, data, options);
         }
 
-        /**
-         * Подписаться на RPC-запросы по каналу.
-         * Прокси на _messageBus.onRequest.
-         * Авто-отписка в destroy().
-         *
-         * @param {string}   channel  — логический канал ('db-query')
-         * @param {Function} handler  — (data, meta) => result | Promise<result>
-         *                              data — payload без requestId
-         *                              meta = { requestId, fromSenderId, channel }
-         * @returns {Function} unsubscribe
-         */
         onRequest(channel, handler) {
             if (!this._messageBus) {
                 console.warn('[BaseWindow] MessageBus not available');
@@ -1990,7 +2038,7 @@
         }
 
         // ============================================================
-        // 12. LAYOUT
+        // 13. LAYOUT
         // ============================================================
 
         _setupLayoutListener() {
@@ -2035,7 +2083,7 @@
         }
 
         // ============================================================
-        // 13. СМЕНА ТИПА
+        // 14. СМЕНА ТИПА
         // ============================================================
 
         _changeType(newType) {
@@ -2095,37 +2143,11 @@
                 }
             }
 
-            let headerButtons = [];
             let contextMenu = [];
-            let dropdownMenu = null;
-
-            if (typeof typeConfig.headerButtons === 'function') {
-                try { headerButtons = typeConfig.headerButtons(this, null, this._layoutManager) || []; } catch (e) {}
-            } else if (Array.isArray(typeConfig.headerButtons)) {
-                headerButtons = typeConfig.headerButtons;
-            }
-
             if (typeof typeConfig.contextMenu === 'function') {
                 try { contextMenu = typeConfig.contextMenu(this, null, this._layoutManager) || []; } catch (e) {}
             } else if (Array.isArray(typeConfig.contextMenu)) {
                 contextMenu = typeConfig.contextMenu;
-            }
-
-            if (typeof typeConfig.dropdownMenu === 'function') {
-                try { dropdownMenu = typeConfig.dropdownMenu(this, null, this._layoutManager) || null; } catch (e) {}
-            } else {
-                dropdownMenu = typeConfig.dropdownMenu || null;
-            }
-
-            if (this._renderWindow) {
-                this._renderWindow.updateTypeConfig({
-                    type: newType,
-                    title: this._title,
-                    icon: this._icon,
-                    headerButtons,
-                    contextMenu,
-                    dropdownMenu
-                });
             }
 
             if (typeConfig.create && this._renderWindow) {
@@ -2213,6 +2235,18 @@
             this._unregisterHotkeys();
             this._registerHotkeys();
 
+            const newHeaderItems = this._resolveHeaderItems();
+
+            if (this._renderWindow) {
+                this._renderWindow.updateTypeConfig({
+                    type: newType,
+                    title: this._title,
+                    icon: this._icon,
+                    headerItems: newHeaderItems,
+                    contextMenu: contextMenu
+                });
+            }
+
             this._emit('window-type-changed', {
                 id: this.id,
                 oldType: oldType,
@@ -2242,11 +2276,12 @@
                 }
             }
 
-            console.log('[BaseWindow] ✅ Type changed:', oldType, '→', newType);
+            console.log('[BaseWindow] ✅ Type changed:', oldType, '→', newType,
+                '(headerItems:', newHeaderItems.length + ')');
         }
 
         // ============================================================
-        // 14. ЗАКРЫТИЕ / SWAP
+        // 15. ЗАКРЫТИЕ / SWAP
         // ============================================================
 
         _close() {
@@ -2265,7 +2300,7 @@
         }
 
         // ============================================================
-        // 15. EVENTS от RENDER WINDOW
+        // 16. EVENTS от RENDER WINDOW
         // ============================================================
 
         _onRenderClose() {
@@ -2286,18 +2321,49 @@
 
         _onRenderMenuAction(data) {
             const realInstance = this.getRealInstance();
+            const action = data.action;
+            const value = data.value;
+            const item = data.item;
+            const payload = data.payload;
+
+            if (realInstance && realInstance !== this
+                && typeof realInstance.onHeaderItemClick === 'function') {
+                try {
+                    const handled = realInstance.onHeaderItemClick(
+                        item || { action, value },
+                        {
+                            action: action,
+                            value: value,
+                            item: item,
+                            payload: payload,
+                            source: item && item.type === 'dropdown' ? 'dropdown' : 'button'
+                        }
+                    );
+                    if (handled === true) {
+                        return;
+                    }
+                } catch (e) {
+                    console.error('[BaseWindow] onHeaderItemClick error:', e);
+                }
+            }
+
             if (realInstance && realInstance !== this) {
-                if (data.action && typeof realInstance[data.action] === 'function') {
-                    realInstance[data.action](data.value);
+                if (action && typeof realInstance[action] === 'function') {
+                    try {
+                        realInstance[action](value, payload, item);
+                    } catch (e) {
+                        console.error(`[BaseWindow] menu action "${action}" error:`, e);
+                    }
                     return;
                 }
             }
 
             this._emit('window-menu-action', {
                 windowId: this.id,
-                action: data.action,
-                value: data.value,
-                item: data.item
+                action: action,
+                value: value,
+                payload: payload,
+                item: item
             });
         }
 
@@ -2323,7 +2389,7 @@
         }
 
         // ============================================================
-        // 16. ХУКИ
+        // 17. ХУКИ
         // ============================================================
 
         _onReady() {}
@@ -2384,7 +2450,7 @@
         }
 
         // ============================================================
-        // 17. ПУБЛИЧНЫЕ МЕТОДЫ
+        // 18. ПУБЛИЧНЫЕ МЕТОДЫ
         // ============================================================
 
         setTitle(title) {
@@ -2406,7 +2472,7 @@
         getRenderWindow() { return this._renderWindow; }
 
         // ============================================================
-        // 18. СОБЫТИЯ
+        // 19. СОБЫТИЯ
         // ============================================================
 
         _emit(event, data) {
@@ -2445,6 +2511,7 @@
                 finalMessage = messageStr || titleStr || '';
             }
 
+            // 1) Глобальная функция (если есть в билде)
             if (typeof window.showNotification === 'function') {
                 try {
                     window.showNotification(finalMessage, typeSafe);
@@ -2454,27 +2521,38 @@
                 }
             }
 
-            if (this._eventBus) {
+            // 2) eventBus (если есть) — НЕ выходим, даём шанс и document-слушателю
+            if (this._eventBus && typeof this._eventBus.emit === 'function') {
                 try {
                     this._eventBus.emit('notification', {
                         title: titleStr,
                         message: messageStr,
                         type: typeSafe
                     });
-                    return;
                 } catch (e) {
                     console.warn('[BaseWindow] eventBus notification error:', e);
                 }
             }
 
-            document.dispatchEvent(new CustomEvent('notification', {
-                detail: { title: titleStr, message: messageStr, type: typeSafe },
-                bubbles: true
-            }));
+            // 3) Всегда дублируем в document — чтобы UI-слой мог
+            //    подписаться через document.addEventListener('notification', ...)
+            try {
+                document.dispatchEvent(new CustomEvent('notification', {
+                    detail: { title: titleStr, message: messageStr, type: typeSafe },
+                    bubbles: true
+                }));
+            } catch (e) {
+                console.warn('[BaseWindow] document notification error:', e);
+            }
+
+            // 4) Фолбэк — консоль, если совсем ничего не нашлось
+            if (typeof window.showNotification !== 'function' && !this._eventBus) {
+                console.warn(`[notify:${typeSafe}] ${finalMessage}`);
+            }
         }
 
         // ============================================================
-        // 19. СТАТИЧЕСКИЙ МЕТОД
+        // 20. СТАТИЧЕСКИЙ МЕТОД
         // ============================================================
 
         static create({ type, container, options = {} }) {
@@ -2529,7 +2607,7 @@
     }
 
     // ============================================================
-    // 20. ЭКСПОРТ
+    // 21. ЭКСПОРТ
     // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -2538,7 +2616,7 @@
 
     if (typeof window !== 'undefined') {
         window.BaseWindow = BaseWindow;
-        console.log('[BaseWindow] Registered globally v7.4.0');
+        console.log('[BaseWindow] Registered globally v8.0.2');
     }
 
 })();

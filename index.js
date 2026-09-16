@@ -1,18 +1,14 @@
 // index.js
-// Версия 9.1.0 - Fix: saveBtn SVG, projectNameDisplay, restoring counter,
-//                    late hotkey registration, unified notify, svgReady
-// - updateUI: #saveBtnLabel вместо #saveBtn.textContent
-// - applySnapshot: historyManager.beginRestore/endRestore
-// - setupGlobalHotkeys: bw.registerHotkeys() после attach
-// - showNotification: (message, type, duration) — единый контракт
-// - doSave: saveProject({ path, name, download })
-// - init: await window.__svgReady
-// - closeDropdown: сброс state.windowSearchQuery
+// Версия 10.0.0 — EULA-гейт удалён полностью.
+// - Нет gateApplication/ungateApplication, нет canUseApp-проверки.
+// - Нет profile-ready, нет _isGated.
+// - Профиль — просто имя/организация, не блокирует UI.
+// - AppState.canUseApp() больше не используется.
 
 (function() {
     'use strict';
 
-    console.log('[LSYSTEM] Loading v9.1.0...');
+    console.log('[LSYSTEM] Loading v10.0.0...');
 
     // ================================================================
     // 1. СОСТОЯНИЕ
@@ -282,13 +278,6 @@
     // 4. УВЕДОМЛЕНИЯ
     // ================================================================
 
-    /**
-     * ✅ Пункт 16.6/16.8: единый контракт.
-     * Если передан `title` (3-й аргумент — type, 4-й — duration) — legacy-совместимость.
-     *
-     * Правило: `showNotification(message, type, duration)`.
-     * Если message содержит ': ' — воспринимается как "title: message".
-     */
     function showNotification(message, type = 'info', duration = 3000) {
         const old = document.querySelector('.toast-notification');
         if (old) old.remove();
@@ -515,10 +504,6 @@
         applySnapshot(result.entry.snapshot);
     }
 
-    /**
-     * ✅ Пункт 16.3: используем historyManager.beginRestore/endRestore
-     * вместо state.applyingSnapshot + setTimeout(150).
-     */
     function applySnapshot(snapshot) {
         if (!snapshot) return;
 
@@ -559,9 +544,6 @@
         } catch (e) {
             console.error('[LSYSTEM] applySnapshot error:', e);
         } finally {
-            // ✅ Счётчик снимется в следующем тике, когда layout-action'ы уже отгремели
-            // historyManager.endRestore() синхронно — но layout-action'ы могут прийти в rAF.
-            // Поэтому — небольшая задержка, но НЕ boolean, а именно счётчик.
             setTimeout(() => {
                 if (hm && typeof hm.endRestore === 'function') {
                     hm.endRestore();
@@ -598,9 +580,6 @@
         return snap;
     }
 
-    // ============================================================
-    // ЭКШЕНЫ, КОТОРЫЕ НЕ ПИШЕМ В ИСТОРИЮ
-    // ============================================================
     const IGNORED_LAYOUT_ACTIONS = new Set([
         'focus'
     ]);
@@ -798,7 +777,6 @@
 
         console.log('[LSYSTEM] ✅ Workspace found');
 
-        // ✅ Пункт 1.2: ждём SVG-спрайты
         if (window.__svgReady && typeof window.__svgReady.then === 'function') {
             try {
                 await window.__svgReady;
@@ -809,49 +787,40 @@
         }
 
         try {
-            // ===== AppState =====
             window.appState = new AppState({ debug: false });
-            console.log('[LSYSTEM] ✅ AppState created | canUseApp:', window.appState.canUseApp());
+            console.log('[LSYSTEM] ✅ AppState created');
 
-            // ===== HotkeyRegistry =====
             window.hotkeyRegistry = new HotkeyRegistry({ debug: false });
             console.log('[LSYSTEM] ✅ HotkeyRegistry created');
 
-            // ===== MessageBus =====
             window.messageBus = new MessageBus({ maxHistory: 100, debug: false });
             console.log('[LSYSTEM] ✅ MessageBus created');
 
-            // ===== WindowRegistry =====
             const registry = new WindowRegistry();
             registry.init();
             window.__registry = registry;
             console.log('[LSYSTEM] ✅ WindowRegistry created');
 
-            // ===== DataBus =====
             window.dataBus = new DataBus({ debug: false });
             console.log('[LSYSTEM] ✅ DataBus created');
 
-            // ===== EventBus =====
             window.eventBus = createEventBus();
             console.log('[LSYSTEM] ✅ EventBus created');
 
-            // ===== PluginSystem =====
             window.pluginSystem = new PluginSystem({
                 registry: registry,
                 dataBus: window.dataBus,
                 eventBus: window.eventBus,
                 messageBus: window.messageBus,
                 appState: window.appState,
-                windowPath: 'window/',
+                windowPath: 'data/window/',
                 enableWindowAutoLoad: true,
                 enableGlobalScan: true,
-                enableManifest: false,
                 enableUserPlugins: false
             });
             await window.pluginSystem.loadAll();
             console.log('[LSYSTEM] ✅ PluginSystem loaded');
 
-            // ===== LayoutManager =====
             window.layoutManager = new LayoutManager({
                 workspace: el.workspace,
                 maxWindows: 4,
@@ -863,22 +832,17 @@
             window.layoutManager.init();
             console.log('[LSYSTEM] ✅ LayoutManager created');
 
-            // ===== Привязка MessageBus =====
             window.messageBus.setLayoutManager(window.layoutManager);
             console.log('[LSYSTEM] ✅ MessageBus bound to LayoutManager');
 
-            // ===== HotkeyRegistry attach =====
             window.hotkeyRegistry.attach(document);
             console.log('[LSYSTEM] ✅ HotkeyRegistry attached');
 
-            // ===== Глобальные хоткеи =====
             setupGlobalHotkeys();
 
-            // ===== SettingsModal =====
             window.settingsModal = new SettingsModal();
             console.log('[LSYSTEM] ✅ SettingsModal created');
 
-            // ===== HistoryManager =====
             window.historyManager = new HistoryManager({
                 maxHistory: 100,
                 debug: false
@@ -886,7 +850,6 @@
             window.historyManager.setSnapshotProvider(buildSnapshot);
             console.log('[LSYSTEM] ✅ HistoryManager created');
 
-            // ===== ProjectManager =====
             window.projectManager = new ProjectManager({
                 dataBus: window.dataBus,
                 eventBus: window.eventBus,
@@ -896,16 +859,13 @@
             });
             console.log('[LSYSTEM] ✅ ProjectManager created');
 
-            // ===== Обработчики =====
             setupProjectEvents();
             setupUIEvents();
             setupHistoryEvents();
             setupTheme();
-            setupProfileGate();
 
             populateWindowMenu();
 
-            // ===== Загрузка последнего проекта =====
             if (window.projectManager) {
                 window.projectManager.loadLastProject();
             }
@@ -926,19 +886,8 @@
                 }
             }, 300);
 
-            console.log('[LSYSTEM] ✅ Initialized v9.1.0');
+            console.log('[LSYSTEM] ✅ Initialized v10.0.0');
             console.log('[LSYSTEM] Registered types:', registry.getAllTypes().map(t => t.id));
-
-            // ================================================================
-            // ГЕЙТ
-            // ================================================================
-            if (!window.appState.canUseApp()) {
-                console.log('[LSYSTEM] 🔒 Profile gate active');
-                gateApplication();
-            } else {
-                const acc = window.appState.getAccount();
-                console.log('[LSYSTEM] ✅ Profile OK — user:', acc?.name);
-            }
 
         } catch (error) {
             console.error('[LSYSTEM] ❌ Initialization error:', error);
@@ -1039,8 +988,6 @@
             window.hotkeyRegistry.registerGlobal(combo, handler, { source: 'global' });
         }
 
-        // ✅ Пункт 16.4: регистрируем хоткеи для уже существующих окон
-        // (если они появились до attach или до создания hotkeyRegistry)
         if (window.layoutManager && window.layoutManager._windowInstances) {
             window.layoutManager._windowInstances.forEach(function(bw) {
                 if (bw && typeof bw.registerHotkeys === 'function') {
@@ -1231,7 +1178,6 @@
         if (!element) return;
         element.classList.remove('active');
 
-        // ✅ Пункт 16.5: сбрасываем поиск
         if (element === el.newWindowDropdown) {
             state.windowSearchQuery = '';
         }
@@ -1328,10 +1274,6 @@
         });
     }
 
-    /**
-     * ✅ Пункт 16.7: используем saveProject({ path, name, download })
-     * вместо мутации _projectPath напрямую.
-     */
     function doSave(filename) {
         if (state.isSaving) return false;
         state.isSaving = true;
@@ -1561,7 +1503,6 @@
 
         html += `<div class="window-menu__scroll">`;
 
-        // 1. СВЁРНУТЫЕ
         const visibleMinimized = minimized.filter(w => !query || matchesQuery(w, query));
 
         if (visibleMinimized.length > 0) {
@@ -1572,7 +1513,6 @@
             }
         }
 
-        // 2. ГРУППЫ
         const groupNames = Object.keys(groups).sort();
         let hasAnyType = false;
 
@@ -1610,7 +1550,6 @@
 
         el.windowTypeMenu.innerHTML = html;
 
-        // ===== События =====
         const searchInput = el.windowTypeMenu.querySelector('#windowMenuSearchInput');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => {
@@ -1819,14 +1758,12 @@
         const visibleCount = window.layoutManager?.getVisibleWindowCount() || 0;
         const hasWindows = windowCount > 0;
 
-        // ✅ Пункт 16.2: projectNameDisplay
         if (el.projectNameDisplay) {
             const name = state.projectName || 'Untitled';
             const modified = state.isModified ? ' *' : '';
             el.projectNameDisplay.textContent = name + modified;
         }
 
-        // ✅ Пункт 16.1: обновляем только текстовый span, не трогаем SVG
         if (el.saveBtnLabel) {
             const modified = state.isModified && hasWindows;
             el.saveBtnLabel.textContent = modified ? 'Save *' : 'Save';
@@ -1860,101 +1797,7 @@
     }
 
     // ================================================================
-    // 22. ГЕЙТ ПРИЛОЖЕНИЯ
-    // ================================================================
-
-    function gateApplication() {
-        console.log('[LSYSTEM] 🔒 Gating application...');
-
-        if (el.workspace) {
-            el.workspace.style.pointerEvents = 'none';
-            el.workspace.style.opacity = '0.3';
-            el.workspace.style.filter = 'blur(2px)';
-        }
-
-        const btns = [
-            el.newProjectBtn, el.saveBtn, el.loadBtn,
-            el.newWindowBtn, el.historyBtn
-        ];
-        for (const btn of btns) {
-            if (btn) {
-                btn.disabled = true;
-                btn.style.opacity = '0.3';
-                btn.style.pointerEvents = 'none';
-            }
-        }
-
-        if (window.settingsModal) {
-            window.settingsModal.open({ gate: true });
-        }
-
-        console.log('[LSYSTEM] 🔒 Application gated');
-    }
-
-    function ungateApplication() {
-        console.log('[LSYSTEM] 🔓 Ungating application...');
-
-        if (el.workspace) {
-            el.workspace.style.pointerEvents = '';
-            el.workspace.style.opacity = '';
-            el.workspace.style.filter = '';
-        }
-
-        const btns = [
-            el.newProjectBtn, el.saveBtn, el.loadBtn,
-            el.newWindowBtn, el.historyBtn
-        ];
-        for (const btn of btns) {
-            if (btn) {
-                btn.disabled = false;
-                btn.style.opacity = '';
-                btn.style.pointerEvents = '';
-            }
-        }
-
-        updateUI();
-        console.log('[LSYSTEM] 🔓 Application ungated');
-    }
-
-    function setupProfileGate() {
-        document.addEventListener('profile-ready', (e) => {
-            console.log('[LSYSTEM] Profile ready event:', e.detail);
-
-            if (window.appState?.canUseApp()) {
-                ungateApplication();
-
-                if (window.settingsModal?.isGated()) {
-                    window.settingsModal.forceClose();
-                }
-
-                if (e.detail?.name) {
-                    showNotification('Добро пожаловать, ' + e.detail.name + '!', 'success');
-                }
-            }
-        });
-
-        if (window.appState) {
-            window.appState.subscribe('account', (acc) => {
-                console.log('[LSYSTEM] Account changed:', acc);
-
-                const canUse = window.appState.canUseApp();
-
-                if (canUse && window.settingsModal?.isGated()) {
-                    ungateApplication();
-                    window.settingsModal.forceClose();
-
-                    if (acc?.name) {
-                        showNotification('Добро пожаловать, ' + acc.name + '!', 'success');
-                    }
-                }
-            });
-        }
-
-        console.log('[LSYSTEM] ✅ Profile gate setup');
-    }
-
-    // ================================================================
-    // 23. ЗАПУСК
+    // 22. ЗАПУСК
     // ================================================================
 
     if (document.readyState === 'loading') {
@@ -1964,9 +1807,11 @@
     }
 
     // ================================================================
-    // 24. ГЛОБАЛЬНЫЙ ДОСТУП
+    // 23. ГЛОБАЛЬНЫЙ ДОСТУП
     // ================================================================
 
+    window.showNotification = showNotification;
+    
     window.__lsystem = {
         state,
         updateUI,
@@ -1989,10 +1834,6 @@
         getAppState: () => window.appState,
         getHotkeyRegistry: () => window.hotkeyRegistry,
         getSettingsModal: () => window.settingsModal,
-        canUseApp: () => window.appState?.canUseApp() ?? false,
-
-        gateApplication,
-        ungateApplication,
 
         reloadPlugins: async () => {
             if (!window.pluginSystem) return false;
@@ -2006,6 +1847,6 @@
         setAutoThemeHours: (cfg) => window.appState?.setAutoThemeHours(cfg)
     };
 
-    console.log('[LSYSTEM] App ready v9.1.0');
+    console.log('[LSYSTEM] App ready v10.0.0');
 
 })();

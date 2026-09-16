@@ -1,17 +1,14 @@
 // core/LayoutManager.js
-// Версия 6.1.0 - Fix: window-visibility-changed + get*WindowsByType
-// - _emitVisibilityChanged(windowId, visible) → dispatch 'window-visibility-changed'
-// - minimizeWindow: эмит после finishMinimize
-// - restoreWindow: эмит после render
-// - closeWindow: эмит false, если окно было видимым
-// - closeAll: эмит false для всех видимых
-// - getVisibleWindowsByType(typeId) / getMinimizedWindowsByType(typeId)
-// - _emitLayoutAction (layout-action) НЕ тронут
+// Версия 6.1.1 - Fix: утечка mousemove/mouseup в split-divider
+// - _activeDividerDrag: { onMove, onUp, cleanup } — хранит активный drag
+// - _cancelActiveDividerDrag() — вызывается в render/destroy/closeAll/_clearInstances
+// - pointercancel + window.blur как fallback
+// - v6.1.0: window-visibility-changed + get*WindowsByType (без изменений)
 
 (function() {
     'use strict';
 
-    console.log('[LayoutManager] Loading v6.1.0 (visibility events)...');
+    console.log('[LayoutManager] Loading v6.1.1 (divider drag cleanup)...');
 
     const NodeType = { LEAF: 'leaf', SPLIT: 'split' };
     const SplitDirection = { HORIZONTAL: 'horizontal', VERTICAL: 'vertical' };
@@ -153,10 +150,7 @@
             this._eventBus = options.eventBus || null;
             this._messageBus = options.messageBus || null;
 
-            // ✅ Свёрнутые окна: Map<windowId, windowData>
             this._minimizedWindowsData = new Map();
-
-            // ✅ Fullscreen
             this._fullscreenWindowId = null;
 
             this._resizeTimer = null;
@@ -164,7 +158,10 @@
 
             this._contentRenderers = new Map();
 
-            console.log('[LayoutManager] Created v6.1.0');
+            // ✅ FIX: активный drag split-divider
+            this._activeDividerDrag = null;
+
+            console.log('[LayoutManager] Created v6.1.1');
         }
 
         // ============================================================
@@ -222,6 +219,7 @@
         }
 
         destroy() {
+            this._cancelActiveDividerDrag();
             this.exitFullscreen(true);
 
             if (this._resizeTimer) {
@@ -244,6 +242,28 @@
             this._minimizedWindowsData.clear();
             this.root = null;
             console.log('[LayoutManager] Destroyed');
+        }
+
+        // ============================================================
+        // 4.1. ✅ FIX: активный drag split-divider
+        // ============================================================
+
+        _cancelActiveDividerDrag() {
+            if (!this._activeDividerDrag) return;
+
+            const { onMove, onUp, cleanup } = this._activeDividerDrag;
+
+            try { document.removeEventListener('mousemove', onMove); } catch (e) {}
+            try { document.removeEventListener('mouseup', onUp); } catch (e) {}
+            try { document.removeEventListener('pointercancel', onUp); } catch (e) {}
+            try { window.removeEventListener('blur', onUp); } catch (e) {}
+
+            try { if (typeof cleanup === 'function') cleanup(); } catch (e) {}
+
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+
+            this._activeDividerDrag = null;
         }
 
         // ============================================================
@@ -303,13 +323,11 @@
             return result;
         }
 
-        // ✅ НОВОЕ: фильтр по типу
         getVisibleWindowsByType(typeId) {
             if (!typeId) return [];
             return this.getVisibleWindows().filter(w => w.type === typeId);
         }
 
-        // ✅ НОВОЕ: фильтр по типу среди свёрнутых
         getMinimizedWindowsByType(typeId) {
             if (!typeId) return [];
             return this.getMinimizedWindows().filter(w => w.type === typeId);
@@ -417,7 +435,6 @@
                     slotId: node.windowData?.slotId || null
                 });
 
-                // ✅ НОВОЕ: уведомляем instance, что окно скрыто
                 this._emitVisibilityChanged(sid, false);
 
                 console.log('[LayoutManager] Window minimized:', sid);
@@ -469,7 +486,6 @@
                 slotId: windowData?.slotId || null
             });
 
-            // ✅ НОВОЕ: уведомляем instance, что окно снова видно
             this._emitVisibilityChanged(sid, true);
 
             this.setFocusedWindow(sid);
@@ -704,7 +720,6 @@
             this._notifyChange();
             this._emitLayoutAction('add', windowData);
 
-            // ✅ НОВОЕ: окно добавлено видимым
             this._emitVisibilityChanged(windowId, true);
 
             return windowData;
@@ -771,7 +786,6 @@
 
             for (const wd of created) {
                 this._emitLayoutAction('add', wd);
-                // ✅ НОВОЕ
                 this._emitVisibilityChanged(wd.id, true);
             }
 
@@ -842,7 +856,6 @@
                 slotId: winSlotId
             });
 
-            // ✅ НОВОЕ: если было видимым — эмитим false (перед destroy)
             if (wasVisible) {
                 this._emitVisibilityChanged(sid, false);
             }
@@ -857,9 +870,11 @@
         }
 
         closeAll() {
+            // ✅ FIX: отменяем активный drag
+            this._cancelActiveDividerDrag();
+
             this.exitFullscreen(true);
 
-            // ✅ НОВОЕ: собираем id видимых ДО очистки
             const visibleIds = this.getVisibleWindows().map(w => String(w.id));
 
             this._windowInstances.forEach((instance) => {
@@ -894,7 +909,6 @@
             this.render();
             this._notifyChange();
 
-            // ✅ НОВОЕ: эмитим false для всех, кто был видим
             for (const wid of visibleIds) {
                 this._emitVisibilityChanged(wid, false);
             }
@@ -1028,7 +1042,6 @@
             }
         }
 
-        // ✅ НОВОЕ: уведомление о смене видимости окна
         _emitVisibilityChanged(windowId, visible) {
             const wid = String(windowId);
             const detail = {
@@ -1278,6 +1291,9 @@
         // ============================================================
 
         render() {
+            // ✅ FIX: перед полной перерисовкой отменяем активный drag
+            this._cancelActiveDividerDrag();
+
             if (!this.workspace) return;
 
             if (!this.root) {
@@ -1638,6 +1654,9 @@
                         e.preventDefault();
                         e.stopPropagation();
 
+                        // ✅ FIX: если уже есть активный drag — отменяем
+                        this._cancelActiveDividerDrag();
+
                         divider.style.backgroundColor = 'rgba(204, 34, 51, 0.5)';
                         document.body.style.cursor = isHorizontal ? 'col-resize' : 'row-resize';
                         document.body.style.userSelect = 'none';
@@ -1684,16 +1703,30 @@
                         };
 
                         const onMouseUp = () => {
+                            // ✅ FIX: снимаем все слушатели + сбрасываем состояние
+                            try { document.removeEventListener('mousemove', onMouseMove); } catch (err) {}
+                            try { document.removeEventListener('mouseup', onMouseUp); } catch (err) {}
+                            try { document.removeEventListener('pointercancel', onMouseUp); } catch (err) {}
+                            try { window.removeEventListener('blur', onMouseUp); } catch (err) {}
+
                             divider.style.backgroundColor = 'rgba(200, 184, 154, 0.15)';
                             document.body.style.cursor = '';
                             document.body.style.userSelect = '';
-                            document.removeEventListener('mousemove', onMouseMove);
-                            document.removeEventListener('mouseup', onMouseUp);
+
+                            this._activeDividerDrag = null;
                             this._notifyChange();
+                        };
+
+                        // ✅ FIX: сохраняем активный drag — чтобы render()/destroy() могли отменить
+                        this._activeDividerDrag = {
+                            onMove: onMouseMove,
+                            onUp: onMouseUp
                         };
 
                         document.addEventListener('mousemove', onMouseMove);
                         document.addEventListener('mouseup', onMouseUp);
+                        document.addEventListener('pointercancel', onMouseUp);
+                        window.addEventListener('blur', onMouseUp);
                     });
 
                     container.insertBefore(divider, childElements[i]);
@@ -1825,6 +1858,9 @@
         loadLayoutData(data) { return this.loadProjectData(data); }
 
         _clearInstances() {
+            // ✅ FIX: отменяем активный drag перед сносом инстансов
+            this._cancelActiveDividerDrag();
+
             if (!this._windowInstances) {
                 this._windowInstances = new Map();
                 return;
@@ -1859,7 +1895,7 @@
         window.NodeType = NodeType;
         window.SplitDirection = SplitDirection;
         window.LayoutStyle = LayoutStyle;
-        console.log('[LayoutManager] Registered globally v6.1.0');
+        console.log('[LayoutManager] Registered globally v6.1.1');
     }
 
 })();

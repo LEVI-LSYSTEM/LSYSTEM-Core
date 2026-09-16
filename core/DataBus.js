@@ -1,15 +1,13 @@
 // core/DataBus.js
-// Версия 4.2.0 - Feature: ArrayBuffer по ссылке (in-memory) + base64 (в JSON)
-// - _deepCopy: ArrayBuffer/TypedArray/DataView → по ссылке
-// - exportSlots: ArrayBuffer → base64
-// - importSlots: base64 → ArrayBuffer (fallback на массив чисел)
-// - Map/Set/Date/RegExp — без изменений
-// - setSlotData / attachWindowToSlot / subscribers — без изменений
+// Версия 4.2.1 - Fix: рекурсия в _notifySlot → итеративный цикл с лимитом
+// - MAX_NOTIFY_DEPTH = 8
+// - _notifySlot: while-loop вместо рекурсии
+// - v4.2.0: ArrayBuffer по ссылке (без изменений)
 
 (function() {
     'use strict';
 
-    console.log('[DataBus] Loading v4.2.0...');
+    console.log('[DataBus] Loading v4.2.1...');
 
     // ============================================================
     // КОНСТАНТЫ ЛИМИТОВ
@@ -20,6 +18,8 @@
         ARCHIVED_PER_TYPE: 4,
         ARCHIVED_TOTAL: 16
     };
+
+    const MAX_NOTIFY_DEPTH = 8;
 
     // ============================================================
     // СЕРИАЛИЗАЦИЯ Map / Set / ArrayBuffer
@@ -38,13 +38,8 @@
     // BASE64 HELPERS
     // ============================================================
 
-    /**
-     * Uint8Array → base64.
-     * Работает и в браузере, и в Node.
-     */
     function bytesToBase64(bytes) {
         if (typeof btoa === 'function') {
-            // Браузер: btoa + chunks (чтобы не переполнить stack на больших буферах)
             let binary = '';
             const chunkSize = 0x8000;
             for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -53,17 +48,12 @@
             }
             return btoa(binary);
         }
-        // Node fallback
         if (typeof Buffer !== 'undefined') {
             return Buffer.from(bytes).toString('base64');
         }
-        // Совсем fallback — массив чисел (как было)
         return Array.from(bytes);
     }
 
-    /**
-     * base64 → Uint8Array.
-     */
     function base64ToBytes(b64) {
         if (typeof atob === 'function') {
             const binary = atob(b64);
@@ -88,7 +78,6 @@
         if (typeof obj !== 'object') return obj;
 
         if (ArrayBuffer.isView(obj)) {
-            // TypedArray / DataView
             const ctor = obj.constructor.name;
             const bytes = new Uint8Array(
                 obj.buffer,
@@ -137,7 +126,6 @@
             }
             return result;
         }
-        // Прочие классы — не сериализуем
         return undefined;
     }
 
@@ -178,19 +166,17 @@
                 case 'ArrayBuffer': {
                     const bytes = (typeof v === 'string')
                         ? base64ToBytes(v)
-                        : new Uint8Array(v || []);  // fallback: массив чисел
+                        : new Uint8Array(v || []);
                     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
                 }
 
                 default: {
-                    // TypedArray / DataView
                     if (typeof globalThis[t] === 'function') {
                         try {
                             const bytes = (typeof v === 'string')
                                 ? base64ToBytes(v)
-                                : new Uint8Array(v || []);  // fallback
+                                : new Uint8Array(v || []);
 
-                            // Возвращаем TypedArray через копию (buffer может быть shared)
                             const copy = new Uint8Array(bytes.length);
                             copy.set(bytes);
 
@@ -241,23 +227,17 @@
 
             this._debug = options.debug || false;
 
-            console.log('[DataBus] Initialized v4.2.0 (slots mode)');
+            console.log('[DataBus] Initialized v4.2.1 (slots mode)');
         }
 
         // ============================================================
         // 1. ГЛУБОКОЕ КОПИРОВАНИЕ
         // ============================================================
 
-        /**
-         * ✅ v4.2.0: ArrayBuffer / TypedArray / DataView — по ССЫЛКЕ.
-         * Иммутабельность — на совести разработчика (создал → не меняешь).
-         * Map / Set / Date / RegExp — копируются как было.
-         */
         _deepCopy(obj) {
             if (obj === null || obj === undefined) return obj;
             if (typeof obj !== 'object') return obj;
 
-            // ✅ ArrayBuffer-подобные — по ссылке (не копируем!)
             if (ArrayBuffer.isView(obj)) return obj;
             if (obj instanceof ArrayBuffer) return obj;
 
@@ -293,7 +273,6 @@
                 return result;
             }
 
-            // Прочие классы — возвращаем как есть
             return obj;
         }
 
@@ -723,68 +702,98 @@
         }
 
         // ============================================================
-        // 12. NOTIFY
+        // 12. NOTIFY (✅ FIX: итеративный цикл вместо рекурсии)
         // ============================================================
 
+        /**
+         * ✅ FIX v4.2.1:
+         * Раньше после finally с pending-обновлениями вызывался _notifySlot(sid)
+         * рекурсивно. Это могло привести к глубокой рекурсии, если подписчик
+         * снова писал в слот.
+         *
+         * Теперь — while-loop с лимитом MAX_NOTIFY_DEPTH.
+         * Pending-обновления обрабатываются в следующей итерации цикла.
+         */
         _notifySlot(slotId) {
             const sid = String(slotId);
-            const slot = this._slots.get(sid);
-            if (!slot) return;
 
-            slot._isUpdating = true;
+            let depth = 0;
 
-            const payload = {
-                slotId: sid,
-                type: slot.type,
-                metadata: this._deepCopy(slot.metadata),
-                data: this._deepCopy(slot.data),
-                uiState: this._deepCopy(slot.uiState)
-            };
+            while (true) {
+                const slot = this._slots.get(sid);
+                if (!slot) return;
 
-            try {
-                const slotSubs = this._slotSubscribers.get(sid);
-                if (slotSubs) {
-                    for (const cb of slotSubs) {
-                        try { cb(payload); } catch (e) {
-                            console.error('[DataBus] Slot subscriber error:', e);
-                        }
-                    }
-                }
-
-                const typeSubs = this._typeSubscribers.get(slot.type);
-                if (typeSubs) {
-                    for (const cb of typeSubs) {
-                        try { cb(payload); } catch (e) {
-                            console.error('[DataBus] Type subscriber error:', e);
-                        }
-                    }
-                }
-            } finally {
-                slot._isUpdating = false;
-
-                const pending = this._pendingUpdates.get(sid);
-                if (pending && pending.length > 0) {
+                if (depth >= MAX_NOTIFY_DEPTH) {
+                    console.error(
+                        `[DataBus] _notifySlot: depth exceeded (${MAX_NOTIFY_DEPTH}) for slot "${sid}" — ` +
+                        `possible subscriber loop. Dropping pending updates.`
+                    );
+                    slot._isUpdating = false;
                     this._pendingUpdates.delete(sid);
-
-                    const merged = {};
-                    let hasAny = false;
-                    for (const p of pending) {
-                        if (p.metadata !== undefined) { merged.metadata = p.metadata; hasAny = true; }
-                        if (p.data !== undefined) { merged.data = p.data; hasAny = true; }
-                        if (p.uiState !== undefined) { merged.uiState = p.uiState; hasAny = true; }
-                    }
-
-                    if (hasAny) {
-                        if (merged.metadata !== undefined) slot.metadata = this._deepCopy(merged.metadata);
-                        if (merged.data !== undefined) slot.data = this._deepCopy(merged.data);
-                        if (merged.uiState !== undefined) slot.uiState = this._deepCopy(merged.uiState);
-
-                        slot.updatedAt = Date.now();
-                        this._markDirty();
-
-                        this._notifySlot(sid);
-                    }
+                    return;
                 }
+
+                slot._isUpdating = true;
+
+                const payload = {
+                    slotId: sid,
+                    type: slot.type,
+                    metadata: this._deepCopy(slot.metadata),
+                    data: this._deepCopy(slot.data),
+                    uiState: this._deepCopy(slot.uiState)
+                };
+
+                try {
+                    const slotSubs = this._slotSubscribers.get(sid);
+                    if (slotSubs) {
+                        for (const cb of slotSubs) {
+                            try { cb(payload); } catch (e) {
+                                console.error('[DataBus] Slot subscriber error:', e);
+                            }
+                        }
+                    }
+
+                    const typeSubs = this._typeSubscribers.get(slot.type);
+                    if (typeSubs) {
+                        for (const cb of typeSubs) {
+                            try { cb(payload); } catch (e) {
+                                console.error('[DataBus] Type subscriber error:', e);
+                            }
+                        }
+                    }
+                } finally {
+                    slot._isUpdating = false;
+                }
+
+                // Проверяем: не накопились ли pending-обновления во время notify?
+                const pending = this._pendingUpdates.get(sid);
+                if (!pending || pending.length === 0) {
+                    return; // всё чисто — выходим из цикла
+                }
+
+                this._pendingUpdates.delete(sid);
+
+                const merged = {};
+                let hasAny = false;
+                for (const p of pending) {
+                    if (p.metadata !== undefined) { merged.metadata = p.metadata; hasAny = true; }
+                    if (p.data !== undefined) { merged.data = p.data; hasAny = true; }
+                    if (p.uiState !== undefined) { merged.uiState = p.uiState; hasAny = true; }
+                }
+
+                if (!hasAny) {
+                    return;
+                }
+
+                if (merged.metadata !== undefined) slot.metadata = this._deepCopy(merged.metadata);
+                if (merged.data !== undefined) slot.data = this._deepCopy(merged.data);
+                if (merged.uiState !== undefined) slot.uiState = this._deepCopy(merged.uiState);
+
+                slot.updatedAt = Date.now();
+                this._markDirty();
+
+                depth++;
+                // продолжаем while-loop → следующая итерация notify с новыми данными
             }
         }
 
@@ -1012,7 +1021,7 @@
     if (typeof window !== 'undefined') {
         window.DataBus = DataBus;
         window.DataBus.LIMITS = LIMITS;
-        console.log('[DataBus] Registered globally v4.2.0');
+        console.log('[DataBus] Registered globally v4.2.1');
     }
 
 })();

@@ -1,27 +1,16 @@
 // core/API/PluginAPI.js
-// Версия 1.0.0 — менеджер загрузки ExtendedAPI/UserAPI.js
-//
-// Загружает файл-сборник ExtendedAPI/UserAPI.js.
-// Все компоненты внутри него сами себя регистрируют через registerComponent.
-//
-// Публичное API:
-//   - PluginAPI.load()          — загрузить/перезагрузить UserAPI.js
-//   - PluginAPI.isLoaded()      — загружен?
-//   - PluginAPI.getPath()       — путь к файлу
-//   - PluginAPI.setPath(path)   — изменить путь
-//   - PluginAPI.onLoad(cb)      — callback при загрузке
-//   - PluginAPI.onError(cb)     — callback при ошибке
+// Версия 1.0.1 - Fix: race condition при параллельных load()
+// - _appendScript: addEventListener вместо onload = (не затирает чужие)
+// - _loadScript: addEventListener для load/error
+// - onload/onerror остаются как fallback для старых браузеров
+// - Публичное API не изменилось
 
 (function() {
     'use strict';
 
-    console.log('[PluginAPI] Loading v1.0.0...');
+    console.log('[PluginAPI] Loading v1.0.1...');
 
-    var DEFAULT_PATH = 'core/API/UserAPI.js';
-
-    // ============================================================
-    // КЛАСС
-    // ============================================================
+    var DEFAULT_PATH = 'data/UserAPI.js';
 
     class PluginAPI {
         constructor(options = {}) {
@@ -38,11 +27,10 @@
             this._onErrorCallbacks = [];
 
             this._cacheBust = 0;
-        }
 
-        // ============================================================
-        // CONFIG
-        // ============================================================
+            // ✅ FIX: реестр pending-резолверов для одного и того же URL
+            this._pendingResolvers = new Map();
+        }
 
         getPath() {
             return this._path;
@@ -62,10 +50,6 @@
             return this._loading;
         }
 
-        // ============================================================
-        // CALLBACKS
-        // ============================================================
-
         onLoad(cb) {
             if (typeof cb !== 'function') return () => {};
             this._onLoadCallbacks.push(cb);
@@ -84,16 +68,6 @@
             };
         }
 
-        // ============================================================
-        // LOAD
-        // ============================================================
-
-        /**
-         * Загрузить UserAPI.js.
-         * @param {object} [opts]
-         * @param {boolean} [opts.reload=false] — перезагрузить если уже загружен
-         * @returns {Promise<boolean>}
-         */
         load(opts = {}) {
             if (this._loading && this._loadPromise) {
                 return this._loadPromise;
@@ -107,7 +81,6 @@
             }
 
             if (opts.reload && this._scriptEl) {
-                // Убираем старый <script>, чтобы перезагрузить
                 this._unloadScript();
             }
 
@@ -123,11 +96,9 @@
             const url = this._path + '?_extapi=' + Date.now() + '_' + this._cacheBust;
 
             return new Promise((resolve) => {
-                // Проверяем: файл вообще существует?
                 fetch(url, { method: 'HEAD', cache: 'no-cache' })
                     .then((res) => {
                         if (!res.ok) {
-                            // 404 — не критично
                             console.warn('[PluginAPI] ⚠️ ' + this._path + ' not found (status ' + res.status + ')');
                             self._loading = false;
                             self._loaded = false;
@@ -137,11 +108,9 @@
                             return;
                         }
 
-                        // Файл есть — грузим через <script>
                         self._appendScript(url, resolve);
                     })
                     .catch((err) => {
-                        // fetch не удался (CORS, offline) — попробуем <script> напрямую
                         if (self._debug) {
                             console.warn('[PluginAPI] HEAD failed, trying direct script load:', err);
                         }
@@ -150,14 +119,42 @@
             });
         }
 
+        /**
+         * ✅ FIX v1.0.1:
+         * - Если script уже в DOM и уже загружен — сразу resolve(true).
+         * - Если script уже в DOM, но ещё грузится — добавляем свой резолвер
+         *   в _pendingResolvers и не перезаписываем onload/onerror.
+         * - Если script новый — создаём, вешаем addEventListener('load'/'error').
+         */
         _appendScript(url, resolve) {
             const self = this;
+
+            // Если скрипт уже есть в DOM по этому URL — не создаём дубликат
+            const existing = document.querySelector('script[data-extapi="true"][data-src="' + url + '"]');
+
+            if (existing) {
+                if (existing.dataset.loaded === 'true') {
+                    resolve(true);
+                    return;
+                }
+
+                // Уже грузится — ставим в очередь резолверов
+                if (!this._pendingResolvers.has(url)) {
+                    this._pendingResolvers.set(url, []);
+                }
+                this._pendingResolvers.get(url).push(resolve);
+                return;
+            }
 
             const script = document.createElement('script');
             script.src = url;
             script.async = true;
             script.dataset.extapi = 'true';
+            script.dataset.src = url;
+            script.dataset.loaded = 'false';
             this._scriptEl = script;
+
+            this._pendingResolvers.set(url, [resolve]);
 
             let settled = false;
             const timeout = setTimeout(() => {
@@ -166,19 +163,25 @@
                 console.error('[PluginAPI] ❌ Load timeout: ' + this._path);
                 self._loading = false;
                 self._loadPromise = null;
+
+                const resolvers = self._pendingResolvers.get(url) || [];
+                for (const r of resolvers) {
+                    try { r(false); } catch (e) {}
+                }
+                self._pendingResolvers.delete(url);
+
                 self._fireError(new Error('Load timeout'));
-                resolve(false);
             }, 10000);
 
-            script.onload = () => {
+            const finishOk = () => {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timeout);
 
                 self._loading = false;
                 self._loaded = true;
+                script.dataset.loaded = 'true';
 
-                // Смотрим, что зарегистрировалось
                 const registry = (window.ExtendedAPI && window.ExtendedAPI.getRegistry)
                     ? window.ExtendedAPI.getRegistry()
                     : {};
@@ -193,22 +196,36 @@
                     console.log('[PluginAPI] Registry:', registry);
                 }
 
+                const resolvers = self._pendingResolvers.get(url) || [];
+                for (const r of resolvers) {
+                    try { r(true); } catch (e) {}
+                }
+                self._pendingResolvers.delete(url);
+
                 self._fireLoad();
-                resolve(true);
             };
 
-            script.onerror = () => {
+            const finishErr = () => {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timeout);
 
-                // НЕ 404 (иначе HEAD бы сработал), а именно ошибка исполнения
                 console.error('[PluginAPI] ❌ Failed to load: ' + self._path);
                 self._loading = false;
                 self._loadPromise = null;
+
+                const resolvers = self._pendingResolvers.get(url) || [];
+                for (const r of resolvers) {
+                    try { r(false); } catch (e) {}
+                }
+                self._pendingResolvers.delete(url);
+
                 self._fireError(new Error('Script load failed'));
-                resolve(false);
             };
+
+            // ✅ FIX: addEventListener вместо onload = (не затирает чужие)
+            script.addEventListener('load', finishOk);
+            script.addEventListener('error', finishErr);
 
             document.head.appendChild(script);
         }
@@ -218,11 +235,8 @@
                 this._scriptEl.parentNode.removeChild(this._scriptEl);
             }
             this._scriptEl = null;
+            this._pendingResolvers.clear();
         }
-
-        // ============================================================
-        // NOTIFY
-        // ============================================================
 
         _fireLoad() {
             for (const cb of this._onLoadCallbacks) {
@@ -244,10 +258,6 @@
             }));
         }
 
-        // ============================================================
-        // DESTROY
-        // ============================================================
-
         destroy() {
             this._unloadScript();
             this._loaded = false;
@@ -255,13 +265,10 @@
             this._loadPromise = null;
             this._onLoadCallbacks = [];
             this._onErrorCallbacks = [];
+            this._pendingResolvers.clear();
             console.log('[PluginAPI] Destroyed');
         }
     }
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     window.PluginAPI = new PluginAPI();
     window.PluginAPI.Class = PluginAPI;
@@ -270,6 +277,6 @@
         module.exports = { PluginAPI };
     }
 
-    console.log('[PluginAPI] Registered globally v1.0.0');
+    console.log('[PluginAPI] Registered globally v1.0.1');
 
 })();

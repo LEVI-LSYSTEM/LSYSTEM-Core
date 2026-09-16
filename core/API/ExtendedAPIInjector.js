@@ -1,42 +1,36 @@
 // core/API/ExtendedAPIInjector.js
-// Версия 1.0.0 — реестр компонентов ExtendedAPI + Proxy + CSS-инжект
-//
-// Разработчик расширений пишет в ExtendedAPI/UserAPI.js:
-//
-//   registerComponent('category', 'name', {
-//       version: '1.0.0',         // опционально
-//       css: `...`,                // опционально — инжектится в <head>
-//       data: {...},               // любые данные
-//       create(...) { /* this === окно */ },
-//       someMethod(...) { /* this === окно */ },
-//   });
-//
-// Разработчик окна использует:
-//
-//   this.category.name(...)               // → create()
-//   this.category.name.create(...)        // → create()
-//   this.category.name.someMethod(...)    // → someMethod()
-//   this.category.name.data               // → данные
-//
-// Компоненты могут ссылаться друг на друга:
-//   create() { const btn = this.ui.button({...}); }
-//
-// Ядро не трогается. PluginAPI загружает UserAPI.js.
+// Версия 1.0.1 — Fix: коллизия категорий с Object.prototype
+// - _installCategoryGetter: getOwnPropertyDescriptor вместо `in`
+// - Защита от зарезервированных имён (__proto__, prototype, constructor)
+// - namespace proxy: get('then') → undefined (не thenable)
 
 (function() {
     'use strict';
 
-    console.log('[ExtendedAPIInjector] Loading v1.0.0...');
+    console.log('[ExtendedAPIInjector] Loading v1.0.1...');
 
     // ============================================================
     // РЕЕСТР
     // ============================================================
 
-    // _registry[category][name] = config
     const _registry = Object.create(null);
-
-    // Отдельно храним версии для отладки
     const _versions = Object.create(null);
+
+    // Зарезервированные имена, которые нельзя использовать как category
+    const RESERVED_NAMES = new Set([
+        '__proto__',
+        'prototype',
+        'constructor',
+        'toString',
+        'valueOf',
+        'hasOwnProperty',
+        'isPrototypeOf',
+        'propertyIsEnumerable',
+        'toLocaleString',
+        'then',
+        'catch',
+        'finally'
+    ]);
 
     // ============================================================
     // УТИЛИТЫ
@@ -67,14 +61,6 @@
     // REGISTER COMPONENT
     // ============================================================
 
-    /**
-     * Зарегистрировать компонент ExtendedAPI.
-     *
-     * @param {string} category — 'ui', 'chart', 'utils', ...
-     * @param {string} name     — 'button', 'block', ...
-     * @param {object} config   — { version?, css?, create?, ...методы, ...данные }
-     * @returns {boolean}
-     */
     function registerComponent(category, name, config) {
         if (!category || typeof category !== 'string') {
             console.error('[ExtendedAPIInjector] registerComponent: category is required');
@@ -82,6 +68,10 @@
         }
         if (!name || typeof name !== 'string') {
             console.error('[ExtendedAPIInjector] registerComponent: name is required');
+            return false;
+        }
+        if (RESERVED_NAMES.has(category)) {
+            console.error(`[ExtendedAPIInjector] registerComponent: category "${category}" is reserved`);
             return false;
         }
         if (!_isPlainObject(config)) {
@@ -96,10 +86,8 @@
         const existing = _registry[category][name];
 
         if (existing) {
-            // Мерджим: старый + новый (новый перекрывает)
             const merged = Object.assign({}, existing, config);
 
-            // Warn про коллизии методов
             for (const key in config) {
                 if (Object.prototype.hasOwnProperty.call(existing, key)
                     && typeof existing[key] === 'function'
@@ -113,15 +101,12 @@
             _registry[category][name] = Object.assign({}, config);
         }
 
-        // Версия
         if (config.version) {
             _versions[`${category}.${name}`] = String(config.version);
         }
 
-        // CSS
         _injectCSS(category, name, config.css);
 
-        // Устанавливаем getter на BaseWindowInstance.prototype для category (если ещё нет)
         _installCategoryGetter(category);
 
         const methodCount = Object.keys(config)
@@ -141,7 +126,6 @@
 
     function _installCategoryGetter(category) {
         if (!window.BaseWindowInstance) {
-            // BaseWindowInstance ещё не загружен — повторим позже
             if (!_installCategoryGetter._pending) {
                 _installCategoryGetter._pending = new Set();
             }
@@ -152,23 +136,22 @@
 
         const proto = window.BaseWindowInstance.prototype;
 
-        // Уже установлен?
+        // ✅ FIX: getOwnPropertyDescriptor вместо `in`
+        // `in` ловит Object.prototype.constructor/toString/etc.
         const descriptor = Object.getOwnPropertyDescriptor(proto, category);
-        if (descriptor && typeof descriptor.get === 'function') {
-            return;
-        }
-
-        // Коллизия: category уже существует в прототипе как поле/метод?
-        if (category in proto) {
+        if (descriptor) {
+            if (typeof descriptor.get === 'function') {
+                // Уже установлен — ок
+                return;
+            }
             console.warn(
-                `[ExtendedAPIInjector] ⚠️ category "${category}" already exists on BaseWindowInstance — skipping`
+                `[ExtendedAPIInjector] ⚠️ category "${category}" already exists on BaseWindowInstance.prototype — skipping`
             );
             return;
         }
 
         Object.defineProperty(proto, category, {
             get() {
-                // this === окно
                 const cacheKey = '__extapi_ns_' + category;
 
                 if (!this[cacheKey]) {
@@ -186,7 +169,6 @@
         if (!pending) return;
 
         if (!window.BaseWindowInstance) {
-            // Всё ещё нет — повторим
             setTimeout(_flushPendingCategories, 50);
             return;
         }
@@ -207,17 +189,24 @@
         return new Proxy({}, {
             get(target, name) {
                 if (typeof name !== 'string') return undefined;
-                if (name === 'category') return category;
 
-                // Компонент уже создан — возвращаем
+                // ✅ FIX: не быть thenable
+                if (name === 'then' || name === 'catch' || name === 'finally') {
+                    return undefined;
+                }
+
+                if (name === 'category') return category;
+                if (name === '__category') return category;
+                if (name === '__names') {
+                    return Object.keys(_registry[category] || {});
+                }
+
                 if (componentCache[name]) {
                     return componentCache[name];
                 }
 
-                // Есть в реестре?
                 const config = _registry[category] && _registry[category][name];
                 if (!config) {
-                    // Не найден — возвращаем undefined
                     return undefined;
                 }
 
@@ -227,19 +216,23 @@
             },
 
             has(target, name) {
+                if (typeof name !== 'string') return false;
+                if (name === 'category' || name === '__category' || name === '__names') return true;
                 return !!(_registry[category] && _registry[category][name]);
             },
 
             ownKeys() {
-                return Object.keys(_registry[category] || {});
+                return ['category', '__category', '__names', ...Object.keys(_registry[category] || {})];
             },
 
             getOwnPropertyDescriptor(target, name) {
+                if (typeof name !== 'string') return undefined;
+
+                if (name === 'category' || name === '__category' || name === '__names') {
+                    return { enumerable: true, configurable: true };
+                }
                 if (_registry[category] && _registry[category][name]) {
-                    return {
-                        enumerable: true,
-                        configurable: true
-                    };
+                    return { enumerable: true, configurable: true };
                 }
                 return undefined;
             }
@@ -251,17 +244,14 @@
     // ============================================================
 
     function _makeComponentProxy(category, name, config, windowInstance) {
-        // Функция-обёртка, чтобы Proxy работал как callable
         const target = function() {};
 
-        // Опционально — привет для дебага
         Object.defineProperty(target, 'name', {
             value: `${category}.${name}`,
             configurable: true
         });
 
         return new Proxy(target, {
-            // this.ui.button(...)  →  config.create.call(windowInstance, ...)
             apply(t, thisArg, args) {
                 if (typeof config.create === 'function') {
                     try {
@@ -275,17 +265,14 @@
                 return null;
             },
 
-            // this.ui.button.create / .someMethod / .data / ...
             get(t, prop) {
                 if (typeof prop !== 'string') return undefined;
 
-                // Спецполя
                 if (prop === '__config') return config;
                 if (prop === '__category') return category;
                 if (prop === '__name') return name;
                 if (prop === '__window') return windowInstance;
 
-                // create — алиас вызова
                 if (prop === 'create') {
                     return function(...args) {
                         if (typeof config.create === 'function') {
@@ -301,12 +288,10 @@
                     };
                 }
 
-                // Публичный метод?
                 if (typeof config[prop] === 'function' && !prop.startsWith('_')) {
                     return config[prop].bind(windowInstance);
                 }
 
-                // Данные
                 if (Object.prototype.hasOwnProperty.call(config, prop)) {
                     return config[prop];
                 }
@@ -345,52 +330,31 @@
     // УПРАВЛЕНИЕ РЕЕСТРОМ
     // ============================================================
 
-    /**
-     * Есть ли категория в реестре?
-     */
     function hasCategory(category) {
         return !!_registry[category];
     }
 
-    /**
-     * Есть ли компонент?
-     */
     function hasComponent(category, name) {
         return !!(_registry[category] && _registry[category][name]);
     }
 
-    /**
-     * Список компонентов категории.
-     */
     function listComponents(category) {
         if (!_registry[category]) return [];
         return Object.keys(_registry[category]);
     }
 
-    /**
-     * Список категорий.
-     */
     function listCategories() {
         return Object.keys(_registry);
     }
 
-    /**
-     * Версия компонента.
-     */
     function getComponentVersion(category, name) {
         return _versions[`${category}.${name}`] || null;
     }
 
-    /**
-     * Все версии (для дебага).
-     */
     function listVersions() {
         return Object.assign({}, _versions);
     }
 
-    /**
-     * Полный реестр (для дебага/интроспекции).
-     */
     function getRegistry() {
         const out = Object.create(null);
         for (const cat in _registry) {
@@ -413,7 +377,8 @@
         listCategories,
         getComponentVersion,
         listVersions,
-        getRegistry
+        getRegistry,
+        RESERVED_NAMES: Array.from(RESERVED_NAMES)
     };
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -423,7 +388,7 @@
         };
     }
 
-    console.log('[ExtendedAPIInjector] Registered globally v1.0.0');
+    console.log('[ExtendedAPIInjector] Registered globally v1.0.1');
     console.log('[ExtendedAPIInjector] Use: window.registerComponent(category, name, config)');
 
 })();

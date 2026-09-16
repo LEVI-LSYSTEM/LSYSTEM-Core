@@ -1,0 +1,65 @@
+{
+  "categories": [
+    { "name": "Излучатели", "nodes": ["speaker.js"] },
+    { "name": "Оформление",  "nodes": ["box.js", "wall.js", "port.js", "passive_radiator.js"] },
+    { "name": "Терминалы",   "nodes": ["LEMsolver.js"] }
+  ],
+  "presets": [
+    {
+      "id": "closed_box",
+      "label": "Закрытый ящик",
+      "icon": "icon-box",
+      "description": "Динамик → Ящик → LEM-солвер",
+      "graph": {
+        "nodes": [
+          {
+            "id": 1,
+            "x": -320,
+            "y": 0,
+            "defEnv": "Acoustics",
+            "defId": "Acoustics.speaker",
+            "defFile": "speaker.js",
+            "paramValues": {}
+          },
+          {
+            "id": 2,
+            "x": 0,
+            "y": 0,
+            "defEnv": "Acoustics",
+            "defId": "Acoustics.box",
+            "defFile": "box.js",
+            "paramValues": {}
+          },
+          {
+            "id": 3,
+            "x": 320,
+            "y": 0,
+            "defEnv": "Acoustics",
+            "defId": "Acoustics.lem_solver",
+            "defFile": "LEMsolver.js",
+            "paramValues": {}
+          }
+        ],
+        "connections": [
+          {
+            "id": 1,
+            "fromNodeId": 1,
+            "fromPortId": "out",
+            "toNodeId": 2,
+            "toPortId": "in",
+            "waypoints": []
+          },
+          {
+            "id": 2,
+            "fromNodeId": 2,
+            "fromPortId": "out",
+            "toNodeId": 3,
+            "toPortId": "in",
+            "waypoints": []
+          }
+        ],
+        "comments": []
+      }
+    }
+  ]
+}

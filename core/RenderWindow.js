@@ -1,13 +1,17 @@
 // core/RenderWindow.js
-// Версия 6.2.1 - Fix: canImport/canExport через window.BaseWindowInstance.prototype
-// - data-action / data-value на кнопках шапки
-// - _createDataDropdown: корректная проверка переопределения onImport/onExport
-// - Остальное — как в v6.1.0
+// Версия 7.1.0
+// - Feature: расширяемый data-dropdown (📊).
+//            * static get dataMenu() в BaseWindowInstance — массив или функция от дефолта.
+//            * onDataMenuOpen(anchorEl, dropdownEl) — полный контроль над содержимым.
+//            * _closeDataMenu() / _renderDefaultDataMenu(dropdownEl) — хелперы окна.
+// - v7.0.1: _measureBaseWidths — корректный reset временных CSS-переменных.
+// - v7.0.1: _positionDropdown — замер после display:block;visibility:hidden.
+// - Feature: _buildButton/_buildDropdown поддерживают desc.destroy (cleanup).
 
 (function() {
     'use strict';
 
-    console.log('[RenderWindow] Loading v6.2.1...');
+    console.log('[RenderWindow] Loading v7.1.0...');
 
     // ============================================================
     // HELPERS
@@ -27,6 +31,55 @@
         return escapeHtml(s);
     }
 
+    function filterItems(arr) {
+        if (!Array.isArray(arr)) return [];
+        return arr.filter(x => x && typeof x === 'object');
+    }
+
+    // ============================================================
+    // HEADER ITEM REGISTRY (static)
+    // ============================================================
+
+    const _headerItemTypes = new Map();
+
+    function registerHeaderItemType(type, builder) {
+        if (!type || typeof type !== 'string') {
+            console.error('[RenderWindow] registerHeaderItemType: type required');
+            return false;
+        }
+        if (typeof builder !== 'function') {
+            console.error('[RenderWindow] registerHeaderItemType: builder must be a function');
+            return false;
+        }
+        if (_headerItemTypes.has(type)) {
+            console.warn('[RenderWindow] headerItemType override:', type);
+        }
+        _headerItemTypes.set(type, builder);
+        return true;
+    }
+
+    function unregisterHeaderItemType(type) {
+        return _headerItemTypes.delete(type);
+    }
+
+    function getHeaderItemTypes() {
+        return Array.from(_headerItemTypes.keys());
+    }
+
+    // ============================================================
+    // DEFAULT DATA MENU
+    // ============================================================
+
+    function _defaultDataMenu() {
+        return [
+            { icon: 'icon-import', label: 'Импорт', action: 'import' },
+            { icon: 'icon-export', label: 'Экспорт', action: 'export' },
+            { divider: true },
+            { icon: 'icon-plus',   label: 'Новый слот', action: 'new-slot' },
+            { icon: 'icon-link',   label: 'Привязать',  action: 'attach' }
+        ];
+    }
+
     // ============================================================
     // CLASS
     // ============================================================
@@ -43,9 +96,12 @@
             this._title = options.title || type || 'Window';
             this._icon = options.icon || '📄';
             this._typeConfig = this._registry ? this._registry.getType(type) : null;
-            this._headerButtonsConfig = options.headerButtons || [];
-            this._contextMenuConfig = options.contextMenu || [];
-            this._dropdownMenuConfig = options.dropdownMenu || null;
+
+            this._headerItemsConfig = filterItems(options.headerItems);
+
+            this._contextMenuConfig = Array.isArray(options.contextMenu)
+                ? options.contextMenu
+                : [];
 
             this._isReady = false;
             this._isDestroyed = false;
@@ -58,6 +114,10 @@
             this._buttonsVersion = 0;
             this._measuredVersion = -1;
 
+            this._headerItems = [];        // [{ desc, el }]
+            this._dropdownWrappers = [];   // элементы с _refreshItems
+            this._currentDropdown = null;  // текущий открытый data-dropdown
+
             this._listeners = {};
 
             // DOM
@@ -69,6 +129,7 @@
             this._headerRightBlock = null;
             this._customButtons = null;
             this._dataBtnWrapper = null;
+            this._dataBtn = null;
             this._hardButtons = null;
             this._content = null;
             this._divider = null;
@@ -77,7 +138,6 @@
             this._minimizeBtn = null;
             this._fullscreenBtn = null;
             this._closeBtn = null;
-            this._dropdownWrapper = null;
 
             this._headerSizeObserver = null;
             this._headerRAF = null;
@@ -151,7 +211,7 @@
         }
 
         // ============================================================
-        // 3. ПОСТРОЕНИЕ DOM
+        // 3. DOM
         // ============================================================
 
         _buildDOM() {
@@ -207,7 +267,6 @@
                 fontSize: '10px'
             });
 
-            // 1. ИКОНКА
             this._headerIcon = document.createElement('span');
             this._headerIcon.className = 'window-icon';
             Object.assign(this._headerIcon.style, {
@@ -224,7 +283,6 @@
             });
             this._updateIcon();
 
-            // 2. LEFT: TITLE
             this._headerLeft = document.createElement('div');
             this._headerLeft.className = 'window-header-left';
             Object.assign(this._headerLeft.style, {
@@ -259,7 +317,6 @@
             this._titleElement.title = this._title;
             this._headerLeft.appendChild(this._titleElement);
 
-            // 3. RIGHT BLOCK
             this._headerRightBlock = document.createElement('div');
             this._headerRightBlock.className = 'window-header-right-block';
             Object.assign(this._headerRightBlock.style, {
@@ -273,7 +330,6 @@
                 minWidth: '0'
             });
 
-            // 3.1 SOFT
             this._customButtons = document.createElement('div');
             this._customButtons.className = 'window-custom-buttons';
             Object.assign(this._customButtons.style, {
@@ -288,7 +344,6 @@
                 zIndex: '1'
             });
 
-            // 3.2 HARD
             this._hardButtons = document.createElement('div');
             this._hardButtons.className = 'window-hard-buttons';
             Object.assign(this._hardButtons.style, {
@@ -306,7 +361,6 @@
             this._headerRightBlock.appendChild(this._customButtons);
             this._headerRightBlock.appendChild(this._hardButtons);
 
-            // СБОРКА
             this._header.appendChild(this._headerIcon);
             this._header.appendChild(this._headerLeft);
             this._header.appendChild(this._headerRightBlock);
@@ -315,7 +369,6 @@
 
             this._rebuildHeaderButtons();
             this._setupDragAndDrop();
-            this._setupContextMenu();
             this._setupLayoutListener();
         }
 
@@ -351,7 +404,7 @@
         }
 
         // ============================================================
-        // 5. КНОПКИ ШАПКИ
+        // 5. ПЕРЕСБОРКА ШАПКИ
         // ============================================================
 
         _rebuildHeaderButtons() {
@@ -361,34 +414,12 @@
                 this._windowCount = this._layoutManager.getWindowCount() || 1;
             }
 
-            this._customButtons.innerHTML = '';
-            this._hardButtons.innerHTML = '';
+            this._renderHeaderItems();
 
+            this._hardButtons.innerHTML = '';
             this._customFullW = 0;
             this._customMinW = 0;
 
-            this._buttonsVersion++;
-            this._measuredVersion = -1;
-
-            // SOFT: dropdownMenu
-            if (this._dropdownMenuConfig) {
-                if (!this._dropdownWrapper) {
-                    this._dropdownWrapper = this._createDropdownButton(this._dropdownMenuConfig);
-                }
-                if (this._dropdownWrapper) {
-                    this._customButtons.appendChild(this._dropdownWrapper);
-                }
-            }
-
-            // SOFT: headerButtons
-            if (Array.isArray(this._headerButtonsConfig) && this._headerButtonsConfig.length > 0) {
-                for (const btnConfig of this._headerButtonsConfig) {
-                    const btn = this._createHeaderButton(btnConfig);
-                    if (btn) this._customButtons.appendChild(btn);
-                }
-            }
-
-            // HARD: DIVIDER
             if (this._customButtons.childElementCount > 0) {
                 if (!this._divider) {
                     this._divider = document.createElement('span');
@@ -404,13 +435,13 @@
                 this._hardButtons.appendChild(this._divider);
             }
 
-            // HARD: ICON-DATA
             if (!this._dataBtnWrapper) {
                 this._dataBtnWrapper = this._createDataButton();
+                // Запоминаем саму кнопку — для anchorEl в onDataMenuOpen
+                this._dataBtn = this._dataBtnWrapper.querySelector('.data-btn');
             }
             this._hardButtons.appendChild(this._dataBtnWrapper);
 
-            // HARD: LAYOUT
             if (this._windowCount > 1) {
                 if (!this._layoutWrapper) {
                     this._layoutWrapper = this._createLayoutButton();
@@ -421,29 +452,28 @@
                 this._layoutWrapper.style.display = 'none';
             }
 
-            // HARD: CHANGE TYPE
             if (!this._changeTypeWrapper) {
                 this._changeTypeWrapper = this._createChangeTypeButton();
             }
             this._hardButtons.appendChild(this._changeTypeWrapper);
 
-            // HARD: MINIMIZE
             if (!this._minimizeBtn) {
                 this._minimizeBtn = this._createMinimizeButton();
             }
             this._hardButtons.appendChild(this._minimizeBtn);
 
-            // HARD: FULLSCREEN
             if (!this._fullscreenBtn) {
                 this._fullscreenBtn = this._createFullscreenButton();
             }
             this._hardButtons.appendChild(this._fullscreenBtn);
 
-            // HARD: CLOSE
             if (!this._closeBtn) {
                 this._closeBtn = this._createCloseButton();
             }
             this._hardButtons.appendChild(this._closeBtn);
+
+            this._buttonsVersion++;
+            this._measuredVersion = -1;
 
             if (this._isReady) {
                 requestAnimationFrame(() => {
@@ -456,7 +486,94 @@
         }
 
         // ============================================================
-        // 6. ICON-DATA DROPDOWN
+        // 5.1. ЕДИНЫЙ РЕНДЕР headerItems
+        // ============================================================
+
+        _renderHeaderItems() {
+            // Cleanup старых элементов
+            for (const item of this._headerItems) {
+                if (item && item.el && item.desc && typeof item.desc.destroy === 'function') {
+                    try { item.desc.destroy(item.el, this._baseWindow); } catch (e) {
+                        console.error('[RenderWindow] headerItem.destroy error:', e);
+                    }
+                }
+            }
+
+            for (const w of this._dropdownWrappers) {
+                try { if (typeof w._cleanup === 'function') w._cleanup(); } catch (e) {}
+                if (w && w.parentNode) w.parentNode.removeChild(w);
+            }
+            this._dropdownWrappers = [];
+
+            this._customButtons.innerHTML = '';
+            this._headerItems = [];
+
+            const items = this._headerItemsConfig;
+
+            for (let i = 0; i < items.length; i++) {
+                const desc = items[i];
+                if (!desc) continue;
+
+                let isHidden = false;
+                if (typeof desc.hidden === 'function') {
+                    try {
+                        isHidden = !!desc.hidden(this._baseWindow, this);
+                    } catch (e) {
+                        console.error('[RenderWindow] headerItem.hidden() error:', e);
+                        isHidden = false;
+                    }
+                } else if (desc.hidden) {
+                    isHidden = true;
+                }
+                if (isHidden) continue;
+
+                let el = null;
+
+                const ctx = {
+                    renderWindow: this,
+                    baseWindow: this._baseWindow,
+                    layoutManager: this._layoutManager,
+                    index: i,
+                    desc
+                };
+
+                if (typeof desc.render === 'function') {
+                    try {
+                        el = desc.render(ctx);
+                    } catch (e) {
+                        console.error('[RenderWindow] headerItem.render() error:', e);
+                        el = null;
+                    }
+                } else if (desc.type) {
+                    const builder = _headerItemTypes.get(desc.type);
+                    if (builder) {
+                        try {
+                            el = builder(desc, ctx);
+                        } catch (e) {
+                            console.error('[RenderWindow] headerItem builder error:', e);
+                            el = null;
+                        }
+                    } else {
+                        console.warn('[RenderWindow] Unknown headerItem type:', desc.type,
+                            '(known:', getHeaderItemTypes().join(', ') + ')');
+                    }
+                } else {
+                    console.warn('[RenderWindow] headerItem without type/render at index', i, desc);
+                }
+
+                if (el && el.nodeType === 1) {
+                    this._customButtons.appendChild(el);
+                    this._headerItems.push({ desc, el });
+
+                    if (typeof el._refreshItems === 'function') {
+                        this._dropdownWrappers.push(el);
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // 6. DATA-DROPDOWN (📊) — расширяемый через dataMenu / onDataMenuOpen
         // ============================================================
 
         _createDataButton() {
@@ -524,11 +641,11 @@
 
                 const isOpen = dropdown.style.display === 'block';
                 if (isOpen) {
-                    dropdown.style.display = 'none';
-                    dropdown.style.opacity = '0';
-                    btn.classList.remove('active');
+                    this._closeDataDropdown(dropdown);
                 } else {
                     if (typeof dropdown._renderItems === 'function') dropdown._renderItems();
+                    if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
+                    this._currentDropdown = dropdown;
                     dropdown.style.display = 'block';
                     dropdown.style.opacity = '0';
                     this._positionDropdown(dropdown, btn);
@@ -568,55 +685,31 @@
             `;
 
             const renderItems = () => {
-                const realInstance = this._baseWindow?.getRealInstance?.();
-
-                // ✅ v6.2.1: проверка переопределения onImport/onExport через prototype
-                const proto = (typeof window !== 'undefined' && window.BaseWindowInstance)
-                    ? window.BaseWindowInstance.prototype
-                    : null;
-
-                const canImport = !!realInstance
-                    && typeof realInstance.onImport === 'function'
-                    && (!proto || realInstance.onImport !== proto.onImport);
-
-                const canExport = !!realInstance
-                    && typeof realInstance.onExport === 'function'
-                    && (!proto || realInstance.onExport !== proto.onExport);
-
                 dropdown.innerHTML = '';
 
-                dropdown.appendChild(this._makeDataItem({
-                    icon: 'icon-import',
-                    label: 'Импорт',
-                    disabled: !canImport,
-                    onClick: () => {
-                        this._emit('data-import', { windowId: this.id });
-                        this._closeDataDropdown(dropdown);
+                const realInstance = this._baseWindow?.getRealInstance?.();
+
+                // 1) onDataMenuOpen — полный контроль со стороны окна
+                if (realInstance
+                    && typeof realInstance._hasCustomDataMenuOpen === 'function'
+                    && realInstance._hasCustomDataMenuOpen()) {
+                    try {
+                        realInstance.onDataMenuOpen(this._dataBtn || null, dropdown);
+                    } catch (e) {
+                        console.error('[RenderWindow] onDataMenuOpen error:', e);
                     }
-                }));
+                    return;
+                }
 
-                dropdown.appendChild(this._makeDataItem({
-                    icon: 'icon-export',
-                    label: 'Экспорт',
-                    disabled: !canExport,
-                    onClick: () => {
-                        this._emit('data-export', { windowId: this.id });
-                        this._closeDataDropdown(dropdown);
-                    }
-                }));
+                // 2) dataMenu (массив / функция) или сток
+                const items = (realInstance && typeof realInstance._resolveDataMenu === 'function')
+                    ? realInstance._resolveDataMenu()
+                    : _defaultDataMenu();
 
-                dropdown.appendChild(this._makeDivider());
-
-                dropdown.appendChild(this._makeDataItem({
-                    icon: 'icon-plus',
-                    label: 'Новый слот',
-                    onClick: () => {
-                        this._emit('data-new-slot', { windowId: this.id });
-                        this._closeDataDropdown(dropdown);
-                    }
-                }));
-
-                dropdown.appendChild(this._makeAttachItem());
+                for (const item of items) {
+                    const el = this._buildDataMenuItem(item, realInstance);
+                    if (el) dropdown.appendChild(el);
+                }
             };
 
             renderItems();
@@ -659,6 +752,30 @@
             dropdown.style.opacity = '0';
             const btn = dropdown.parentElement?.querySelector('.data-btn');
             if (btn) btn.classList.remove('active');
+            if (this._currentDropdown === dropdown) {
+                this._currentDropdown = null;
+            }
+        }
+
+        /**
+         * Публичный метод: закрыть текущий data-dropdown.
+         * Вызывается из BaseWindowInstance._closeDataMenu().
+         */
+        _closeDataMenu() {
+            if (this._currentDropdown) {
+                this._closeDataDropdown(this._currentDropdown);
+            }
+        }
+
+        _makeDivider() {
+            const hr = document.createElement('hr');
+            hr.style.cssText = `
+                border: none;
+                border-top: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+                margin: 4px 8px;
+                opacity: 0.3;
+            `;
+            return hr;
         }
 
         _makeDataItem({ icon, label, disabled = false, danger = false, onClick }) {
@@ -670,7 +787,9 @@
                 ? `<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;">
                     <use href="#${escapeAttr(icon)}"></use>
                    </svg>`
-                : `<span style="font-size:14px;flex-shrink:0;width:16px;text-align:center;">${escapeHtml(icon || '')}</span>`;
+                : (icon
+                    ? `<span style="font-size:14px;flex-shrink:0;width:16px;text-align:center;">${escapeHtml(icon)}</span>`
+                    : '');
 
             btn.innerHTML = `
                 ${iconHtml}
@@ -714,15 +833,142 @@
             return btn;
         }
 
-        _makeDivider() {
-            const hr = document.createElement('hr');
-            hr.style.cssText = `
-                border: none;
-                border-top: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-                margin: 4px 8px;
-                opacity: 0.3;
-            `;
-            return hr;
+        /**
+         * Строит один пункт для data-dropdown.
+         * Поддерживает:
+         *   { divider: true }
+         *   { header: '...' }
+         *   { icon, label, action: 'import'|'export'|'new-slot'|'attach', ... }
+         *   { icon, label, onClick(item, ctx) }
+         *   { icon, label, action: 'myAction' } — реальный action
+         */
+        _buildDataMenuItem(item, realInstance) {
+            if (!item || typeof item !== 'object') return null;
+
+            // --- Divider ---
+            if (item.divider) {
+                return this._makeDivider();
+            }
+
+            // --- Header ---
+            if (item.header) {
+                const h = document.createElement('div');
+                h.className = 'dropdown-header';
+                h.textContent = item.header;
+                Object.assign(h.style, {
+                    padding: '6px 14px 4px',
+                    fontSize: '10px',
+                    fontWeight: '600',
+                    color: 'var(--text-muted, rgba(200,184,154,0.35))',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    borderBottom: '1px solid var(--border-color, rgba(200,184,154,0.12))',
+                    marginBottom: '2px',
+                    pointerEvents: 'none'
+                });
+                return h;
+            }
+
+            // --- Проверки на onImport / onExport ---
+            const proto = (typeof window !== 'undefined' && window.BaseWindowInstance)
+                ? window.BaseWindowInstance.prototype
+                : null;
+            const canImport = !!realInstance
+                && typeof realInstance.onImport === 'function'
+                && (!proto || realInstance.onImport !== proto.onImport);
+            const canExport = !!realInstance
+                && typeof realInstance.onExport === 'function'
+                && (!proto || realInstance.onExport !== proto.onExport);
+
+            // --- Спец-action: import ---
+            if (item.action === 'import') {
+                return this._makeDataItem({
+                    icon: item.icon || 'icon-import',
+                    label: item.label || 'Импорт',
+                    disabled: item.disabled || !canImport,
+                    danger: !!item.danger,
+                    onClick: () => {
+                        this._emit('data-import', { windowId: this.id });
+                        this._closeDataDropdown(this._currentDropdown);
+                    }
+                });
+            }
+
+            // --- Спец-action: export ---
+            if (item.action === 'export') {
+                return this._makeDataItem({
+                    icon: item.icon || 'icon-export',
+                    label: item.label || 'Экспорт',
+                    disabled: item.disabled || !canExport,
+                    danger: !!item.danger,
+                    onClick: () => {
+                        this._emit('data-export', { windowId: this.id });
+                        this._closeDataDropdown(this._currentDropdown);
+                    }
+                });
+            }
+
+            // --- Спец-action: new-slot ---
+            if (item.action === 'new-slot') {
+                return this._makeDataItem({
+                    icon: item.icon || 'icon-plus',
+                    label: item.label || 'Новый слот',
+                    disabled: !!item.disabled,
+                    danger: !!item.danger,
+                    onClick: () => {
+                        this._emit('data-new-slot', { windowId: this.id });
+                        this._closeDataDropdown(this._currentDropdown);
+                    }
+                });
+            }
+
+            // --- Спец-action: attach ---
+            if (item.action === 'attach') {
+                return this._makeAttachItem();
+            }
+
+            // --- Пользовательский onClick ---
+            if (typeof item.onClick === 'function') {
+                return this._makeDataItem({
+                    icon: item.icon || null,
+                    label: item.label || '',
+                    disabled: !!item.disabled,
+                    danger: !!item.danger,
+                    onClick: () => {
+                        try {
+                            item.onClick(item, {
+                                renderWindow: this,
+                                baseWindow: this._baseWindow
+                            });
+                        } catch (e) {
+                            console.error('[RenderWindow] dataMenu onClick error:', e);
+                        }
+                        this._closeDataDropdown(this._currentDropdown);
+                    }
+                });
+            }
+
+            // --- Пользовательский action ---
+            if (item.action) {
+                return this._makeDataItem({
+                    icon: item.icon || null,
+                    label: item.label || '',
+                    disabled: !!item.disabled,
+                    danger: !!item.danger,
+                    onClick: () => {
+                        this._emit('menu-action', {
+                            windowId: this.id,
+                            action: item.action,
+                            value: item.value || '',
+                            payload: item.payload !== undefined ? item.payload : null,
+                            item: item
+                        });
+                        this._closeDataDropdown(this._currentDropdown);
+                    }
+                });
+            }
+
+            return null;
         }
 
         _makeAttachItem() {
@@ -857,7 +1103,7 @@
                                 });
                             }
                             this._closeDataDropdown(submenu);
-                            this._closeDataDropdown(dropdown);
+                            this._closeDataDropdown(this._currentDropdown);
                         }
                     });
 
@@ -930,302 +1176,15 @@
         }
 
         // ============================================================
-        // 7. CUSTOM DROPDOWN MENU
+        // 7. BUILDER: button
         // ============================================================
 
-        _createDropdownButton(config) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'window-actions dropdown-wrapper';
-            Object.assign(wrapper.style, {
-                position: 'relative',
-                display: 'flex',
-                flexShrink: '0',
-                overflow: 'hidden'
-            });
-
-            const btn = document.createElement('button');
-            btn.className = 'window-action-btn dropdown-toggle';
-            btn.title = config.label || 'Menu';
-            btn.setAttribute('type', 'button');
-
-            // ✅ v6.2.1: data-action
-            if (config.action) btn.setAttribute('data-action', config.action);
-
-            const iconHtml = config.icon && config.icon.startsWith('icon-')
-                ? `<svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;flex-shrink:0;">
-                    <use href="#${escapeAttr(config.icon)}"></use>
-                </svg>`
-                : escapeHtml(config.icon || '☰');
-
-            btn.innerHTML = `
-                <span class="dropdown-icon" style="display:flex;align-items:center;flex-shrink:0;">${iconHtml}</span>
-                <span class="btn-text-wrapper" style="display:flex;align-items:center;gap:var(--rw-btn-gap-active, 4px);min-width:0;overflow:hidden;">
-                    <span class="dropdown-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:var(--rw-label-opacity, 1);max-width:var(--rw-label-maxw, 80px);">${escapeHtml(config.label || '')}</span>
-                    <span class="dropdown-arrow" style="font-size:8px;flex-shrink:0;opacity:var(--rw-label-opacity, 1);">▼</span>
-                </span>
-            `;
-
-            Object.assign(btn.style, {
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 'var(--rw-btn-gap-active, 4px)',
-                padding: '0 var(--rw-btn-pad-x, 8px)',
-                height: '22px',
-                minHeight: '22px',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: '4px',
-                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
-                color: 'var(--text-secondary, #a09888)',
-                fontSize: '10px',
-                fontWeight: '500',
-                cursor: 'pointer',
-                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
-                whiteSpace: 'nowrap',
-                fontFamily: 'inherit',
-                flexShrink: '0',
-                userSelect: 'none',
-                overflow: 'hidden',
-                boxSizing: 'border-box'
-            });
-
-            const dropdown = document.createElement('div');
-            dropdown.className = 'window-dropdown menu-dropdown';
-            dropdown.dataset.windowId = this.id;
-            dropdown.style.cssText = `
-                position: fixed;
-                background: var(--bg-panel, #1a1a1a);
-                border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-                border-radius: var(--radius, 6px);
-                padding: 4px 0;
-                min-width: 100px;
-                max-width: 280px;
-                width: max-content;
-                z-index: 999999;
-                box-shadow: 0 8px 32px rgba(0,0,0,0.6);
-                backdrop-filter: blur(12px);
-                display: none;
-                opacity: 0;
-                transform: translateY(-8px) scale(0.98);
-                transition: opacity 0.15s ease, transform 0.15s ease;
-                max-height: 400px;
-                overflow-y: auto;
-            `;
-
-            this._renderDropdownItems(dropdown, config.items || [], config);
-
-            wrapper.appendChild(btn);
-            document.body.appendChild(dropdown);
-
-            const positionDropdown = () => {
-                const btnRect = btn.getBoundingClientRect();
-                const ddWidth = dropdown.offsetWidth || 200;
-                const ddHeight = dropdown.offsetHeight || 200;
-
-                let left = Math.round(btnRect.right - ddWidth);
-                let top = Math.round(btnRect.bottom + 4);
-
-                if (left < 4) left = 4;
-                if (left + ddWidth > window.innerWidth - 4) {
-                    left = window.innerWidth - ddWidth - 4;
-                }
-                if (top + ddHeight > window.innerHeight - 4) {
-                    top = Math.round(btnRect.top - ddHeight - 4);
-                    if (top < 4) top = 4;
-                }
-
-                dropdown.style.left = left + 'px';
-                dropdown.style.top = top + 'px';
-            };
-
-            const closeDropdown = () => {
-                dropdown.style.display = 'none';
-                dropdown.style.opacity = '0';
-                btn.classList.remove('active');
-                const arrow = btn.querySelector('.dropdown-arrow');
-                if (arrow) arrow.style.transform = 'rotate(0deg)';
-            };
-
-            const openDropdown = () => {
-                dropdown.style.display = 'block';
-                dropdown.style.opacity = '0';
-                positionDropdown();
-                requestAnimationFrame(() => {
-                    dropdown.style.opacity = '1';
-                    dropdown.style.transform = 'translateY(0) scale(1)';
-                });
-                btn.classList.add('active');
-                const arrow = btn.querySelector('.dropdown-arrow');
-                if (arrow) arrow.style.transform = 'rotate(180deg)';
-            };
-
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-
-                document.querySelectorAll('.menu-dropdown').forEach(el => {
-                    if (el !== dropdown) {
-                        el.style.display = 'none';
-                        el.style.opacity = '0';
-                    }
-                });
-
-                const isOpen = dropdown.style.display === 'block';
-                if (isOpen) closeDropdown();
-                else openDropdown();
-            });
-
-            const closeHandler = (e) => {
-                if (dropdown.style.display !== 'block') return;
-                if (wrapper.contains(e.target)) return;
-                if (dropdown.contains(e.target)) return;
-                closeDropdown();
-            };
-            document.addEventListener('click', closeHandler);
-            this._closeHandlers.push(() => document.removeEventListener('click', closeHandler));
-
-            const repositionHandler = () => {
-                if (dropdown.style.display === 'block') positionDropdown();
-            };
-            window.addEventListener('resize', repositionHandler);
-            window.addEventListener('scroll', repositionHandler, true);
-            this._closeHandlers.push(() => {
-                window.removeEventListener('resize', repositionHandler);
-                window.removeEventListener('scroll', repositionHandler, true);
-            });
-
-            this._closeHandlers.push(() => {
-                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
-            });
-
-            return wrapper;
-        }
-
-        _renderDropdownItems(container, items, config) {
-            if (!Array.isArray(items)) return;
-
-            for (const item of items) {
-                if (item.header) {
-                    const header = document.createElement('div');
-                    header.className = 'dropdown-header';
-                    header.style.cssText = `
-                        padding: 6px 14px 4px 14px;
-                        font-size: 10px;
-                        font-weight: 600;
-                        color: var(--text-muted, rgba(200, 184, 154, 0.35));
-                        text-transform: uppercase;
-                        letter-spacing: 0.5px;
-                        border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-                        margin-bottom: 2px;
-                        pointer-events: none;
-                    `;
-                    header.textContent = item.header;
-                    container.appendChild(header);
-                    continue;
-                }
-
-                if (item.divider) {
-                    const divider = document.createElement('hr');
-                    divider.style.cssText = `
-                        border: none;
-                        border-top: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-                        margin: 4px 12px;
-                        opacity: 0.3;
-                    `;
-                    container.appendChild(divider);
-                    continue;
-                }
-
-                const btn = document.createElement('button');
-                btn.className = 'dropdown-item';
-                btn.dataset.action = item.action || '';
-                btn.dataset.value = item.value || '';
-                btn.setAttribute('type', 'button');
-
-                const isActive = item.check || false;
-                const isDanger = item.danger || false;
-                const isDisabled = item.disabled || false;
-
-                const iconHtml = item.icon && item.icon.startsWith('icon-')
-                    ? `<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;">
-                        <use href="#${escapeAttr(item.icon)}"></use>
-                       </svg>`
-                    : (item.icon ? `<span style="font-size:14px;flex-shrink:0;">${escapeHtml(item.icon)}</span>` : '');
-
-                btn.innerHTML = `
-                    ${iconHtml}
-                    <span class="item-label" style="flex:1;text-align:left;">${escapeHtml(item.label)}</span>
-                    ${item.shortcut ? `<span class="item-shortcut" style="color:var(--text-muted, rgba(200,184,154,0.35));font-size:9px;flex-shrink:0;">${escapeHtml(item.shortcut)}</span>` : ''}
-                    ${isActive ? `<span class="dropdown-check" style="color:var(--accent-red, #cc2233);margin-left:4px;">✓</span>` : ''}
-                `;
-
-                Object.assign(btn.style, {
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    width: '100%',
-                    padding: '6px 14px',
-                    border: 'none',
-                    background: isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent',
-                    color: isDanger ? 'var(--accent-red, #cc2233)' : 'var(--text-primary, #e0d8cc)',
-                    fontSize: '12px',
-                    cursor: isDisabled ? 'default' : 'pointer',
-                    textAlign: 'left',
-                    transition: 'background 0.15s ease',
-                    fontFamily: 'inherit',
-                    opacity: isDisabled ? '0.4' : '1',
-                    borderLeft: isActive ? '3px solid var(--accent-red, #cc2233)' : '3px solid transparent',
-                    outline: 'none'
-                });
-
-                if (!isDisabled) {
-                    btn.addEventListener('mouseenter', function() {
-                        this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
-                    });
-                    btn.addEventListener('mouseleave', function() {
-                        this.style.background = isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent';
-                    });
-                }
-
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-
-                    if (isDisabled) return;
-
-                    const action = btn.dataset.action || '';
-                    const value = btn.dataset.value || '';
-
-                    if (item.callback && typeof item.callback === 'function') {
-                        item.callback(this._baseWindow);
-                    }
-
-                    this._emit('menu-action', {
-                        windowId: this.id,
-                        action: action,
-                        value: value,
-                        item: item
-                    });
-
-                    container.style.display = 'none';
-                    container.style.opacity = '0';
-                });
-
-                container.appendChild(btn);
-            }
-        }
-
-        // ============================================================
-        // 8. ОБЫЧНЫЕ КНОПКИ (soft)
-        // ============================================================
-
-        _createHeaderButton(btnConfig) {
+        _buildButton(btnConfig, ctx) {
             const btn = document.createElement('button');
             btn.className = 'window-action-btn';
             btn.title = btnConfig.title || '';
             btn.setAttribute('type', 'button');
 
-            // ✅ v6.2.1: data-action / data-value для drag-source
             if (btnConfig.action) btn.setAttribute('data-action', btnConfig.action);
             if (btnConfig.value)  btn.setAttribute('data-value', btnConfig.value);
 
@@ -1280,13 +1239,14 @@
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (btnConfig.callback && typeof btnConfig.callback === 'function') {
-                    btnConfig.callback(this._baseWindow);
+                    btnConfig.callback(this._baseWindow, ctx);
                     return;
                 }
                 this._emit('menu-action', {
                     windowId: this.id,
                     action: btnConfig.action || '',
                     value: btnConfig.value || '',
+                    payload: btnConfig.payload !== undefined ? btnConfig.payload : null,
                     item: btnConfig
                 });
             });
@@ -1295,186 +1255,367 @@
         }
 
         // ============================================================
-        // 9. MINIMIZE BUTTON
+        // 8. BUILDER: dropdown
         // ============================================================
 
-        _createMinimizeButton() {
+        _buildDropdown(config, ctx) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'window-actions dropdown-wrapper';
+            if (config.id) wrapper.dataset.dropdownId = config.id;
+            Object.assign(wrapper.style, {
+                position: 'relative',
+                display: 'flex',
+                flexShrink: '0',
+                overflow: 'hidden'
+            });
+
             const btn = document.createElement('button');
-            btn.className = 'minimize-btn';
-            btn.innerHTML = `
-                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
-                    <use href="#icon-minimize"></use>
-                </svg>
-            `;
-            btn.title = 'Свернуть окно';
+            btn.className = 'window-action-btn dropdown-toggle';
+            btn.title = config.label || 'Menu';
             btn.setAttribute('type', 'button');
+
+            if (config.action) btn.setAttribute('data-action', config.action);
+
+            const iconHtml = config.icon && config.icon.startsWith('icon-')
+                ? `<svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;flex-shrink:0;">
+                    <use href="#${escapeAttr(config.icon)}"></use>
+                </svg>`
+                : escapeHtml(config.icon || '☰');
+
+            btn.innerHTML = `
+                <span class="dropdown-icon" style="display:flex;align-items:center;flex-shrink:0;">${iconHtml}</span>
+                <span class="btn-text-wrapper" style="display:flex;align-items:center;gap:var(--rw-btn-gap-active, 4px);min-width:0;overflow:hidden;">
+                    <span class="dropdown-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:var(--rw-label-opacity, 1);max-width:var(--rw-label-maxw, 80px);">${escapeHtml(config.label || '')}</span>
+                    <span class="dropdown-arrow" style="font-size:8px;flex-shrink:0;opacity:var(--rw-label-opacity, 1);">▼</span>
+                </span>
+            `;
 
             Object.assign(btn.style, {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: '22px',
-                minWidth: '22px',
+                gap: 'var(--rw-btn-gap-active, 4px)',
+                padding: '0 var(--rw-btn-pad-x, 8px)',
                 height: '22px',
-                padding: '0',
+                minHeight: '22px',
                 border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
                 borderRadius: '4px',
                 background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
                 color: 'var(--text-secondary, #a09888)',
+                fontSize: '10px',
+                fontWeight: '500',
                 cursor: 'pointer',
                 transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                whiteSpace: 'nowrap',
+                fontFamily: 'inherit',
                 flexShrink: '0',
+                userSelect: 'none',
+                overflow: 'hidden',
                 boxSizing: 'border-box'
             });
 
-            btn.addEventListener('mouseenter', function() {
-                this.style.background = 'var(--bg-active, rgba(60, 60, 60, 0.8))';
-                this.style.borderColor = 'var(--border-hover, rgba(200, 184, 154, 0.4))';
-                this.style.color = 'var(--text-primary, #e0d8cc)';
-            });
-            btn.addEventListener('mouseleave', function() {
-                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
-                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
-                this.style.color = 'var(--text-secondary, #a09888)';
-            });
-
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this._emit('minimize', { windowId: this.id });
-            });
-
-            return btn;
-        }
-
-        // ============================================================
-        // 10. FULLSCREEN BUTTON
-        // ============================================================
-
-        _createFullscreenButton() {
-            const btn = document.createElement('button');
-            btn.className = 'fullscreen-btn';
-            btn.innerHTML = `
-                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
-                    <use href="#icon-fullscreen"></use>
-                </svg>
+            const dropdown = document.createElement('div');
+            dropdown.className = 'window-dropdown menu-dropdown';
+            dropdown.dataset.windowId = this.id;
+            if (config.id) dropdown.dataset.dropdownId = config.id;
+            dropdown.style.cssText = `
+                position: fixed;
+                background: var(--bg-panel, #1a1a1a);
+                border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+                border-radius: var(--radius, 6px);
+                padding: 4px 0;
+                min-width: 100px;
+                max-width: 320px;
+                width: max-content;
+                z-index: 999999;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+                backdrop-filter: blur(12px);
+                display: none;
+                opacity: 0;
+                transform: translateY(-8px) scale(0.98);
+                transition: opacity 0.15s ease, transform 0.15s ease;
+                max-height: 500px;
+                overflow-y: auto;
             `;
-            btn.title = 'На весь экран';
-            btn.setAttribute('type', 'button');
 
-            Object.assign(btn.style, {
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '22px',
-                minWidth: '22px',
-                height: '22px',
-                padding: '0',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: '4px',
-                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
-                color: 'var(--text-secondary, #a09888)',
-                cursor: 'pointer',
-                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
-                flexShrink: '0',
-                boxSizing: 'border-box'
-            });
-
-            btn.addEventListener('mouseenter', function() {
-                this.style.background = 'var(--bg-active, rgba(60, 60, 60, 0.8))';
-                this.style.borderColor = 'var(--border-hover, rgba(200, 184, 154, 0.4))';
-                this.style.color = 'var(--text-primary, #e0d8cc)';
-            });
-            btn.addEventListener('mouseleave', function() {
-                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
-                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
-                this.style.color = 'var(--text-secondary, #a09888)';
-            });
-
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (this._isFullscreen) {
-                    this._emit('fullscreen-exit', { windowId: this.id });
-                } else {
-                    this._emit('fullscreen', { windowId: this.id });
+            const resolveItems = () => {
+                let items = config.items;
+                if (typeof items === 'function') {
+                    try {
+                        const bw = this._baseWindow;
+                        const real = bw?.getRealInstance?.() || bw;
+                        items = items(real, bw, this._layoutManager);
+                    } catch (e) {
+                        console.warn('[RenderWindow] dropdown items() error:', e);
+                        items = [];
+                    }
                 }
-            });
+                return Array.isArray(items) ? items : [];
+            };
 
-            return btn;
-        }
+            const renderItems = () => {
+                const items = resolveItems();
+                this._renderDropdownItems(dropdown, items, config);
+            };
 
-        setFullscreenState(isFullscreen) {
-            const next = !!isFullscreen;
-            if (this._isFullscreen === next) return;
+            renderItems();
 
-            this._isFullscreen = next;
+            wrapper.appendChild(btn);
+            document.body.appendChild(dropdown);
 
-            if (this._fullscreenBtn) {
-                const use = this._fullscreenBtn.querySelector('use');
-                if (use) {
-                    use.setAttribute('href', next ? '#icon-fullscreen-exit' : '#icon-fullscreen');
-                }
-                this._fullscreenBtn.title = next ? 'Выйти из полного экрана' : 'На весь экран';
-            }
+            const closeDropdown = () => {
+                dropdown.style.display = 'none';
+                dropdown.style.opacity = '0';
+                btn.classList.remove('active');
+                const arrow = btn.querySelector('.dropdown-arrow');
+                if (arrow) arrow.style.transform = 'rotate(0deg)';
+            };
 
-            if (this._root) {
-                this._root.classList.toggle('is-fullscreen', next);
-            }
-        }
-
-        // ============================================================
-        // 11. CLOSE BUTTON
-        // ============================================================
-
-        _createCloseButton() {
-            const btn = document.createElement('button');
-            btn.className = 'close-btn';
-            btn.innerHTML = `
-                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
-                    <use href="#icon-close"></use>
-                </svg>
-            `;
-            btn.title = 'Close Window';
-            btn.setAttribute('type', 'button');
-
-            Object.assign(btn.style, {
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '22px',
-                minWidth: '22px',
-                height: '22px',
-                padding: '0',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: '4px',
-                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
-                color: 'var(--text-secondary, #a09888)',
-                cursor: 'pointer',
-                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
-                flexShrink: '0',
-                boxSizing: 'border-box'
-            });
-
-            btn.addEventListener('mouseenter', function() {
-                this.style.background = 'var(--accent-red, #cc2233)';
-                this.style.borderColor = 'var(--accent-red, #cc2233)';
-                this.style.color = '#fff';
-            });
-            btn.addEventListener('mouseleave', function() {
-                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
-                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
-                this.style.color = 'var(--text-secondary, #a09888)';
-            });
+            const openDropdown = () => {
+                renderItems();
+                dropdown.style.display = 'block';
+                dropdown.style.opacity = '0';
+                this._positionDropdown(dropdown, btn);
+                requestAnimationFrame(() => {
+                    dropdown.style.opacity = '1';
+                    dropdown.style.transform = 'translateY(0) scale(1)';
+                });
+                btn.classList.add('active');
+                const arrow = btn.querySelector('.dropdown-arrow');
+                if (arrow) arrow.style.transform = 'rotate(180deg)';
+            };
 
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this._emit('close', { windowId: this.id });
+                e.preventDefault();
+
+                document.querySelectorAll('.menu-dropdown').forEach(el => {
+                    if (el !== dropdown) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                    }
+                });
+
+                const isOpen = dropdown.style.display === 'block';
+                if (isOpen) closeDropdown();
+                else openDropdown();
             });
 
-            return btn;
+            const closeHandler = (e) => {
+                if (dropdown.style.display !== 'block') return;
+                if (wrapper.contains(e.target)) return;
+                if (dropdown.contains(e.target)) return;
+                closeDropdown();
+            };
+            document.addEventListener('click', closeHandler);
+
+            const repositionHandler = () => {
+                if (dropdown.style.display === 'block') this._positionDropdown(dropdown, btn);
+            };
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+
+            const cleanup = () => {
+                document.removeEventListener('click', closeHandler);
+                window.removeEventListener('resize', repositionHandler);
+                window.removeEventListener('scroll', repositionHandler, true);
+                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+            };
+            wrapper._cleanup = cleanup;
+            this._closeHandlers.push(cleanup);
+
+            wrapper._refreshItems = () => {
+                if (dropdown.style.display === 'block') {
+                    renderItems();
+                }
+            };
+            wrapper._closeDropdown = closeDropdown;
+
+            return wrapper;
+        }
+
+        _renderDropdownItems(container, items, config) {
+            if (!Array.isArray(items)) return;
+            container.innerHTML = '';
+
+            for (const item of items) {
+                if (!item) continue;
+
+                if (item.header) {
+                    const header = document.createElement('div');
+                    header.className = 'dropdown-header';
+                    header.style.cssText = `
+                        padding: 6px 14px 4px 14px;
+                        font-size: 10px;
+                        font-weight: 600;
+                        color: var(--text-muted, rgba(200, 184, 154, 0.35));
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                        border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+                        margin-bottom: 2px;
+                        pointer-events: none;
+                    `;
+                    header.textContent = item.header;
+                    container.appendChild(header);
+                    continue;
+                }
+
+                if (item.divider) {
+                    const divider = document.createElement('hr');
+                    divider.style.cssText = `
+                        border: none;
+                        border-top: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+                        margin: 4px 12px;
+                        opacity: 0.3;
+                    `;
+                    container.appendChild(divider);
+                    continue;
+                }
+
+                const btn = document.createElement('button');
+                btn.className = 'dropdown-item';
+                btn.dataset.action = item.action || '';
+                btn.dataset.value = (item.value !== undefined && item.value !== null) ? String(item.value) : '';
+                btn.setAttribute('type', 'button');
+
+                const isActive = item.check || false;
+                const isDanger = item.danger || false;
+                const isDisabled = item.disabled || false;
+
+                const iconHtml = item.icon && item.icon.startsWith('icon-')
+                    ? `<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;">
+                        <use href="#${escapeAttr(item.icon)}"></use>
+                       </svg>`
+                    : (item.icon ? `<span style="font-size:14px;flex-shrink:0;">${escapeHtml(item.icon)}</span>` : '');
+
+                btn.innerHTML = `
+                    ${iconHtml}
+                    <span class="item-label" style="flex:1;text-align:left;">${escapeHtml(item.label || '')}</span>
+                    ${item.shortcut ? `<span class="item-shortcut" style="color:var(--text-muted, rgba(200,184,154,0.35));font-size:9px;flex-shrink:0;">${escapeHtml(item.shortcut)}</span>` : ''}
+                    ${isActive ? `<span class="dropdown-check" style="color:var(--accent-red, #cc2233);margin-left:4px;">✓</span>` : ''}
+                `;
+
+                Object.assign(btn.style, {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    width: '100%',
+                    padding: '6px 14px',
+                    border: 'none',
+                    background: isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent',
+                    color: isDanger ? 'var(--accent-red, #cc2233)' : 'var(--text-primary, #e0d8cc)',
+                    fontSize: '12px',
+                    cursor: isDisabled ? 'default' : 'pointer',
+                    textAlign: 'left',
+                    transition: 'background 0.15s ease',
+                    fontFamily: 'inherit',
+                    opacity: isDisabled ? '0.4' : '1',
+                    borderLeft: isActive ? '3px solid var(--accent-red, #cc2233)' : '3px solid transparent',
+                    outline: 'none'
+                });
+
+                if (!isDisabled) {
+                    btn.addEventListener('mouseenter', function() {
+                        this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
+                    });
+                    btn.addEventListener('mouseleave', function() {
+                        this.style.background = isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent';
+                    });
+                }
+
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+
+                    if (isDisabled) return;
+
+                    const action = btn.dataset.action || '';
+                    const value = btn.dataset.value || '';
+
+                    if (item.callback && typeof item.callback === 'function') {
+                        try {
+                            item.callback(this._baseWindow, item);
+                        } catch (err) {
+                            console.error('[RenderWindow] dropdown item callback error:', err);
+                        }
+                    }
+
+                    this._emit('menu-action', {
+                        windowId: this.id,
+                        action: action,
+                        value: value,
+                        payload: item.payload !== undefined ? item.payload : null,
+                        item: item
+                    });
+
+                    container.style.display = 'none';
+                    container.style.opacity = '0';
+                });
+
+                container.appendChild(btn);
+            }
         }
 
         // ============================================================
-        // 12. CHANGE TYPE
+        // 9. ПУБЛИЧНОЕ API headerItems
+        // ============================================================
+
+        refreshHeaderItems() {
+            if (this._isDestroyed) return;
+            this._renderHeaderItems();
+            if (this._isReady) {
+                requestAnimationFrame(() => {
+                    if (!this._isDestroyed) {
+                        this._measureBaseWidths();
+                        this._updateHeaderAdaptive();
+                    }
+                });
+            }
+        }
+
+        setHeaderItems(items) {
+            this._headerItemsConfig = filterItems(items);
+            this.refreshHeaderItems();
+        }
+
+        addHeaderItem(desc, index = undefined) {
+            if (!desc || typeof desc !== 'object') return false;
+            if (typeof index === 'number' && index >= 0 && index <= this._headerItemsConfig.length) {
+                this._headerItemsConfig.splice(index, 0, desc);
+            } else {
+                this._headerItemsConfig.push(desc);
+            }
+            this.refreshHeaderItems();
+            return true;
+        }
+
+        removeHeaderItem(id) {
+            if (!id) return false;
+            const before = this._headerItemsConfig.length;
+            this._headerItemsConfig = this._headerItemsConfig.filter(d => d.id !== id);
+            if (this._headerItemsConfig.length === before) return false;
+            this.refreshHeaderItems();
+            return true;
+        }
+
+        getHeaderItemsConfig() {
+            return this._headerItemsConfig.slice();
+        }
+
+        getHeaderItems() {
+            return this._headerItems.slice();
+        }
+
+        refreshDropdowns() {
+            for (const { el } of this._headerItems) {
+                if (el && typeof el._refreshItems === 'function') {
+                    try { el._refreshItems(); } catch (e) {}
+                }
+            }
+        }
+
+        // ============================================================
+        // 10. CHANGE TYPE / LAYOUT / MINIMIZE / FULLSCREEN / CLOSE
         // ============================================================
 
         _createChangeTypeButton() {
@@ -1547,6 +1688,7 @@
                     btn.classList.remove('active');
                 } else {
                     if (typeof dropdown._renderItems === 'function') dropdown._renderItems();
+                    if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
                     dropdown.style.display = 'block';
                     dropdown.style.opacity = '0';
                     this._positionDropdown(dropdown, btn);
@@ -1672,10 +1814,6 @@
             return dropdown;
         }
 
-        // ============================================================
-        // 13. LAYOUT BUTTON
-        // ============================================================
-
         _createLayoutButton() {
             const wrapper = document.createElement('div');
             wrapper.className = 'window-actions layout-wrapper';
@@ -1746,6 +1884,7 @@
                     btn.classList.remove('active');
                 } else {
                     if (typeof dropdown._renderItems === 'function') dropdown._renderItems();
+                    if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
                     dropdown.style.display = 'block';
                     dropdown.style.opacity = '0';
                     this._positionDropdown(dropdown, btn);
@@ -1862,12 +2001,189 @@
             return dropdown;
         }
 
+        _createMinimizeButton() {
+            const btn = document.createElement('button');
+            btn.className = 'minimize-btn';
+            btn.innerHTML = `
+                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
+                    <use href="#icon-minimize"></use>
+                </svg>
+            `;
+            btn.title = 'Свернуть окно';
+            btn.setAttribute('type', 'button');
+
+            Object.assign(btn.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '22px',
+                minWidth: '22px',
+                height: '22px',
+                padding: '0',
+                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                borderRadius: '4px',
+                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
+                color: 'var(--text-secondary, #a09888)',
+                cursor: 'pointer',
+                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                flexShrink: '0',
+                boxSizing: 'border-box'
+            });
+
+            btn.addEventListener('mouseenter', function() {
+                this.style.background = 'var(--bg-active, rgba(60, 60, 60, 0.8))';
+                this.style.borderColor = 'var(--border-hover, rgba(200, 184, 154, 0.4))';
+                this.style.color = 'var(--text-primary, #e0d8cc)';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
+                this.style.color = 'var(--text-secondary, #a09888)';
+            });
+
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._emit('minimize', { windowId: this.id });
+            });
+
+            return btn;
+        }
+
+        _createFullscreenButton() {
+            const btn = document.createElement('button');
+            btn.className = 'fullscreen-btn';
+            btn.innerHTML = `
+                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
+                    <use href="#icon-fullscreen"></use>
+                </svg>
+            `;
+            btn.title = 'На весь экран';
+            btn.setAttribute('type', 'button');
+
+            Object.assign(btn.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '22px',
+                minWidth: '22px',
+                height: '22px',
+                padding: '0',
+                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                borderRadius: '4px',
+                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
+                color: 'var(--text-secondary, #a09888)',
+                cursor: 'pointer',
+                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                flexShrink: '0',
+                boxSizing: 'border-box'
+            });
+
+            btn.addEventListener('mouseenter', function() {
+                this.style.background = 'var(--bg-active, rgba(60, 60, 60, 0.8))';
+                this.style.borderColor = 'var(--border-hover, rgba(200, 184, 154, 0.4))';
+                this.style.color = 'var(--text-primary, #e0d8cc)';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
+                this.style.color = 'var(--text-secondary, #a09888)';
+            });
+
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this._isFullscreen) {
+                    this._emit('fullscreen-exit', { windowId: this.id });
+                } else {
+                    this._emit('fullscreen', { windowId: this.id });
+                }
+            });
+
+            return btn;
+        }
+
+        setFullscreenState(isFullscreen) {
+            const next = !!isFullscreen;
+            if (this._isFullscreen === next) return;
+
+            this._isFullscreen = next;
+
+            if (this._fullscreenBtn) {
+                const use = this._fullscreenBtn.querySelector('use');
+                if (use) {
+                    use.setAttribute('href', next ? '#icon-fullscreen-exit' : '#icon-fullscreen');
+                }
+                this._fullscreenBtn.title = next ? 'Выйти из полного экрана' : 'На весь экран';
+            }
+
+            if (this._root) {
+                this._root.classList.toggle('is-fullscreen', next);
+            }
+        }
+
+        _createCloseButton() {
+            const btn = document.createElement('button');
+            btn.className = 'close-btn';
+            btn.innerHTML = `
+                <svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;">
+                    <use href="#icon-close"></use>
+                </svg>
+            `;
+            btn.title = 'Close Window';
+            btn.setAttribute('type', 'button');
+
+            Object.assign(btn.style, {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '22px',
+                minWidth: '22px',
+                height: '22px',
+                padding: '0',
+                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                borderRadius: '4px',
+                background: 'var(--bg-hover, rgba(40, 40, 40, 0.4))',
+                color: 'var(--text-secondary, #a09888)',
+                cursor: 'pointer',
+                transition: 'background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                flexShrink: '0',
+                boxSizing: 'border-box'
+            });
+
+            btn.addEventListener('mouseenter', function() {
+                this.style.background = 'var(--accent-red, #cc2233)';
+                this.style.borderColor = 'var(--accent-red, #cc2233)';
+                this.style.color = '#fff';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
+                this.style.color = 'var(--text-secondary, #a09888)';
+            });
+
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._emit('close', { windowId: this.id });
+            });
+
+            return btn;
+        }
+
         // ============================================================
-        // 14. POSITION DROPDOWN
+        // 11. POSITION
         // ============================================================
 
         _positionDropdown(dropdown, btn) {
             if (!dropdown || !btn) return;
+
+            let wasHidden = false;
+            const prevVisibility = dropdown.style.visibility;
+            const prevDisplay = dropdown.style.display;
+
+            if (prevDisplay !== 'block') {
+                wasHidden = true;
+                dropdown.style.visibility = 'hidden';
+                dropdown.style.display = 'block';
+            }
 
             const btnRect = btn.getBoundingClientRect();
             const ddWidth = dropdown.offsetWidth || 200;
@@ -1887,10 +2203,15 @@
 
             dropdown.style.left = left + 'px';
             dropdown.style.top = top + 'px';
+
+            if (wasHidden) {
+                dropdown.style.display = prevDisplay;
+                dropdown.style.visibility = prevVisibility || '';
+            }
         }
 
         // ============================================================
-        // 15. DRAG & DROP (swap)
+        // 12. DRAG & DROP (swap)
         // ============================================================
 
         _setupDragAndDrop() {
@@ -2112,279 +2433,7 @@
         }
 
         // ============================================================
-        // 16. CONTEXT MENU
-        // ============================================================
-
-        _setupContextMenu() {
-            if (!this._root) return;
-            this._root.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                this._showContextMenu(e);
-            });
-        }
-
-        _showContextMenu(e) {
-            const existing = document.querySelector('.window-context-menu');
-            if (existing) existing.remove();
-
-            const menu = document.createElement('div');
-            menu.className = 'window-context-menu';
-
-            const menuW = 200;
-            const menuH = 200;
-            const left = Math.max(4, Math.min(e.clientX, window.innerWidth - menuW - 4));
-            const top = Math.max(4, Math.min(e.clientY, window.innerHeight - menuH - 4));
-
-            Object.assign(menu.style, {
-                position: 'fixed',
-                background: 'var(--bg-panel, #1a1a1a)',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: 'var(--radius, 6px)',
-                padding: '4px 0',
-                minWidth: menuW + 'px',
-                maxWidth: '280px',
-                zIndex: '99999',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-                left: left + 'px',
-                top: top + 'px',
-                backdropFilter: 'blur(12px)',
-                overflow: 'hidden'
-            });
-
-            const customItems = Array.isArray(this._contextMenuConfig) ? this._contextMenuConfig : [];
-            const allItems = [];
-
-            if (customItems.length > 0) {
-                for (const item of customItems) allItems.push(item);
-                allItems.push({ divider: true });
-            }
-
-            allItems.push({
-                label: this._isFullscreen ? '⇲ Выйти из полного экрана' : '⛶ На весь экран',
-                action: this._isFullscreen ? 'fullscreen-exit' : 'fullscreen'
-            });
-            allItems.push({ label: '─ Свернуть', action: 'minimize' });
-            allItems.push({ divider: true });
-
-            if (this._windowCount > 1) {
-                allItems.push({ label: '⇄ Swap Position', action: 'swap' });
-                allItems.push({ divider: true });
-            }
-
-            allItems.push({ label: '✕ Close', action: 'close', danger: true });
-
-            for (const item of allItems) {
-                if (item.divider) {
-                    const divider = document.createElement('hr');
-                    divider.style.cssText = `
-                        border: none;
-                        border-top: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-                        margin: 4px 12px;
-                        opacity: 0.3;
-                    `;
-                    menu.appendChild(divider);
-                    continue;
-                }
-
-                const btn = document.createElement('button');
-                const isDanger = item.danger || false;
-                const isDisabled = item.disabled || false;
-
-                Object.assign(btn.style, {
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    width: '100%',
-                    padding: '6px 14px',
-                    border: 'none',
-                    background: 'transparent',
-                    color: isDanger ? 'var(--accent-red, #cc2233)' : 'var(--text-primary, #e0d8cc)',
-                    fontSize: '12px',
-                    cursor: isDisabled ? 'default' : 'pointer',
-                    textAlign: 'left',
-                    transition: 'background 0.15s ease',
-                    opacity: isDisabled ? '0.4' : '1',
-                    fontFamily: 'inherit',
-                    minHeight: '28px'
-                });
-
-                if (item.icon) {
-                    const iconSpan = document.createElement('span');
-                    iconSpan.style.cssText = `
-                        font-size: 14px; flex-shrink: 0; width: 18px; height: 18px;
-                        display: inline-flex; align-items: center; justify-content: center;
-                    `;
-
-                    if (typeof item.icon === 'string' && item.icon.startsWith('icon-')) {
-                        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                        svg.setAttribute('class', 'icon-svg');
-                        svg.style.cssText = `width:14px;height:14px;fill:currentColor;display:block;`;
-                        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-                        use.setAttribute('href', `#${escapeAttr(item.icon)}`);
-                        svg.appendChild(use);
-                        iconSpan.appendChild(svg);
-                    } else {
-                        iconSpan.textContent = item.icon;
-                    }
-                    btn.appendChild(iconSpan);
-                }
-
-                const labelSpan = document.createElement('span');
-                labelSpan.style.cssText = 'flex:1;';
-                labelSpan.textContent = item.label;
-                btn.appendChild(labelSpan);
-
-                if (item.shortcut) {
-                    const shortcutSpan = document.createElement('span');
-                    shortcutSpan.style.cssText = 'color:var(--text-muted, rgba(200,184,154,0.35));font-size:9px;flex-shrink:0;';
-                    shortcutSpan.textContent = item.shortcut;
-                    btn.appendChild(shortcutSpan);
-                }
-
-                if (!isDisabled) {
-                    btn.addEventListener('mouseenter', function() {
-                        this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
-                    });
-                    btn.addEventListener('mouseleave', function() {
-                        this.style.background = 'transparent';
-                    });
-                }
-
-                btn.addEventListener('click', (ev) => {
-                    if (isDisabled) return;
-
-                    if (item.action === 'close') {
-                        this._emit('close', { windowId: this.id });
-                    } else if (item.action === 'swap') {
-                        this._showSwapMenu(ev);
-                    } else if (item.action === 'minimize') {
-                        this._emit('minimize', { windowId: this.id });
-                    } else if (item.action === 'fullscreen') {
-                        this._emit('fullscreen', { windowId: this.id });
-                    } else if (item.action === 'fullscreen-exit') {
-                        this._emit('fullscreen-exit', { windowId: this.id });
-                    } else if (item.callback && typeof item.callback === 'function') {
-                        try { item.callback(this._baseWindow); } catch (error) {}
-                    } else {
-                        this._emit('menu-action', {
-                            windowId: this.id,
-                            action: item.action || '',
-                            value: item.value || '',
-                            item: item
-                        });
-                    }
-                    menu.remove();
-                });
-
-                menu.appendChild(btn);
-            }
-
-            document.body.appendChild(menu);
-
-            const closeMenu = (ev) => {
-                if (!menu.contains(ev.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu);
-                }
-            };
-            setTimeout(() => document.addEventListener('click', closeMenu), 10);
-        }
-
-        _showSwapMenu(e) {
-            const existing = document.querySelector('.swap-menu');
-            if (existing) existing.remove();
-
-            const windows = this._layoutManager
-                ? (this._layoutManager.getVisibleWindows?.() || this._layoutManager.getWindows())
-                : [];
-
-            const otherWindows = windows.filter(w => String(w.id) !== String(this.id));
-            if (otherWindows.length === 0) return;
-
-            const menu = document.createElement('div');
-            menu.className = 'swap-menu';
-
-            const menuW = 200;
-            const menuH = 200;
-            const left = Math.max(4, Math.min(e.clientX, window.innerWidth - menuW - 4));
-            const top = Math.max(4, Math.min(e.clientY, window.innerHeight - menuH - 4));
-
-            Object.assign(menu.style, {
-                position: 'fixed',
-                background: 'var(--bg-panel, #1a1a1a)',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: 'var(--radius, 6px)',
-                padding: '4px 0',
-                minWidth: menuW + 'px',
-                maxWidth: '280px',
-                zIndex: '99999',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-                left: left + 'px',
-                top: top + 'px',
-                backdropFilter: 'blur(12px)',
-                overflow: 'hidden'
-            });
-
-            const header = document.createElement('div');
-            header.style.cssText = `
-                padding: 6px 14px 8px 14px; font-size: 10px; font-weight: 600;
-                color: var(--text-muted, rgba(200,184,154,0.35));
-                text-transform: uppercase; letter-spacing: 0.5px;
-                border-bottom: 1px solid var(--border-color, rgba(200,184,154,0.12));
-            `;
-            header.textContent = 'Swap with:';
-            menu.appendChild(header);
-
-            for (const w of otherWindows) {
-                const btn = document.createElement('button');
-                Object.assign(btn.style, {
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    width: '100%', padding: '6px 14px', border: 'none',
-                    background: 'transparent', color: 'var(--text-primary, #e0d8cc)',
-                    fontSize: '12px', cursor: 'pointer', textAlign: 'left',
-                    fontFamily: 'inherit'
-                });
-
-                const iconHtml = w.icon && typeof w.icon === 'string' && w.icon.startsWith('icon-')
-                    ? `<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;">
-                        <use href="#${escapeAttr(w.icon)}"></use>
-                       </svg>`
-                    : `<span style="font-size:14px;flex-shrink:0;">${escapeHtml(w.icon || '📄')}</span>`;
-
-                btn.innerHTML = `
-                    ${iconHtml}
-                    <span style="flex:1;font-weight:500;">${escapeHtml(w.title)}</span>
-                    <span style="color:var(--text-muted, rgba(200,184,154,0.35));font-size:9px;">#${escapeHtml(String(w.id))}</span>
-                `;
-
-                btn.addEventListener('mouseenter', function() {
-                    this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
-                });
-                btn.addEventListener('mouseleave', function() {
-                    this.style.background = 'transparent';
-                });
-
-                btn.addEventListener('click', () => {
-                    this._emit('swap', { windowId: this.id, targetId: w.id });
-                    menu.remove();
-                });
-
-                menu.appendChild(btn);
-            }
-
-            document.body.appendChild(menu);
-
-            const closeMenu = (e) => {
-                if (!menu.contains(e.target)) {
-                    menu.remove();
-                    document.removeEventListener('click', closeMenu);
-                }
-            };
-            setTimeout(() => document.addEventListener('click', closeMenu), 10);
-        }
-
-        // ============================================================
-        // 17. CONTENT
+        // 13. CONTENT
         // ============================================================
 
         _buildContent() {
@@ -2497,7 +2546,7 @@
         }
 
         // ============================================================
-        // 18. АДАПТАЦИЯ ШАПКИ
+        // 14. АДАПТАЦИЯ ШАПКИ
         // ============================================================
 
         _setupHeaderAdaptive() {
@@ -2527,13 +2576,20 @@
                 return;
             }
 
-            const prevGapActive = this._header.style.getPropertyValue('--rw-btn-gap-active');
-            const prevBtnPadX = this._header.style.getPropertyValue('--rw-btn-pad-x');
-            const prevLabelOp = this._header.style.getPropertyValue('--rw-label-opacity');
-            const prevLabelMax = this._header.style.getPropertyValue('--rw-label-maxw');
+            const vars = [
+                '--rw-btn-gap-active',
+                '--rw-btn-pad-x',
+                '--rw-label-opacity',
+                '--rw-label-maxw'
+            ];
 
+            const prevVars = {};
+            for (const v of vars) {
+                prevVars[v] = this._header.style.getPropertyValue(v);
+            }
             const prevMaxWidth = this._customButtons.style.maxWidth;
             const prevMinWidth = this._customButtons.style.minWidth;
+
             this._customButtons.style.maxWidth = 'none';
             this._customButtons.style.minWidth = '0';
 
@@ -2566,10 +2622,13 @@
                 : 0;
             this._customMinW = Math.ceil(this._customMinW);
 
-            if (prevGapActive) this._header.style.setProperty('--rw-btn-gap-active', prevGapActive);
-            if (prevBtnPadX) this._header.style.setProperty('--rw-btn-pad-x', prevBtnPadX);
-            if (prevLabelOp) this._header.style.setProperty('--rw-label-opacity', prevLabelOp);
-            if (prevLabelMax) this._header.style.setProperty('--rw-label-maxw', prevLabelMax);
+            for (const v of vars) {
+                if (prevVars[v]) {
+                    this._header.style.setProperty(v, prevVars[v]);
+                } else {
+                    this._header.style.removeProperty(v);
+                }
+            }
 
             this._customButtons.style.maxWidth = prevMaxWidth || '';
             this._customButtons.style.minWidth = prevMinWidth || '';
@@ -2657,7 +2716,7 @@
         }
 
         // ============================================================
-        // 19. RESIZE
+        // 15. RESIZE
         // ============================================================
 
         _setupResizeObserver() {
@@ -2747,7 +2806,7 @@
         }
 
         // ============================================================
-        // 20. ПУБЛИЧНЫЕ МЕТОДЫ
+        // 16. ПУБЛИЧНЫЕ МЕТОДЫ
         // ============================================================
 
         setTitle(title) {
@@ -2774,7 +2833,7 @@
             return this;
         }
 
-        updateTypeConfig({ headerButtons, contextMenu, dropdownMenu, type, title, icon }) {
+        updateTypeConfig({ headerItems, contextMenu, type, title, icon }) {
             if (type) {
                 this.type = type;
                 this._typeConfig = this._registry ? this._registry.getType(type) : null;
@@ -2782,18 +2841,14 @@
             if (title) this.setTitle(title);
             if (icon) this.setIcon(icon);
 
-            if (headerButtons !== undefined) {
-                this._headerButtonsConfig = Array.isArray(headerButtons) ? headerButtons : [];
+            if (Array.isArray(headerItems)) {
+                this._headerItemsConfig = filterItems(headerItems);
+            } else if (headerItems === null) {
+                this._headerItemsConfig = [];
             }
+
             if (contextMenu !== undefined) {
                 this._contextMenuConfig = Array.isArray(contextMenu) ? contextMenu : [];
-            }
-            if (dropdownMenu !== undefined) {
-                this._dropdownMenuConfig = dropdownMenu;
-                if (this._dropdownWrapper && this._dropdownWrapper.parentNode) {
-                    this._dropdownWrapper.parentNode.removeChild(this._dropdownWrapper);
-                }
-                this._dropdownWrapper = null;
             }
 
             this._rebuildHeaderButtons();
@@ -2839,6 +2894,17 @@
             }
             this._closeHandlers = [];
 
+            for (const item of this._headerItems) {
+                if (item && item.el && item.desc && typeof item.desc.destroy === 'function') {
+                    try { item.desc.destroy(item.el, this._baseWindow); } catch (e) {}
+                }
+            }
+
+            this._dropdownWrappers = [];
+            this._headerItems = [];
+            this._currentDropdown = null;
+            this._dataBtn = null;
+
             this._purgeOrphanDropdowns();
 
             if (this.container) this.container.innerHTML = '';
@@ -2847,7 +2913,7 @@
         }
 
         // ============================================================
-        // 21. GETTERS
+        // 17. GETTERS
         // ============================================================
 
         getRoot() { return this._root; }
@@ -2863,7 +2929,44 @@
     }
 
     // ============================================================
-    // 22. ЭКСПОРТ
+    // 18. ВСТРОЕННЫЕ ТИПЫ
+    // ============================================================
+
+    registerHeaderItemType('button', (desc, ctx) => {
+        return ctx.renderWindow._buildButton(desc, ctx);
+    });
+
+    registerHeaderItemType('dropdown', (desc, ctx) => {
+        return ctx.renderWindow._buildDropdown(desc, ctx);
+    });
+
+    registerHeaderItemType('separator', (desc) => {
+        const sep = document.createElement('span');
+        sep.className = 'header-separator';
+        sep.dataset.action = desc.action || '';
+        Object.assign(sep.style, {
+            width: desc.width || '1px',
+            height: desc.height || '14px',
+            background: desc.color || 'var(--border-color, rgba(200, 184, 154, 0.12))',
+            flexShrink: '0',
+            margin: desc.margin || '0 2px',
+            alignSelf: 'center',
+            opacity: desc.opacity || '0.6'
+        });
+        return sep;
+    });
+
+    // ============================================================
+    // 19. СТАТИЧЕСКОЕ API
+    // ============================================================
+
+    RenderWindow.registerHeaderItemType = registerHeaderItemType;
+    RenderWindow.unregisterHeaderItemType = unregisterHeaderItemType;
+    RenderWindow.getHeaderItemTypes = getHeaderItemTypes;
+    RenderWindow._headerItemTypes = _headerItemTypes;
+
+    // ============================================================
+    // 20. ЭКСПОРТ
     // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -2872,7 +2975,8 @@
 
     if (typeof window !== 'undefined') {
         window.RenderWindow = RenderWindow;
-        console.log('[RenderWindow] Registered globally v6.2.1');
+        console.log('[RenderWindow] Registered globally v7.1.0');
+        console.log('[RenderWindow] HeaderItem types:', getHeaderItemTypes());
     }
 
 })();

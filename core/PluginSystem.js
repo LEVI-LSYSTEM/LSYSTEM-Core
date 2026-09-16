@@ -1,20 +1,21 @@
 // core/PluginSystem.js
-// Версия 5.8.0 - Add: PluginAPI integration (ExtendedAPI/UserAPI.js)
-// - loadAll: первым загрузчиком PluginAPI.load()
-// - reload: перезагрузка PluginAPI.reload + UserAPI.js
-// - _tryRegisterFromClass / _loadWindowFile — без изменений
-// - Manifest override / hide / reload — без изменений
-// - Legacy registerXxxWindow сохранён
+// Версия 5.9.1
+// - Fix: _loadExtendedAPI ждёт window.RenderWindow перед загрузкой UserAPI
+// - Fix: _tryRegisterFromClass корректно обрабатывает false (strict override)
+// - v5.9.0: _validateHeaderItems (без изменений)
 
 (function() {
     'use strict';
 
-    console.log('[PluginSystem] Loading v5.8.0...');
+    console.log('[PluginSystem] Loading v5.9.1...');
 
     var STORAGE_KEYS = {
         MANIFEST_OVERRIDE: 'lsystem_window_manifest_override',
         USER_PLUGINS: 'lsystem_user_plugins'
     };
+
+    var RENDERWINDOW_WAIT_TIMEOUT = 5000;
+    var RENDERWINDOW_WAIT_INTERVAL = 50;
 
     class PluginSystem {
         constructor(options = {}) {
@@ -26,10 +27,8 @@
 
             this._plugins = new Map();
             this._loaded = false;
-            this._manifestPath = options.manifestPath || '/plugins/manifest.json';
-            this._windowPath = options.windowPath || 'window/';
+            this._windowPath = options.windowPath || 'data/window/';
             this._enableGlobalScan = options.enableGlobalScan !== false;
-            this._enableManifest = options.enableManifest !== false;
             this._enableUserPlugins = options.enableUserPlugins !== false;
             this._enableWindowAutoLoad = options.enableWindowAutoLoad !== false;
             this._enableExtendedAPI = options.enableExtendedAPI !== false;
@@ -50,6 +49,60 @@
         }
 
         // ============================================================
+        // HEADER ITEMS VALIDATION
+        // ============================================================
+
+        _validateHeaderItems(items, source = 'unknown') {
+            if (!Array.isArray(items)) return [];
+
+            const valid = [];
+            let suspicious = 0;
+
+            for (let i = 0; i < items.length; i++) {
+                const desc = items[i];
+
+                if (!desc || typeof desc !== 'object') {
+                    console.warn(`[PluginSystem] headerItems[${i}] from "${source}" is not an object — skipped`);
+                    suspicious++;
+                    continue;
+                }
+
+                const hasType = typeof desc.type === 'string' && desc.type.length > 0;
+                const hasRender = typeof desc.render === 'function';
+                const hasItems = Array.isArray(desc.items);
+                const hasLegacyShape = !!(desc.action || desc.icon || desc.label || desc.callback);
+
+                if (!hasType && !hasRender && !hasItems && !hasLegacyShape) {
+                    console.warn(
+                        `[PluginSystem] headerItems[${i}] from "${source}" has no type/render/items/action — ` +
+                        `it will likely render as an empty button`
+                    );
+                    suspicious++;
+                }
+
+                if (hasType && window.RenderWindow && typeof window.RenderWindow.getHeaderItemTypes === 'function') {
+                    const knownTypes = window.RenderWindow.getHeaderItemTypes();
+                    if (!knownTypes.includes(desc.type)) {
+                        console.warn(
+                            `[PluginSystem] headerItems[${i}] from "${source}" uses unknown type "${desc.type}". ` +
+                            `Known: ${knownTypes.join(', ')}. ` +
+                            `Зарегистрируйте через RenderWindow.registerHeaderItemType().`
+                        );
+                        suspicious++;
+                    }
+                }
+
+                valid.push(desc);
+            }
+
+            if (suspicious > 0) {
+                console.warn(`[PluginSystem] headerItems from "${source}": ${suspicious} suspicious item(s)`);
+            }
+
+            return valid;
+        }
+
+        // ============================================================
         // ЗАГРУЗКА ВСЕГО
         // ============================================================
 
@@ -63,14 +116,12 @@
 
             const loaders = [];
 
-            // ✅ ExtendedAPI (UserAPI.js) — ГРУЗИМ ПЕРВЫМ, чтобы компоненты были готовы
             if (this._enableExtendedAPI && window.PluginAPI && typeof window.PluginAPI.load === 'function') {
                 loaders.push(this._loadExtendedAPI());
             }
 
             if (this._enableWindowAutoLoad) loaders.push(this._loadWindowsFromFolder());
             if (this._enableGlobalScan) loaders.push(this._loadFromGlobalScope());
-            if (this._enableManifest) loaders.push(this._loadFromManifest());
             if (this._enableUserPlugins) loaders.push(this._loadFromStorage());
 
             await Promise.allSettled(loaders);
@@ -89,12 +140,34 @@
             return this._plugins;
         }
 
-        /**
-         * ✅ Загрузка ExtendedAPI/UserAPI.js через PluginAPI.
-         * Не критично, если файла нет — просто warn.
-         */
+        // ============================================================
+        // ✅ FIX v5.9.1: ждём RenderWindow перед UserAPI
+        // ============================================================
+
+        async _waitForRenderWindow() {
+            if (window.RenderWindow) return true;
+
+            const start = Date.now();
+            while (Date.now() - start < RENDERWINDOW_WAIT_TIMEOUT) {
+                await new Promise(resolve => setTimeout(resolve, RENDERWINDOW_WAIT_INTERVAL));
+                if (window.RenderWindow) {
+                    console.log('[PluginSystem] RenderWindow appeared after',
+                        Date.now() - start, 'ms');
+                    return true;
+                }
+            }
+
+            console.warn('[PluginSystem] ⚠️ RenderWindow not found after',
+                RENDERWINDOW_WAIT_TIMEOUT, 'ms — loading UserAPI anyway');
+            return false;
+        }
+
         async _loadExtendedAPI() {
             try {
+                // ✅ FIX: ждём RenderWindow, чтобы кастомные headerItemType
+                // из UserAPI.js могли регистрироваться сразу
+                await this._waitForRenderWindow();
+
                 const ok = await window.PluginAPI.load();
                 if (ok) {
                     console.log('[PluginSystem] ✅ ExtendedAPI loaded');
@@ -412,9 +485,9 @@
 
             this._rejectPendingScripts('reload');
 
-            // ✅ Перезагружаем ExtendedAPI/UserAPI.js
             if (this._enableExtendedAPI && window.PluginAPI && typeof window.PluginAPI.load === 'function') {
                 try {
+                    await this._waitForRenderWindow();
                     await window.PluginAPI.load({ reload: true });
                     console.log('[PluginSystem] ✅ ExtendedAPI reloaded');
                 } catch (e) {
@@ -425,6 +498,7 @@
             if (this._registry) {
                 const typesToRemove = Array.from(this._registeredTypes);
                 for (const typeId of typesToRemove) {
+                    // ✅ FIX: используем unregister (он теперь = forceUnregister)
                     if (typeof this._registry.unregister === 'function') {
                         try { this._registry.unregister(typeId); } catch (e) {}
                     }
@@ -484,13 +558,20 @@
             const data = await this._getWindowManifest();
             const groups = data.groups;
 
+            const rawHidden = new Set();
+            for (const g of Object.keys(this._fetchedManifest.groups || {})) {
+                for (const entry of this._fetchedManifest.groups[g]) {
+                    if (entry.hidden) rawHidden.add(entry.file);
+                }
+            }
+
             const visibleFiles = [];
             let hiddenCount = 0;
 
             this._windowGroups.clear();
             for (const [groupName, entries] of Object.entries(groups)) {
                 for (const entry of entries) {
-                    if (entry.hidden) {
+                    if (entry.hidden || rawHidden.has(entry.file)) {
                         hiddenCount++;
                         continue;
                     }
@@ -559,9 +640,6 @@
                 const baseName = filename.replace(/\.js$/, '');
                 const groupName = this._windowGroups.get(filename) || 'Other';
 
-                // ==================================================
-                // ПРИОРИТЕТ 1: legacy registerXxxWindow
-                // ==================================================
                 const registerFnName = 'register' + baseName;
                 const registerFn = window[registerFnName];
 
@@ -616,16 +694,10 @@
                     }
                 }
 
-                // ==================================================
-                // ПРИОРИТЕТ 2: класс с static meta
-                // ==================================================
                 if (this._tryRegisterFromClass(filename, baseName, groupName)) {
                     return;
                 }
 
-                // ==================================================
-                // ПРИОРИТЕТ 3: fallback — класс без meta
-                // ==================================================
                 const className = baseName;
                 const WindowClass = window[className];
 
@@ -665,6 +737,11 @@
                 return false;
             }
 
+            const rawMenu = (Class.menu && typeof Class.menu === 'object') ? Class.menu : {};
+            if (Array.isArray(rawMenu.headerItems)) {
+                this._validateHeaderItems(rawMenu.headerItems, baseName);
+            }
+
             const typesBefore = new Set(
                 this._registry.getAllTypes().map(t => t.id)
             );
@@ -677,7 +754,28 @@
                 return false;
             }
 
-            if (!result) return false;
+            // ✅ FIX: registerFromClass может вернуть false (strict override).
+            // Это не ошибка — тип уже зарегистрирован, просто перезагрузка запрещена.
+            if (!result) {
+                const alreadyRegistered = this._registry.hasType(String(meta.id));
+                if (alreadyRegistered) {
+                    console.log('[PluginSystem] ℹ️ Type "' + meta.id + '" already registered (strict) — skipping',
+                        filename);
+                    // Всё равно помечаем как "загруженный" в _plugins, чтобы UI знал
+                    this._plugins.set(String(meta.id), {
+                        id: String(meta.id),
+                        name: filename,
+                        type: 'window',
+                        file: filename,
+                        group: groupName || meta.group || 'Other',
+                        loaded: true,
+                        registeredVia: 'class-skipped',
+                        note: 'already registered'
+                    });
+                    return true;
+                }
+                return false;
+            }
 
             const typesAfter = this._registry.getAllTypes().map(t => t.id);
             const newTypeIds = typesAfter.filter(id => !typesBefore.has(id));
@@ -734,6 +832,17 @@
 
             const staticConfig = WindowClass.typeConfig || WindowClass.config || {};
 
+            let headerItems = null;
+            if (Array.isArray(staticConfig.headerItems)) {
+                const validated = this._validateHeaderItems(
+                    staticConfig.headerItems,
+                    filename + ' (fallback)'
+                );
+                if (validated.length > 0) {
+                    headerItems = validated;
+                }
+            }
+
             const typeConfig = {
                 id: typeId,
                 name: staticConfig.name || className.replace(/Window$/, ''),
@@ -747,9 +856,8 @@
                 priority: staticConfig.priority || 999,
                 metadata: staticConfig.metadata || { version: '1.0.0', source: filename },
 
+                headerItems: headerItems,
                 contextMenu: staticConfig.contextMenu || [],
-                headerButtons: staticConfig.headerButtons || [],
-                dropdownMenu: staticConfig.dropdownMenu || null,
                 hotkeys: staticConfig.hotkeys || {},
 
                 create: (container, windowData) => {
@@ -843,39 +951,6 @@
                     }
                 } catch (error) {}
             }
-        }
-
-        async _loadFromManifest() {
-            try {
-                const url = this._manifestPath + '?_=' + Date.now();
-                const response = await fetch(url, { cache: 'no-cache' });
-                if (!response.ok) return;
-
-                const manifest = await response.json();
-                if (!Array.isArray(manifest.plugins)) return;
-
-                for (const plugin of manifest.plugins) {
-                    if (plugin.enabled === false) continue;
-                    try {
-                        if (plugin.entry) {
-                            await this._loadScript(plugin.entry + '?_=' + this._cacheBust, plugin.entry);
-                        }
-                        const registerFn = window[plugin.registerFn];
-                        if (typeof registerFn === 'function') {
-                            const result = registerFn(
-                                this._registry, this._dataBus, this._eventBus, this._messageBus
-                            );
-                            if (result) {
-                                this._plugins.set(plugin.id, {
-                                    id: plugin.id, name: plugin.name, type: 'manifest', loaded: true
-                                });
-                                this._registeredTypes.add(plugin.id);
-                                this._syncTypeHotkeys(plugin.id);
-                            }
-                        }
-                    } catch (error) {}
-                }
-            } catch (error) {}
         }
 
         async _loadFromStorage() {
@@ -1056,7 +1131,7 @@
 
     if (typeof window !== 'undefined') {
         window.PluginSystem = PluginSystem;
-        console.log('[PluginSystem] Registered globally v5.8.0');
+        console.log('[PluginSystem] Registered globally v5.9.1');
     }
 
 })();

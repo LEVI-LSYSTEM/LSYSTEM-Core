@@ -1,17 +1,16 @@
 // core/SettingsModal/SettingsModal.js
-// Версия 9.0.0 — Убран User Key. Только Имя/Организация + EULA.
-// - Убран input #profileUserKey
-// - _saveProfile: только name + eulaAccepted
-// - profile-ready: { name } (без userKey)
-// - Остальное — без изменений (тема, хоткеи, плагины, EULA)
+// Версия 10.0.0 — EULA как информационный блок (без принятия и гейта).
+// - Нет чекбокса, нет eulaAccepted, нет profile-ready, нет gate.
+// - EULA — только текст + кнопки "Скачать .md" и "Открыть".
+// - Профиль: только Имя / Организация.
 
 (function() {
     'use strict';
 
-    console.log('[SettingsModal] Loading v9.0.0...');
+    console.log('[SettingsModal] Loading v10.0.0...');
 
     var LS_MANIFEST_OVERRIDE = 'lsystem_window_manifest_override';
-    var WINDOW_MANIFEST_URL = 'window/window.json';
+    var WINDOW_MANIFEST_URL = 'data/window/window.json';
 
     var EULA_TEXT = [
         '# Соглашение о неразглашении (EULA)',
@@ -88,13 +87,9 @@
         '                    </div>',
 
         '                    <div class="settings-nda" id="eulaBlock">',
-        '                        <label class="settings-nda__check-wrap">',
-        '                            <input type="checkbox" id="eulaCheckbox" class="settings-nda__checkbox" />',
-        '                            <span class="settings-nda__checkmark"></span>',
-        '                        </label>',
         '                        <div class="settings-nda__text">',
         '                            <div class="settings-nda__title">Соглашение о неразглашении (EULA)</div>',
-        '                            <div class="settings-nda__desc">Я принимаю условия использования приложения.</div>',
+        '                            <div class="settings-nda__desc">Ознакомьтесь с условиями использования приложения. Используя приложение, вы принимаете соглашение.</div>',
         '                            <div class="settings-actions-row">',
         '                                <button class="settings-btn settings-btn--ghost" id="eulaDownloadBtn" type="button">',
         '                                    <svg class="icon-svg"><use href="#icon-download"></use></svg>',
@@ -102,7 +97,7 @@
         '                                </button>',
         '                                <button class="settings-btn settings-btn--ghost" id="eulaOpenBtn" type="button">',
         '                                    <svg class="icon-svg"><use href="#icon-data"></use></svg>',
-        '                                    <span>EULA</span>',
+        '                                    <span>Открыть EULA</span>',
         '                                </button>',
         '                            </div>',
         '                        </div>',
@@ -262,7 +257,7 @@
     ].join('\n');
 
     // ============================================================
-    // HTML — EULA Modal (без изменений)
+    // HTML — EULA Modal
     // ============================================================
 
     var EULA_MODAL_HTML = [
@@ -288,12 +283,8 @@
         '                </button>',
         '            </div>',
         '            <div class="eula-modal__footer-right">',
-        '                <button class="settings-btn settings-btn--ghost" id="eulaModalCancelBtn" type="button">',
+        '                <button class="settings-btn settings-btn--primary" id="eulaModalCloseBtnBottom" type="button">',
         '                    <span>Закрыть</span>',
-        '                </button>',
-        '                <button class="settings-btn settings-btn--primary" id="eulaModalAcceptBtn" type="button">',
-        '                    <svg class="icon-svg"><use href="#icon-success"></use></svg>',
-        '                    <span>Принять</span>',
         '                </button>',
         '            </div>',
         '        </div>',
@@ -401,11 +392,10 @@
     // КЛАСС
     // ============================================================
 
-    function SettingsModal(options) {
+    function SettingsModal() {
         this._overlay = null;
         this._eulaOverlay = null;
         this._isOpen = false;
-        this._isGated = false;
         this._isEulaOpen = false;
         this._capturingCombo = null;
         this._captureHandler = null;
@@ -423,7 +413,7 @@
     }
 
     SettingsModal.prototype._init = function() {
-        console.log('[SettingsModal] Initializing v9.0.0...');
+        console.log('[SettingsModal] Initializing v10.0.0...');
 
         var overlay = document.getElementById('settingsModalOverlay');
         if (!overlay) {
@@ -447,11 +437,11 @@
         if (content) content.innerHTML = renderMarkdown(EULA_TEXT);
 
         this._bindEvents();
-        console.log('[SettingsModal] ✅ Ready v9.0.0');
+        console.log('[SettingsModal] ✅ Ready v10.0.0');
     };
 
     // ============================================================
-    // МАНИФЕСТ (без изменений)
+    // МАНИФЕСТ
     // ============================================================
 
     SettingsModal.prototype._loadOverride = function() {
@@ -692,7 +682,7 @@
         var eulaOverlay = this._eulaOverlay;
 
         overlay.addEventListener('click', function(e) {
-            if (e.target === overlay && !self._isGated) self.close();
+            if (e.target === overlay) self.close();
         });
 
         eulaOverlay.addEventListener('click', function(e) {
@@ -700,14 +690,13 @@
         });
 
         overlay.querySelector('#settingsCloseBtn').addEventListener('click', function() {
-            if (self._isGated) {
-                self._highlightEula('Примите EULA, чтобы продолжить');
-                return;
-            }
             self.close();
         });
 
         eulaOverlay.querySelector('#eulaModalCloseBtn').addEventListener('click', function() {
+            self._closeEulaModal();
+        });
+        eulaOverlay.querySelector('#eulaModalCloseBtnBottom').addEventListener('click', function() {
             self._closeEulaModal();
         });
 
@@ -726,34 +715,12 @@
             self._openEulaModal();
         });
 
-        overlay.querySelector('#eulaCheckbox').addEventListener('change', function() {
+        overlay.querySelector('#profileName').addEventListener('input', function() {
             self._updateSaveState();
-            self._clearEulaHighlight();
-        });
-
-        // ✅ Только #profileName (без userKey)
-        ['profileName'].forEach(function(id) {
-            var el = overlay.querySelector('#' + id);
-            if (el) el.addEventListener('input', function() { self._updateSaveState(); });
         });
 
         eulaOverlay.querySelector('#eulaModalDownloadBtn').addEventListener('click', function() {
             self._downloadEULA();
-        });
-        eulaOverlay.querySelector('#eulaModalCancelBtn').addEventListener('click', function() {
-            self._closeEulaModal();
-        });
-        eulaOverlay.querySelector('#eulaModalAcceptBtn').addEventListener('click', function() {
-            var cb = overlay.querySelector('#eulaCheckbox');
-            if (cb) {
-                cb.checked = true;
-                self._updateSaveState();
-                self._clearEulaHighlight();
-            }
-            self._closeEulaModal();
-            if (window.__lsystem) {
-                window.__lsystem.showNotification('EULA принят', 'success', 1500);
-            }
         });
 
         // ===== Тема =====
@@ -834,10 +801,6 @@
             if (!self._isOpen) return;
             if (self._capturingCombo) return;
 
-            if (self._isGated) {
-                self._highlightEula('Примите EULA, чтобы продолжить');
-                return;
-            }
             e.preventDefault();
             e.stopPropagation();
             self.close();
@@ -852,18 +815,9 @@
     // ОТКРЫТИЕ / ЗАКРЫТИЕ
     // ============================================================
 
-    SettingsModal.prototype.open = function(options) {
-        options = options || {};
+    SettingsModal.prototype.open = function() {
         this._isOpen = true;
-        this._isGated = !!options.gate;
-
         this._overlay.classList.add('is-open');
-
-        var closeBtn = this._overlay.querySelector('#settingsCloseBtn');
-        if (closeBtn) {
-            closeBtn.style.opacity = this._isGated ? '0.3' : '1';
-            closeBtn.style.cursor = this._isGated ? 'not-allowed' : 'pointer';
-        }
 
         this._renderProfile();
         this._renderThemeMode();
@@ -884,47 +838,30 @@
             if (inp) inp.focus();
         }, 100);
 
-        console.log('[SettingsModal] Opened', this._isGated ? '(GATED)' : '');
+        console.log('[SettingsModal] Opened');
     };
 
     SettingsModal.prototype.close = function() {
         if (!this._isOpen) return;
-        if (this._isGated) return;
 
         this._isOpen = false;
         this._overlay.classList.remove('is-open');
 
         this._closeEulaModal();
-
         this._cancelCapture();
-        this._clearEulaHighlight();
         this._stopNowTimer();
         console.log('[SettingsModal] Closed');
     };
 
-    SettingsModal.prototype.forceClose = function() {
-        this._isGated = false;
-        this._isOpen = false;
-        this._overlay.classList.remove('is-open');
-
-        this._closeEulaModal();
-
-        this._cancelCapture();
-        this._clearEulaHighlight();
-        this._stopNowTimer();
-        console.log('[SettingsModal] Force closed');
-    };
-
-    SettingsModal.prototype.toggle = function(options) {
+    SettingsModal.prototype.toggle = function() {
         if (this._isOpen) {
-            if (!this._isGated) this.close();
+            this.close();
         } else {
-            this.open(options);
+            this.open();
         }
     };
 
     SettingsModal.prototype.isOpen = function() { return this._isOpen; };
-    SettingsModal.prototype.isGated = function() { return this._isGated; };
 
     // ============================================================
     // EULA MODAL
@@ -958,116 +895,38 @@
 
     SettingsModal.prototype._renderProfile = function() {
         var acc = window.appState ? window.appState.getAccount() : null;
-
         var nameEl = this._overlay.querySelector('#profileName');
-        var eulaEl = this._overlay.querySelector('#eulaCheckbox');
-
         if (nameEl) nameEl.value = acc ? (acc.name || '') : '';
-        if (eulaEl) eulaEl.checked = !!(acc && acc.eulaAccepted);
-
-        this._clearEulaHighlight();
         this._updateSaveState();
-    };
-
-    SettingsModal.prototype._checkForm = function() {
-        var nameEl = this._overlay.querySelector('#profileName');
-        var eulaEl = this._overlay.querySelector('#eulaCheckbox');
-
-        var name = (nameEl.value || '').trim();
-        var eula = eulaEl.checked;
-
-        return {
-            valid: eula,
-            name: name,
-            eula: eula
-        };
     };
 
     SettingsModal.prototype._updateSaveState = function() {
         var saveBtn = this._overlay.querySelector('#profileSaveBtn');
         if (!saveBtn) return;
-
-        var form = this._checkForm();
-        var enabled = form.valid;
-
-        saveBtn.disabled = !enabled;
-        saveBtn.style.opacity = enabled ? '1' : '0.5';
-        saveBtn.style.cursor = enabled ? 'pointer' : 'not-allowed';
-    };
-
-    SettingsModal.prototype._highlightEula = function(message) {
-        var block = this._overlay.querySelector('#eulaBlock');
-        if (!block) return;
-
-        block.style.animation = 'none';
-        void block.offsetWidth;
-        block.style.animation = 'eulaShake 0.5s ease';
-
-        block.style.borderColor = 'var(--accent-red, #cc2233)';
-        block.style.background = 'rgba(204, 34, 51, 0.12)';
-        block.style.boxShadow = '0 0 0 3px rgba(204,34,51,0.15)';
-
-        var checkmark = block.querySelector('.settings-nda__checkmark');
-        if (checkmark) {
-            checkmark.style.borderColor = 'var(--accent-red, #cc2233)';
-            checkmark.style.boxShadow = '0 0 12px rgba(204,34,51,0.6)';
-        }
-
-        block.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        if (message && window.__lsystem && window.__lsystem.showNotification) {
-            window.__lsystem.showNotification(message, 'warning');
-        }
-    };
-
-    SettingsModal.prototype._clearEulaHighlight = function() {
-        var block = this._overlay.querySelector('#eulaBlock');
-        if (!block) return;
-        block.style.animation = '';
-        block.style.borderColor = '';
-        block.style.background = '';
-        block.style.boxShadow = '';
-
-        var checkmark = block.querySelector('.settings-nda__checkmark');
-        if (checkmark) {
-            checkmark.style.borderColor = '';
-            checkmark.style.boxShadow = '';
-        }
+        saveBtn.disabled = false;
+        saveBtn.style.opacity = '1';
+        saveBtn.style.cursor = 'pointer';
     };
 
     SettingsModal.prototype._saveProfile = function() {
-        var form = this._checkForm();
-
-        if (!form.eula) {
-            this._highlightEula('Необходимо принять EULA');
-            return false;
-        }
+        var nameEl = this._overlay.querySelector('#profileName');
+        var name = (nameEl && nameEl.value || '').trim();
 
         var prev = window.appState ? window.appState.getAccount() : null;
-        var wasGated = this._isGated;
 
         var payload = {
             id: (prev && prev.id) || ('u_' + Date.now().toString(36)),
-            name: form.name,
-            eulaAccepted: true
+            name: name
         };
 
         window.appState.setAccount(payload);
 
         if (window.__lsystem) {
-            var welcomeName = form.name || 'пользователь';
+            var welcomeName = name || 'пользователь';
             window.__lsystem.showNotification('Профиль сохранён: ' + welcomeName, 'success');
         }
 
-        console.log('[SettingsModal] Profile saved:', { name: form.name });
-
-        if (wasGated) {
-            this.forceClose();
-            document.dispatchEvent(new CustomEvent('profile-ready', {
-                detail: { name: form.name }
-            }));
-        }
-
+        console.log('[SettingsModal] Profile saved:', { name: name });
         return true;
     };
 
@@ -1835,22 +1694,7 @@
     // ============================================================
 
     SettingsModal.prototype._applyAll = function() {
-        var form = this._checkForm();
-
-        if (!form.eula) {
-            this._highlightEula('Необходимо принять EULA');
-            return;
-        }
-
-        var wasGated = this._isGated;
-        var ok = this._saveProfile();
-
-        if (!ok) return;
-
-        if (wasGated) {
-            return;
-        }
-
+        this._saveProfile();
         this.close();
         if (window.__lsystem) {
             window.__lsystem.showNotification('Настройки применены', 'success');
@@ -1895,7 +1739,7 @@
     if (typeof window !== 'undefined') {
         window.SettingsModal = SettingsModal;
         window.SettingsModal.EULA_TEXT = EULA_TEXT;
-        console.log('[SettingsModal] Registered globally v9.0.0');
+        console.log('[SettingsModal] Registered globally v10.0.0');
     }
 
 })();

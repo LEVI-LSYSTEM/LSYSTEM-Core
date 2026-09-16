@@ -1,24 +1,23 @@
 // core/MessageBus.js
-// Версия 2.3.1 - Add: onRequest(senderId, channel, handler) — RPC-обработчик
-// - onRequest: автоматический respond/respondError
-// - _requestHandlers: Set для cleanup
-// - destroy(): отписка всех onRequest handlers
-// - request/respond/respondError — без изменений (v2.3.0)
-// - send/sendToType/sendToTypeAndSlot/sendToAll — без изменений
-// - subscribe/subscribeAll/unsubscribeAll — без изменений
+// Версия 2.4.0 - Fix: защита от рекурсии в _deliverToAll / _deliverToTarget
+// - _deliveryDepth / MAX_DELIVERY_DEPTH = 16
+// - warn + стоп при превышении
+// - onRequest/send/sendToType/sendToTypeAndSlot — без изменений
+// - v2.3.1: onRequest handler (без изменений)
 
 (function() {
     'use strict';
 
-    console.log('[MessageBus] Loading v2.3.1...');
+    console.log('[MessageBus] Loading v2.4.0...');
 
     // ============================================================
     // КОНСТАНТЫ
     // ============================================================
 
-    var DEFAULT_REQUEST_TIMEOUT = 10000; // ms
+    var DEFAULT_REQUEST_TIMEOUT = 10000;
     var REQUEST_SUFFIX = ':request';
     var RESPONSE_SUFFIX = ':response';
+    var MAX_DELIVERY_DEPTH = 16;
 
     function generateId() {
         return Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
@@ -36,25 +35,23 @@
             this._maxHistory = options.maxHistory || 100;
             this._debug = options.debug || false;
 
-            // ===== LAYOUT MANAGER =====
             this._layoutManager = options.layoutManager || null;
 
-            // ===== РЕЕСТРЫ =====
             this._typeRegistry = new Map();
             this._slotRegistry = new Map();
 
-            // ===== СЛУШАТЕЛЬ layout-changed =====
             this._layoutListener = null;
 
-            // ===== RPC (v2.3.0) =====
             this._pendingRequests = new Map();
             this._requestUnsubscribes = new Map();
             this._defaultRequestTimeout = options.requestTimeout || DEFAULT_REQUEST_TIMEOUT;
 
-            // ✅ НОВОЕ (v2.3.1): RPC-обработчики для onRequest
             this._requestHandlers = new Set();
 
-            console.log('[MessageBus] Initialized v2.3.1');
+            // ✅ FIX: глубина синхронной доставки
+            this._deliveryDepth = 0;
+
+            console.log('[MessageBus] Initialized v2.4.0');
         }
 
         // ============================================================
@@ -326,7 +323,7 @@
         }
 
         // ============================================================
-        // 1.1. RPC — ЗАПРОС (v2.3.0)
+        // 1.1. RPC — ЗАПРОС
         // ============================================================
 
         request(senderId, targetId, channel, data = {}, options = {}) {
@@ -431,7 +428,7 @@
         }
 
         // ============================================================
-        // 1.2. RPC — ОТВЕТ (v2.3.0)
+        // 1.2. RPC — ОТВЕТ
         // ============================================================
 
         respond(senderId, requestId, channel, response, targetId = null) {
@@ -495,20 +492,9 @@
         }
 
         // ============================================================
-        // 1.3. RPC — ОБРАБОТЧИК (✅ НОВОЕ v2.3.1)
+        // 1.3. RPC — ОБРАБОТЧИК
         // ============================================================
 
-        /**
-         * Подписаться на RPC-запросы по каналу.
-         * Автоматически отправляет respond/respondError.
-         *
-         * @param {string}   senderId  — id окна-обработчика
-         * @param {string}   channel   — логический канал ('db-query')
-         * @param {Function} handler   — (data, meta) => result | Promise<result>
-         *                               data — payload без requestId
-         *                               meta = { requestId, fromSenderId, channel }
-         * @returns {Function} unsubscribe
-         */
         onRequest(senderId, channel, handler) {
             if (!senderId) {
                 console.error('[MessageBus] onRequest: senderId is required');
@@ -534,7 +520,6 @@
 
                 const requestId = payload.requestId;
 
-                // Отделяем requestId от data
                 const data = { ...payload };
                 delete data.requestId;
 
@@ -544,17 +529,14 @@
                     channel: channel
                 };
 
-                // Вызываем handler
                 let result;
                 try {
                     result = handler(data, meta);
                 } catch (syncErr) {
-                    // Синхронная ошибка
                     self.respondError(senderId, requestId, channel, syncErr.message, fromSenderId);
                     return;
                 }
 
-                // Promise или значение?
                 if (result && typeof result.then === 'function') {
                     result
                         .then((value) => {
@@ -570,7 +552,6 @@
                             );
                         });
                 } else {
-                    // Синхронное значение — сразу respond
                     self.respond(senderId, requestId, channel, result, fromSenderId);
                 }
             };
@@ -588,7 +569,6 @@
                 console.log(`[MessageBus] 🎧 onRequest: ${senderId} listening on [${channel}]`);
             }
 
-            // Возвращаем обёрнутый unsubscribe, который ещё и чистит handle
             return () => {
                 this._requestHandlers.delete(handle);
                 try { unsub(); } catch (e) {}
@@ -626,61 +606,99 @@
         // 2. ДОСТАВКА
         // ============================================================
 
-        _deliverToTarget(targetId, message) {
-            const tid = String(targetId);
+        /**
+         * ✅ FIX v2.4.0: защита от рекурсии.
+         * Счётчик живёт в синхронном стеке. Если подписчик вызовет send()
+         * синхронно — глубина вырастет. Если превысит MAX — warn + стоп.
+         * Асинхронные вызовы (через Promise.then, setTimeout) не считаются —
+         * счётчик уже сброшен.
+         */
+        _enterDelivery() {
+            this._deliveryDepth++;
+            if (this._deliveryDepth > MAX_DELIVERY_DEPTH) {
+                console.error(
+                    `[MessageBus] ❌ Delivery depth exceeded (${MAX_DELIVERY_DEPTH}) — possible recursion. ` +
+                    `Message dropped.`
+                );
+                this._deliveryDepth--;
+                return false;
+            }
+            return true;
+        }
 
-            const subscriptions = this._subscribers.get(tid);
-            if (subscriptions) {
-                const callbacks = subscriptions.get(message.channel);
-                if (callbacks) {
-                    for (const cb of callbacks) {
-                        try {
-                            cb(message.senderId, message.data);
-                        } catch (e) {
-                            console.error('[MessageBus] Subscriber error:', e);
+        _exitDelivery() {
+            if (this._deliveryDepth > 0) {
+                this._deliveryDepth--;
+            }
+        }
+
+        _deliverToTarget(targetId, message) {
+            if (!this._enterDelivery()) return;
+
+            try {
+                const tid = String(targetId);
+
+                const subscriptions = this._subscribers.get(tid);
+                if (subscriptions) {
+                    const callbacks = subscriptions.get(message.channel);
+                    if (callbacks) {
+                        for (const cb of callbacks) {
+                            try {
+                                cb(message.senderId, message.data);
+                            } catch (e) {
+                                console.error('[MessageBus] Subscriber error:', e);
+                            }
                         }
                     }
                 }
-            }
 
-            const globalCallbacks = this._globalSubscribers.get(tid);
-            if (globalCallbacks) {
-                for (const cb of globalCallbacks) {
-                    try {
-                        cb(message.senderId, message.channel, message.data);
-                    } catch (e) {
-                        console.error('[MessageBus] Global subscriber error:', e);
+                const globalCallbacks = this._globalSubscribers.get(tid);
+                if (globalCallbacks) {
+                    for (const cb of globalCallbacks) {
+                        try {
+                            cb(message.senderId, message.channel, message.data);
+                        } catch (e) {
+                            console.error('[MessageBus] Global subscriber error:', e);
+                        }
                     }
                 }
+            } finally {
+                this._exitDelivery();
             }
         }
 
         _deliverToAll(message) {
-            for (const [windowId, subscriptions] of this._subscribers) {
-                if (String(windowId) === String(message.senderId)) continue;
+            if (!this._enterDelivery()) return;
 
-                const callbacks = subscriptions.get(message.channel);
-                if (callbacks) {
-                    for (const cb of callbacks) {
-                        try {
-                            cb(message.senderId, message.data);
-                        } catch (e) {
-                            console.error('[MessageBus] Subscriber error:', e);
+            try {
+                for (const [windowId, subscriptions] of this._subscribers) {
+                    if (String(windowId) === String(message.senderId)) continue;
+
+                    const callbacks = subscriptions.get(message.channel);
+                    if (callbacks) {
+                        for (const cb of callbacks) {
+                            try {
+                                cb(message.senderId, message.data);
+                            } catch (e) {
+                                console.error('[MessageBus] Subscriber error:', e);
+                            }
                         }
                     }
                 }
-            }
 
-            for (const [windowId, callbacks] of this._globalSubscribers) {
-                if (String(windowId) === String(message.senderId)) continue;
+                for (const [windowId, callbacks] of this._globalSubscribers) {
+                    if (String(windowId) === String(message.senderId)) continue;
 
-                for (const cb of callbacks) {
-                    try {
-                        cb(message.senderId, message.channel, message.data);
-                    } catch (e) {
-                        console.error('[MessageBus] Global subscriber error:', e);
+                    for (const cb of callbacks) {
+                        try {
+                            cb(message.senderId, message.channel, message.data);
+                        } catch (e) {
+                            console.error('[MessageBus] Global subscriber error:', e);
+                        }
                     }
                 }
+            } finally {
+                this._exitDelivery();
             }
         }
 
@@ -851,7 +869,8 @@
                 registeredSlots: this._slotRegistry.size,
                 layoutManagerAttached: !!this._layoutManager,
                 pendingRequests: this._pendingRequests.size,
-                requestHandlers: this._requestHandlers.size
+                requestHandlers: this._requestHandlers.size,
+                deliveryDepth: this._deliveryDepth
             };
         }
 
@@ -909,13 +928,11 @@
                 this._layoutListener = null;
             }
 
-            // ✅ Отписка всех onRequest handlers
             for (const handle of this._requestHandlers) {
                 try { handle.unsub(); } catch (e) {}
             }
             this._requestHandlers.clear();
 
-            // ✅ Reject всех pending RPC
             const pendingIds = Array.from(this._pendingRequests.keys());
             for (const requestId of pendingIds) {
                 const pending = this._pendingRequests.get(requestId);
@@ -938,6 +955,7 @@
             this._history = [];
             this._layoutManager = null;
             this._debug = false;
+            this._deliveryDepth = 0;
             console.log('[MessageBus] Destroyed');
         }
     }
@@ -952,7 +970,7 @@
 
     if (typeof window !== 'undefined') {
         window.MessageBus = MessageBus;
-        console.log('[MessageBus] Registered globally v2.3.1');
+        console.log('[MessageBus] Registered globally v2.4.0');
     }
 
 })();

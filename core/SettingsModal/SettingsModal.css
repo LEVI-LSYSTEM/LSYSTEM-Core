@@ -460,68 +460,6 @@
     box-shadow: 0 0 20px rgba(200, 184, 154, 0.05);
 }
 
-.settings-nda__check-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    cursor: pointer;
-    flex-shrink: 0;
-    margin-top: 2px;
-    width: 20px;
-    height: 20px;
-    transition: transform 0.3s var(--sm-spring);
-}
-
-.settings-nda__check-wrap:hover { transform: scale(1.08); }
-.settings-nda__check-wrap:active { transform: scale(0.94); }
-
-.settings-nda__checkbox {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-    width: 0;
-    height: 0;
-}
-
-.settings-nda__checkmark {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border-radius: var(--sm-radius-sm);
-    border: 1.5px solid rgba(200, 184, 154, 0.4);
-    background: rgba(0, 0, 0, 0.2);
-    transition:
-        background 0.35s var(--sm-ease),
-        border-color 0.35s var(--sm-ease),
-        box-shadow 0.35s ease,
-        transform 0.35s var(--sm-spring);
-    position: relative;
-    box-sizing: border-box;
-}
-
-.settings-nda__checkmark::after {
-    content: '';
-    position: absolute;
-    top: 3px;
-    left: 6px;
-    width: 4px;
-    height: 9px;
-    border: solid #fff;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg) scale(0);
-    transition: transform 0.4s var(--sm-spring);
-}
-
-.settings-nda__checkbox:checked + .settings-nda__checkmark {
-    background: var(--accent-red, #cc2233);
-    border-color: var(--accent-red, #cc2233);
-    box-shadow: 0 0 14px rgba(204, 34, 51, 0.4);
-}
-
-.settings-nda__checkbox:checked + .settings-nda__checkmark::after {
-    transform: rotate(45deg) scale(1);
-}
-
 .settings-nda__text {
     flex: 1;
     min-width: 0;
@@ -1884,11 +1822,6 @@
     border-color: rgba(74, 63, 53, 0.1);
 }
 
-[data-theme="light"] .settings-nda__checkmark {
-    border-color: rgba(74, 63, 53, 0.3);
-    background: rgba(255, 255, 255, 0.4);
-}
-
 [data-theme="light"] .hotkey-row__source {
     background: rgba(74, 63, 53, 0.05);
 }
@@ -2242,20 +2175,6 @@
     .settings-modal__close:hover,
     .eula-modal__close:hover {
         transform: none;
-    }
-    .settings-nda__check-wrap {
-        width: 24px;
-        height: 24px;
-    }
-    .settings-nda__checkmark {
-        width: 24px;
-        height: 24px;
-    }
-    .settings-nda__checkmark::after {
-        top: 4px;
-        left: 8px;
-        width: 5px;
-        height: 11px;
     }
     .settings-group:hover,
     .hotkey-row:hover,

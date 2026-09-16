@@ -1,18 +1,16 @@
 // core/HotkeyRegistry.js
-// Версия 2.2.0 - Feature: captureKeyboard / releaseKeyboard + [data-capture-keyboard]
-// - captureKeyboard(windowId) / releaseKeyboard(windowId)
-// - _capturedWindowId: string | null
-// - getCapturedWindow() / isCaptured()
-// - handle(): при capture все клавиши идут в окно, глобальные игнорируются
-// - [data-capture-keyboard]: ядро пропускает событие (не preventDefault)
-// - unregisterWindow: авто-release, если окно было в capture
-// - destroy: сброс _capturedWindowId
-// - normalizeCombo/eventToCombo/register/rebind — без изменений
+// Версия 2.3.0 - Fix: авто-release capture при потере фокуса + Escape-исключение
+// - setFocusedWindow: авто-release, если окно потеряло фокус
+// - handle: capture не съедает Escape (fallback на глобальные)
+// - handle: capture не съедает, если окно потеряло фокус
+// - _autoReleaseCapture — внутренний
+// - unregisterWindow: авто-release (без изменений)
+// - destroy: сброс _capturedWindowId (без изменений)
 
 (function() {
     'use strict';
 
-    console.log('[HotkeyRegistry] Loading v2.2.0...');
+    console.log('[HotkeyRegistry] Loading v2.3.0...');
 
     // ============================================================
     // НОРМАЛИЗАЦИЯ
@@ -118,10 +116,6 @@
         return false;
     }
 
-    /**
-     * ✅ НОВОЕ: проверяет, находится ли фокус в элементе с [data-capture-keyboard].
-     * Если да — ядро пропускает событие (не preventDefault).
-     */
     function isKeyboardCaptureElementFocused() {
         let el = document.activeElement;
         if (!el) return false;
@@ -148,10 +142,9 @@
             this._handler = null;
             this._debug = options.debug || false;
 
-            // ✅ НОВОЕ: захват клавиатуры окном
             this._capturedWindowId = null;
 
-            console.log('[HotkeyRegistry] Initialized v2.2.0');
+            console.log('[HotkeyRegistry] Initialized v2.3.0');
         }
 
         // ============================================================
@@ -219,7 +212,6 @@
         unregisterWindow(windowId) {
             const wid = String(windowId);
 
-            // ✅ Авто-release, если окно было в capture
             if (this._capturedWindowId === wid) {
                 this._capturedWindowId = null;
                 if (this._debug) {
@@ -296,9 +288,32 @@
         // 3. ФОКУС
         // ============================================================
 
+        /**
+         * ✅ FIX v2.3.0:
+         * При смене фокуса — авто-release capture, если окно потеряло фокус.
+         * Если focusedWindowId === null — тоже release.
+         * Если focusedWindowId !== capturedWindowId — release.
+         */
         setFocusedWindow(windowId) {
-            this._focusedWindowId = windowId != null ? String(windowId) : null;
-            // ✅ НЕ сбрасываем _capturedWindowId — окно само решит, когда отпустить
+            const nextId = windowId != null ? String(windowId) : null;
+            const prevId = this._focusedWindowId;
+
+            this._focusedWindowId = nextId;
+
+            // ✅ Авто-release capture, если окно потеряло фокус
+            if (this._capturedWindowId) {
+                if (nextId === null || nextId !== this._capturedWindowId) {
+                    if (this._debug) {
+                        console.log('[HotkeyRegistry] Capture auto-released (focus moved):',
+                            this._capturedWindowId, '→', nextId);
+                    }
+                    this._capturedWindowId = null;
+                }
+            }
+
+            if (this._debug && prevId !== nextId) {
+                console.log('[HotkeyRegistry] Focus:', prevId, '→', nextId);
+            }
         }
 
         getFocusedWindow() {
@@ -306,17 +321,9 @@
         }
 
         // ============================================================
-        // 3.1. ЗАХВАТ КЛАВИАТУРЫ (✅ НОВОЕ v2.2.0)
+        // 3.1. ЗАХВАТ КЛАВИАТУРЫ
         // ============================================================
 
-        /**
-         * Захватить клавиатуру окном.
-         * Все последующие keydown идут только в это окно.
-         * Глобальные хоткеи ядра игнорируются.
-         *
-         * @param {string|number} windowId
-         * @returns {boolean}
-         */
         captureKeyboard(windowId) {
             if (windowId == null) {
                 console.warn('[HotkeyRegistry] captureKeyboard: windowId is required');
@@ -332,14 +339,6 @@
             return true;
         }
 
-        /**
-         * Отпустить клавиатуру.
-         * Если windowId не указан — отпускает любого.
-         * Если указан и не совпадает с захватившим — no-op.
-         *
-         * @param {string|number} [windowId]
-         * @returns {boolean}
-         */
         releaseKeyboard(windowId) {
             if (!this._capturedWindowId) return false;
 
@@ -387,29 +386,39 @@
             // ✅ ПРИОРИТЕТ 1: capture
             // ==================================================
             if (this._capturedWindowId) {
-                const map = this._windowBindings.get(this._capturedWindowId);
-                if (map && map.has(combo)) {
-                    try {
-                        map.get(combo).callback(event, this._capturedWindowId);
-                    } catch (e) {
-                        console.error('[HotkeyRegistry] Captured window callback error:', e);
+                // ✅ FIX: если окно потеряло фокус — release и не съедаем
+                if (this._focusedWindowId !== this._capturedWindowId) {
+                    if (this._debug) {
+                        console.log('[HotkeyRegistry] Capture dropped (window lost focus):',
+                            this._capturedWindowId);
                     }
-                    // Съедаем событие — глобальные и другие окна не увидят
-                    return true;
+                    this._capturedWindowId = null;
+                    // продолжаем к обычной логике ниже
+                } else {
+                    // ✅ FIX: Escape всегда пропускаем (глобальные + escape-обработчики)
+                    // даже при активном capture — чтобы можно было выйти из «залипшего» состояния.
+                    if (combo !== 'Escape') {
+                        const map = this._windowBindings.get(this._capturedWindowId);
+                        if (map && map.has(combo)) {
+                            try {
+                                map.get(combo).callback(event, this._capturedWindowId);
+                            } catch (e) {
+                                console.error('[HotkeyRegistry] Captured window callback error:', e);
+                            }
+                        } else if (this._debug) {
+                            console.log('[HotkeyRegistry] Captured (no binding):', combo,
+                                '→', this._capturedWindowId);
+                        }
+                        // Съедаем — глобальные и другие окна не увидят
+                        return true;
+                    }
+                    // Escape — проваливаемся к обычной логике
                 }
-
-                // Нет бинда — но capture активен.
-                // Всё равно съедаем, чтобы ядро не мешало окну.
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] Captured (no binding):', combo, '→', this._capturedWindowId);
-                }
-                return true;
             }
 
             // ==================================================
             // ✅ ПРИОРИТЕТ 2: [data-capture-keyboard]
             // ==================================================
-            // Ядро ПРОПУСКАЕТ событие (return false → без preventDefault).
             if (isKeyboardCaptureElementFocused()) {
                 if (this._debug) {
                     console.log('[HotkeyRegistry] Skipped (data-capture-keyboard):', combo);
@@ -421,7 +430,6 @@
             // ПРИОРИТЕТ 3: обычная логика
             // ==================================================
 
-            // Input focused — не мешаем
             if (isInputFocused() && combo !== 'Escape') {
                 if (this._debug) {
                     console.log('[HotkeyRegistry] ignored (input focused):', combo);
@@ -548,7 +556,7 @@
         window.HotkeyRegistry.eventToCombo = eventToCombo;
         window.HotkeyRegistry.isInputFocused = isInputFocused;
         window.HotkeyRegistry.isKeyboardCaptureElementFocused = isKeyboardCaptureElementFocused;
-        console.log('[HotkeyRegistry] Registered globally v2.2.0');
+        console.log('[HotkeyRegistry] Registered globally v2.3.0');
     }
 
 })();

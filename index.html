@@ -6,16 +6,16 @@
     <title>LSYSTEM | Core</title>
 
     <!-- ===== FAVICON ===== -->
-    <link rel="icon" type="image/png" href="assets/logo.png" />
-    <link rel="shortcut icon" type="image/png" href="assets/logo.png" />
+    <link rel="icon" type="image/png" href="core/assets/logo.ico" />
+    <link rel="shortcut icon" type="image/png" href="core/assets/logo.ico" />
 
     <!-- ✅ PWA ===== -->
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#0d0d0d" />
-    <meta name="msapplication-TileImage" content="assets/logo.png" />
+    <meta name="msapplication-TileImage" content="core/assets/logo.ico" />
 
     <!-- ===== СТИЛИ ===== -->
-    <link rel="stylesheet" href="assets/index.css" />
+    <link rel="stylesheet" href="core/assets/index.css" />
     <link rel="stylesheet" href="core/SettingsModal/SettingsModal.css" />
 
     <!-- ===== SVG SPRITES (с Promise-обёрткой) ===== -->
@@ -23,46 +23,49 @@
         (function() {
             'use strict';
 
-            // ✅ Promise, который резолвится, когда SVG-спрайты готовы.
-            // index.js должен await window.__svgReady перед init(),
-            // чтобы иконки гарантированно были в DOM.
             var _resolve, _reject;
             window.__svgReady = new Promise(function(resolve, reject) {
                 _resolve = resolve;
                 _reject = reject;
             });
 
-            (async function loadSprites() {
-                try {
-                    var response = await fetch('assets/svg.html');
-                    if (!response.ok) {
-                        throw new Error('svg.html status: ' + response.status);
-                    }
-                    var html = await response.text();
+            function insertSprites() {
+                fetch('core/assets/svg.html')
+                    .then(function(response) {
+                        if (!response.ok) throw new Error('svg.html status: ' + response.status);
+                        return response.text();
+                    })
+                    .then(function(html) {
+                        var div = document.createElement('div');
+                        div.innerHTML = html;
 
-                    var div = document.createElement('div');
-                    div.innerHTML = html;
+                        // Стили — в <head>
+                        var styles = div.querySelectorAll('style');
+                        styles.forEach(function(style) {
+                            document.head.appendChild(style.cloneNode(true));
+                        });
 
-                    // Стили — в <head>
-                    var styles = div.querySelectorAll('style');
-                    styles.forEach(function(style) {
-                        document.head.appendChild(style.cloneNode(true));
+                        // SVG-спрайты — в начало <body>
+                        var svg = div.querySelector('svg');
+                        if (svg && document.body) {
+                            document.body.insertBefore(svg, document.body.firstChild);
+                        }
+
+                        console.log('[SVG Sprites] Loaded');
+                        _resolve(true);
+                    })
+                    .catch(function(error) {
+                        console.warn('[SVG Sprites] Failed to load:', error);
+                        _resolve(false);
                     });
+            }
 
-                    // SVG-спрайты — в <body>, в самое начало
-                    var svg = div.querySelector('svg');
-                    if (svg) {
-                        document.body.insertBefore(svg, document.body.firstChild);
-                    }
-
-                    console.log('[SVG Sprites] Loaded');
-                    _resolve(true);
-                } catch (error) {
-                    console.warn('[SVG Sprites] Failed to load:', error);
-                    // Не reject'им — приложение должно работать и без иконок.
-                    _resolve(false);
-                }
-            })();
+            // ✅ Ждём <body> прежде чем вставлять SVG
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', insertSprites);
+            } else {
+                insertSprites();
+            }
         })();
     </script>
 
@@ -95,7 +98,7 @@
 
             <!-- LOGO + PROJECT NAME -->
             <div class="logo">
-                <img src="assets/logo.png"
+                <img src="core/assets/logo.ico"
                      alt="LSYSTEM"
                      class="logo-img"
                      onerror="this.style.display='none'" />

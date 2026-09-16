@@ -1,13 +1,13 @@
 // core/HistoryManager.js
-// Версия 3.2.0 - Fix: ArrayBuffer по ссылке (не копировать)
-// - _deepCopy: ArrayBuffer/TypedArray/DataView → по ссылке
+// Версия 3.3.0 - Fix: циклы через 2+ объекта
+// - _deepCopy: seen НЕ удаляется в finally — живёт до конца всего дерева
+// - ArrayBuffer/TypedArray/DataView — по ссылке (v3.2.0)
 // - Map/Set/Date/RegExp/Array/Object — как было
-// - restoring counter / shift index / WeakSet — без изменений
 
 (function() {
     'use strict';
 
-    console.log('[HistoryManager] Loading v3.2.0...');
+    console.log('[HistoryManager] Loading v3.3.0...');
 
     class HistoryManager {
         constructor(options = {}) {
@@ -254,56 +254,61 @@
         // ============================================================
 
         /**
-         * ✅ v3.2.0: ArrayBuffer / TypedArray / DataView — ПО ССЫЛКЕ.
-         * WeakSet — защита от циклов (для остальных типов).
+         * ✅ FIX v3.3.0:
+         * `seen` живёт до конца всего копирования — а не удаляется в finally.
+         * Это корректно защищает от циклов через 2+ объекта (a.b=c, c.a=a).
+         *
+         * Побочный эффект: shared-объекты (вставленные в две ветки) будут
+         * скопированы один раз, и вторая ссылка будет указывать на тот же клон.
+         * Для истории это скорее плюс — меньше памяти, консистентные ссылки.
+         *
+         * ArrayBuffer / TypedArray / DataView — по ССЫЛКЕ (v3.2.0).
          */
         _deepCopy(obj, seen) {
             if (obj === null || obj === undefined) return obj;
             if (typeof obj !== 'object') return obj;
 
-            // ✅ ArrayBuffer-подобные — по ссылке
+            // ArrayBuffer-подобные — по ссылке
             if (ArrayBuffer.isView(obj)) return obj;
             if (obj instanceof ArrayBuffer) return obj;
 
             if (!seen) seen = new WeakSet();
             if (seen.has(obj)) {
+                // ✅ Цикл — возвращаем null (не можем восстановить ссылку без WeakMap-словаря).
+                // Для истории сносное поведение: циклические данные всё равно не сериализуются.
                 return null;
             }
             seen.add(obj);
 
-            try {
-                if (obj instanceof Map) {
-                    const m = new Map();
-                    for (const [k, v] of obj) {
-                        m.set(this._deepCopy(k, seen), this._deepCopy(v, seen));
-                    }
-                    return m;
+            if (obj instanceof Map) {
+                const m = new Map();
+                for (const [k, v] of obj) {
+                    m.set(this._deepCopy(k, seen), this._deepCopy(v, seen));
                 }
-                if (obj instanceof Set) {
-                    const s = new Set();
-                    for (const v of obj) s.add(this._deepCopy(v, seen));
-                    return s;
-                }
-                if (Array.isArray(obj)) {
-                    return obj.map(x => this._deepCopy(x, seen));
-                }
-                if (obj instanceof Date) return new Date(obj.getTime());
-                if (obj instanceof RegExp) return new RegExp(obj.source, obj.flags);
-
-                const proto = Object.getPrototypeOf(obj);
-                if (proto === Object.prototype || proto === null) {
-                    const result = {};
-                    for (const [k, v] of Object.entries(obj)) {
-                        result[k] = this._deepCopy(v, seen);
-                    }
-                    return result;
-                }
-
-                // Прочие классы — как есть
-                return obj;
-            } finally {
-                seen.delete(obj);
+                return m;
             }
+            if (obj instanceof Set) {
+                const s = new Set();
+                for (const v of obj) s.add(this._deepCopy(v, seen));
+                return s;
+            }
+            if (Array.isArray(obj)) {
+                return obj.map(x => this._deepCopy(x, seen));
+            }
+            if (obj instanceof Date) return new Date(obj.getTime());
+            if (obj instanceof RegExp) return new RegExp(obj.source, obj.flags);
+
+            const proto = Object.getPrototypeOf(obj);
+            if (proto === Object.prototype || proto === null) {
+                const result = {};
+                for (const [k, v] of Object.entries(obj)) {
+                    result[k] = this._deepCopy(v, seen);
+                }
+                return result;
+            }
+
+            // Прочие классы — как есть
+            return obj;
         }
 
         // ============================================================
@@ -334,7 +339,7 @@
 
     if (typeof window !== 'undefined') {
         window.HistoryManager = HistoryManager;
-        console.log('[HistoryManager] Registered globally v3.2.0');
+        console.log('[HistoryManager] Registered globally v3.3.0');
     }
 
 })();

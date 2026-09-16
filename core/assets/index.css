@@ -2713,3 +2713,78 @@ body.ls-fullscreen .window-container.ls-fullscreen-target {
         transition: none;
     }
 }
+
+/* ================================================================
+   ===== HEADER ITEMS (v2.2.0) =====
+   ================================================================ */
+
+/* --- .window-custom-buttons: контейнер SOFT-части шапки --- */
+/* Любой дочерний элемент (кнопка, dropdown, separator, кастомный) */
+/* должен быть flex-item'ом и не ломать layout.                   */
+
+.window-custom-buttons > * {
+    flex-shrink: 0;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+/* Кастомный render() может вернуть <span>, <div>, <svg> */
+/* Убеждаемся, что они не схлопываются и центрируются по вертикали. */
+.window-custom-buttons > *:not(button) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* --- .header-separator: встроенный тип headerItems 'separator' --- */
+/* Ядро уже задаёт инлайн-стили через RenderWindow._buildSeparator, */
+/* но оставим CSS-fallback для случаев, когда инлайн снят.        */
+
+.header-separator {
+    display: inline-block;
+    width: 1px;
+    height: 14px;
+    background: var(--border-color, rgba(200, 184, 154, 0.12));
+    opacity: 0.6;
+    margin: 0 2px;
+    flex-shrink: 0;
+    align-self: center;
+    vertical-align: middle;
+    pointer-events: none;
+    user-select: none;
+}
+
+/* В узких шапках разделитель может стать визуально лишним — */
+/* но пусть ядро само решает через hidden/width.              */
+
+/* Светлая тема — border-color уже тематический, */
+/* но на всякий случай дадим чуть более тёмный вариант. */
+[data-theme="light"] .header-separator {
+    background: var(--border-color, #baaa98);
+    opacity: 0.5;
+}
+
+/* --- Адаптив: в очень узких шапках разделитель сжимаем --- */
+@media (max-width: 480px) {
+    .header-separator {
+        width: 1px;
+        height: 12px;
+        margin: 0 1px;
+        opacity: 0.4;
+    }
+}
+
+/* --- На тач-устройствах: кастомные элементы не должны ломать шапку --- */
+@media (hover: none) and (pointer: coarse) {
+    .window-custom-buttons > * {
+        min-height: 22px;
+    }
+}
+
+/* --- prefers-reduced-motion: если кастомный элемент анимирован --- */
+@media (prefers-reduced-motion: reduce) {
+    .window-custom-buttons > * {
+        animation: none !important;
+        transition: none !important;
+    }
+}

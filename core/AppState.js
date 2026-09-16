@@ -1,14 +1,13 @@
 // core/AppState.js
-// Версия 4.0.0 — Полная очистка от userKey и pluginKeys
-// - _account: только { id, name, eulaAccepted }
-// - Убраны: userKey, pluginKeys, все их методы
-// - Идентификация юзера — через OAuth в маркетплейсе (не в ядре)
-// - Ядро не знает про лицензии и JWT
+// Версия 5.0.0 — EULA полностью удалён.
+// - Нет eulaAccepted, нет canUseApp(), нет isAuthenticated().
+// - Аккаунт = { id, name }.
+// - Тема, хоткеи, свёрнутость групп — без изменений.
 
 (function() {
     'use strict';
 
-    console.log('[AppState] Loading v4.0.0...');
+    console.log('[AppState] Loading v5.0.0...');
 
     var STORAGE_KEYS = {
         THEME_MODE: 'lsystem-theme-mode',
@@ -30,29 +29,22 @@
     var AppState = function(options) {
         options = options || {};
 
-        // ===== ТЕМА =====
         this._themeMode = 'dark';
         this._theme = 'dark';
         this._autoHours = { darkStart: 18, darkEnd: 6 };
 
-        // ===== АККАУНТ =====
-        // { id, name, eulaAccepted }
         this._account = null;
 
-        // ===== ХОТКЕИ =====
         this._hotkeyOverrides = {
             global: {},
             windows: {}
         };
 
-        // ===== СВЁРНУТОСТЬ ГРУПП =====
         this._windowGroupCollapsed = {};
 
-        // ===== ПОДПИСКИ =====
         this._listeners = {};
         this._globalListeners = [];
 
-        // ===== ТАЙМЕР АВТО-ТЕМЫ =====
         this._themeTimer = null;
 
         this._debug = !!options.debug;
@@ -66,11 +58,18 @@
 
         this._startThemeAutoTimer();
 
-        console.log('[AppState] Initialized v4.0.0', {
+        console.log('[AppState] Initialized v5.0.0', {
             themeMode: this._themeMode,
             theme: this._theme,
-            hasAccount: !!this._account,
-            canUseApp: this.canUseApp()
+            hasAccount: !!this._account
+        });
+
+        // Эмитим начальное состояние асинхронно, чтобы подписчики,
+        // подписавшиеся синхронно после new AppState(), успели.
+        var self = this;
+        queueMicrotask(function() {
+            self._notify('themeMode', self._themeMode);
+            self._notify('theme', self._theme);
         });
     };
 
@@ -218,15 +217,11 @@
     // 2. АККАУНТ
     // ============================================================
 
-    /**
-     * @returns {Object|null} { id, name, eulaAccepted }
-     */
     AppState.prototype.getAccount = function() {
         if (!this._account) return null;
         return {
             id: this._account.id,
-            name: this._account.name,
-            eulaAccepted: this._account.eulaAccepted
+            name: this._account.name
         };
     };
 
@@ -240,10 +235,7 @@
 
         var normalized = {
             id: String(account.id || prev.id || 'u_' + Date.now().toString(36)),
-            name: account.name !== undefined ? String(account.name) : String(prev.name || ''),
-            eulaAccepted: account.eulaAccepted !== undefined
-                ? !!account.eulaAccepted
-                : !!prev.eulaAccepted
+            name: account.name !== undefined ? String(account.name) : String(prev.name || '')
         };
 
         this._account = normalized;
@@ -253,8 +245,7 @@
         if (this._debug) {
             console.log('[AppState] Account set:', {
                 id: normalized.id,
-                name: normalized.name,
-                eulaAccepted: normalized.eulaAccepted
+                name: normalized.name
             });
         }
 
@@ -265,17 +256,6 @@
         this._account = null;
         this._saveAccount();
         this._notify('account', null);
-    };
-
-    AppState.prototype.canUseApp = function() {
-        var acc = this._account;
-        if (!acc) return false;
-        if (!acc.eulaAccepted) return false;
-        return true;
-    };
-
-    AppState.prototype.isAuthenticated = function() {
-        return this.canUseApp();
     };
 
     // ============================================================
@@ -540,8 +520,7 @@
                 if (acc && typeof acc === 'object' && !Array.isArray(acc)) {
                     this._account = {
                         id: String(acc.id || 'u_' + Date.now().toString(36)),
-                        name: String(acc.name || ''),
-                        eulaAccepted: !!acc.eulaAccepted
+                        name: String(acc.name || '')
                     };
                 }
             }
@@ -673,7 +652,7 @@
     if (typeof window !== 'undefined') {
         window.AppState = AppState;
         window.AppState.STORAGE_KEYS = STORAGE_KEYS;
-        console.log('[AppState] Registered globally v4.0.0');
+        console.log('[AppState] Registered globally v5.0.0');
     }
 
 })();

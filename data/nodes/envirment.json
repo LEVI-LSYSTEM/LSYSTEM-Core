@@ -1,0 +1,12 @@
+{
+  "envirment": {
+    "Acoustics": [
+      {
+        "folder": "Acoustics",
+        "abstract": [],
+        "concrete": ["Speakers"],
+        "icon": "icon-acoustics"
+      }
+    ]
+  }
+}
