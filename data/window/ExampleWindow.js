@@ -426,7 +426,6 @@
         // el — this._content, уже в DOM.
         //
         // Доступно:
-        //   this.ui.* / this.utils.* / this.i18n.*
         //   this.getId() / getType() / getSlotId() / getTitle() / getIcon()
 
         buildContent(el) {
@@ -434,7 +433,6 @@
 
             const ui = this.ui;
             const dom = this.utils.dom;
-            const t = this.i18n.ru;
 
             el.style.cssText = [
                 'padding: 14px',

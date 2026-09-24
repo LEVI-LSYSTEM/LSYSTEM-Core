@@ -30,7 +30,7 @@
             });
 
             function insertSprites() {
-                fetch('core/assets/svg.html')
+                fetch('data/svg.html')
                     .then(function(response) {
                         if (!response.ok) throw new Error('svg.html status: ' + response.status);
                         return response.text();

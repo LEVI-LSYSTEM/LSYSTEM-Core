@@ -1,14 +1,16 @@
 // core/LayoutManager.js
-// Версия 6.1.1 - Fix: утечка mousemove/mouseup в split-divider
-// - _activeDividerDrag: { onMove, onUp, cleanup } — хранит активный drag
-// - _cancelActiveDividerDrag() — вызывается в render/destroy/closeAll/_clearInstances
-// - pointercancel + window.blur как fallback
-// - v6.1.0: window-visibility-changed + get*WindowsByType (без изменений)
+// Версия 6.1.2 - Fix: заглушка "Нет активных окон" теперь показывается всегда
+// - init() вызывает render() — заглушка видна сразу при старте
+// - render() нормализует root при 0 видимых окон
+// - loadProjectData() при отсутствии данных рендерит пустое состояние
+// - _renderEmptyWorkspace() защищён от дублирования
+// - v6.1.1: утечка mousemove/mouseup в split-divider (_activeDividerDrag)
+// - v6.1.0: window-visibility-changed + get*WindowsByType
 
 (function() {
     'use strict';
 
-    console.log('[LayoutManager] Loading v6.1.1 (divider drag cleanup)...');
+    console.log('[LayoutManager] Loading v6.1.2 (empty-workspace fix)...');
 
     const NodeType = { LEAF: 'leaf', SPLIT: 'split' };
     const SplitDirection = { HORIZONTAL: 'horizontal', VERTICAL: 'vertical' };
@@ -158,10 +160,10 @@
 
             this._contentRenderers = new Map();
 
-            // ✅ FIX: активный drag split-divider
+            // ✅ FIX (v6.1.1): активный drag split-divider
             this._activeDividerDrag = null;
 
-            console.log('[LayoutManager] Created v6.1.1');
+            console.log('[LayoutManager] Created v6.1.2');
         }
 
         // ============================================================
@@ -185,6 +187,10 @@
 
             this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
             this._setupProjectListeners();
+
+            // ✅ FIX (v6.1.2): сразу показываем заглушку, если окон нет
+            this.render();
+
             console.log('[LayoutManager] Initialized');
             return true;
         }
@@ -214,6 +220,9 @@
                     this.loadProjectData(layoutData);
                     this.render();
                     this._scheduleResize();
+                } else {
+                    // ✅ FIX: нет данных — рендерим пустое состояние
+                    this.render();
                 }
             });
         }
@@ -870,7 +879,7 @@
         }
 
         closeAll() {
-            // ✅ FIX: отменяем активный drag
+            // ✅ FIX (v6.1.1): отменяем активный drag
             this._cancelActiveDividerDrag();
 
             this.exitFullscreen(true);
@@ -1291,7 +1300,7 @@
         // ============================================================
 
         render() {
-            // ✅ FIX: перед полной перерисовкой отменяем активный drag
+            // ✅ FIX (v6.1.1): перед полной перерисовкой отменяем активный drag
             this._cancelActiveDividerDrag();
 
             if (!this.workspace) return;
@@ -1306,6 +1315,9 @@
             const visibleWindows = this.getVisibleWindows();
 
             if (visibleWindows.length === 0) {
+                // ✅ FIX (v6.1.2): нормализуем дерево, чтобы root и getVisibleWindows() не разъезжались
+                this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
+
                 this._renderEmptyWorkspace();
                 this._updateWindowMap();
                 this._scheduleResize();
@@ -1343,6 +1355,9 @@
         }
 
         _renderEmptyWorkspace() {
+            const existing = this.workspace.querySelector('.workspace-empty');
+            if (existing) existing.remove();
+
             const placeholder = document.createElement('div');
             placeholder.className = 'workspace-empty';
             placeholder.style.cssText = `
@@ -1357,7 +1372,7 @@
                 gap: 8px;
             `;
             placeholder.innerHTML = `
-                <div style="font-size:48px;opacity:0.3;">
+                <div style="font-size:48px;opacity:0.7;">
                     <svg class="icon-folder" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                     </svg>
@@ -1654,7 +1669,7 @@
                         e.preventDefault();
                         e.stopPropagation();
 
-                        // ✅ FIX: если уже есть активный drag — отменяем
+                        // ✅ FIX (v6.1.1): если уже есть активный drag — отменяем
                         this._cancelActiveDividerDrag();
 
                         divider.style.backgroundColor = 'rgba(204, 34, 51, 0.5)';
@@ -1703,7 +1718,7 @@
                         };
 
                         const onMouseUp = () => {
-                            // ✅ FIX: снимаем все слушатели + сбрасываем состояние
+                            // ✅ FIX (v6.1.1): снимаем все слушатели + сбрасываем состояние
                             try { document.removeEventListener('mousemove', onMouseMove); } catch (err) {}
                             try { document.removeEventListener('mouseup', onMouseUp); } catch (err) {}
                             try { document.removeEventListener('pointercancel', onMouseUp); } catch (err) {}
@@ -1717,7 +1732,7 @@
                             this._notifyChange();
                         };
 
-                        // ✅ FIX: сохраняем активный drag — чтобы render()/destroy() могли отменить
+                        // ✅ FIX (v6.1.1): сохраняем активный drag — чтобы render()/destroy() могли отменить
                         this._activeDividerDrag = {
                             onMove: onMouseMove,
                             onUp: onMouseUp
@@ -1816,7 +1831,21 @@
         }
 
         loadProjectData(data) {
-            if (!data || !data.layout) return false;
+            // ✅ FIX (v6.1.2): если данных нет — принудительно пустое состояние + render (заглушка)
+            if (!data || !data.layout) {
+                this._clearInstances();
+
+                this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
+                this._windowIdCounter = 0;
+                this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
+
+                this._minimizedWindowsData.clear();
+                this._fullscreenWindowId = null;
+
+                this.render();
+                this._notifyChange();
+                return false;
+            }
 
             this._clearInstances();
 
@@ -1858,7 +1887,7 @@
         loadLayoutData(data) { return this.loadProjectData(data); }
 
         _clearInstances() {
-            // ✅ FIX: отменяем активный drag перед сносом инстансов
+            // ✅ FIX (v6.1.1): отменяем активный drag перед сносом инстансов
             this._cancelActiveDividerDrag();
 
             if (!this._windowInstances) {
@@ -1895,7 +1924,7 @@
         window.NodeType = NodeType;
         window.SplitDirection = SplitDirection;
         window.LayoutStyle = LayoutStyle;
-        console.log('[LayoutManager] Registered globally v6.1.1');
+        console.log('[LayoutManager] Registered globally v6.1.2');
     }
 
 })();

@@ -1,15 +1,7 @@
 {
     "groups": {
         "Примеры": [
-            { "file": "ExampleWindow.js", "hidden": true },
-            { "file": "StringJackWindow.js", "hidden": true }
-        ],
-        "Graphics": [
-            { "file": "GraphicWindow.js", "hidden": false }
-        ],
-        "Node": [
-            { "file": "NodeGraphWindow.js", "hidden": false },
-            { "file": "NodePropertiesWindow.js", "hidden": false }
+            { "file": "ExampleWindow.js", "hidden": false }
         ]
     }
 }

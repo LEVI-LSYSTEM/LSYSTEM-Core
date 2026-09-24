@@ -1,9 +1,7 @@
 // data/UserAPI.js
-// Версия 2.1.0
-// - Fix: меню не закрывается при скролле внутри самого меню
-// - Fix: menuRegistry.closeAll закрывает и .data-dropdown/.menu-dropdown/.change-type-dropdown/.layout-dropdown
-// - Fix: header-кнопки (data-btn, change-type, layout) закрывают все открытые ui-меню
-// - Fix: categoryPanel/listPanel больше не конфликтуют с dropdown из RenderWindow
+// Версия 2.2.0
+// - Add: utils.graph2d (Camera + GridCache) — общие утилиты для 2D-редакторов
+// - Remove: i18n.ru (переводы больше не входят в UserAPI)
 //
 // Компоненты:
 //   ui.button, ui.input, ui.block, ui.text
@@ -11,7 +9,7 @@
 //   ui.contextMenu, ui.modal, ui.confirm, ui.inlineEditor
 //   ui.categoryPanel, ui.listPanel
 //   utils.dom, utils.canvas, utils.file
-//   i18n.ru
+//   utils.graph2d (Camera, GridCache)
 
 (function() {
     'use strict';
@@ -19,13 +17,6 @@
     // ═══════════════════════════════════════════════════════════════
     // UI MENU REGISTRY — глобальный реестр открытых меню
     // ═══════════════════════════════════════════════════════════════
-    //
-    // Все меню (contextMenu, categoryPanel, listPanel) регистрируются здесь.
-    // При открытии нового — все старые закрываются.
-    // Также закрываются нативные дропдауны ядра (.data-dropdown и т.д.).
-    //
-    // ВАЖНО: scroll внутри самого меню НЕ закрывает его.
-    // Закрываем только при scroll вне меню.
 
     (function installMenuRegistry() {
         if (window.__uiMenuRegistry) return;
@@ -33,7 +24,6 @@
         const openMenus = new Set();
         let docHandlerInstalled = false;
 
-        // Нативные дропдауны ядра — прячем их вручную
         const NATIVE_SELECTORS = [
             '.data-dropdown',
             '.menu-dropdown',
@@ -55,11 +45,7 @@
 
         const isInsideAnyMenu = (target) => {
             if (!target || !target.closest) return false;
-            // Любое ui-меню
             if (target.closest('.ui-ctx, .ui-catpanel, .ui-listpanel')) return true;
-            // Триггер меню (data-ui-menu-trigger) — не считаем "внутри",
-            // но триггер сам разрулит своё меню. Возвращаем true, чтобы
-            // doc-handler не закрыл меню до обработки клика триггером.
             if (target.closest('[data-ui-menu-trigger]')) return true;
             return false;
         };
@@ -73,7 +59,6 @@
                 } catch (e) {}
                 openMenus.delete(menu);
             }
-            // Нативные — прячем
             hideNativeDropdowns();
         };
 
@@ -81,27 +66,21 @@
             if (docHandlerInstalled) return;
             docHandlerInstalled = true;
 
-            // ЛКМ вне меню — закрыть всё
             document.addEventListener('mousedown', (e) => {
                 if (openMenus.size === 0) return;
                 if (isInsideAnyMenu(e.target)) return;
                 closeAll(null);
             }, true);
 
-            // Resize — закрыть всё
             window.addEventListener('resize', () => closeAll(null));
 
-            // Scroll — закрыть всё ТОЛЬКО если скролл вне меню
             window.addEventListener('scroll', (e) => {
                 if (openMenus.size === 0) return;
                 const t = e.target;
-                // Если скроллится контейнер внутри меню — игнорируем
                 if (t && t.closest && t.closest('.ui-ctx, .ui-catpanel, .ui-listpanel')) return;
-                // Если сам target — документ/window (обычный скролл страницы) — закрываем
                 closeAll(null);
             }, true);
 
-            // Escape — закрыть всё
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') closeAll(null);
             }, true);
@@ -119,19 +98,10 @@
             closeAll(except) {
                 closeAll(except || null);
             },
-            /**
-             * Закрыть все меню, включая нативные дропдауны ядра.
-             * Вызывается из header-кнопок (data-btn, change-type, layout)
-             * при открытии нативного дропдауна.
-             */
             closeAllIncludingNative() {
                 closeAll(null);
                 hideNativeDropdowns();
             },
-            /**
-             * Скрыть нативные дропдауны ядра (без закрытия ui-меню).
-             * Используется, если ui-меню уже открыто и надо просто убрать нативные.
-             */
             hideNativeDropdowns,
             size() {
                 return openMenus.size;
@@ -755,7 +725,6 @@
                             node.style.display = (!q || txt.includes(q)) ? '' : 'none';
                         });
                     });
-                    // Не давать registry-хендлеру реагировать на клавиши в input
                     input.addEventListener('keydown', (e) => e.stopPropagation());
                     searchWrap.appendChild(input);
                     el.appendChild(searchWrap);
@@ -866,7 +835,6 @@
             const open = (clientX, clientY) => {
                 if (state.open) close();
 
-                // Закрыть нативные дропдауны ядра + все ui-меню
                 window.__uiMenuRegistry.closeAllIncludingNative();
                 window.__uiMenuRegistry.register(el);
 
@@ -1857,7 +1825,6 @@
             const openPanel = () => {
                 if (trigger) trigger.classList.add('active');
 
-                // Закрыть нативные дропдауны + все ui-меню
                 window.__uiMenuRegistry.closeAllIncludingNative();
                 window.__uiMenuRegistry.register(panel);
 
@@ -2491,30 +2458,426 @@
     });
 
     // ═══════════════════════════════════════════════════════════════
-    // I18N
+    // УТИЛИТЫ — GRAPH2D (Camera + GridCache)
     // ═══════════════════════════════════════════════════════════════
+    //
+    // Общие утилиты для 2D-редакторов (NodeGraphWindow, 2DWindow и т.п.).
+    //
+    // Theme: объект { palette: { gridSmall, gridMedium, gridLarge, ... } }.
+    // Если тема не передана — используются дефолтные цвета сетки.
+    //
+    //   const cam = this.utils.graph2d.camera({ physics: {...} });
+    //   const gc  = this.utils.graph2d.gridCache(this._theme);
+    //   gc.render(ctx, cam, w, h, dpr);
 
-    registerComponent('i18n', 'ru', {
-        version: '1.0.0',
+    (function installGraph2DUtils() {
+        'use strict';
 
-        strings: {
-            'save': 'Сохранить',
-            'cancel': 'Отмена',
-            'close': 'Закрыть',
-            'welcome': 'Добро пожаловать, {name}!'
-        },
+        const ZOOM_MIN = 0.15;
+        const ZOOM_MAX = 4.0;
+        const ZOOM_STEP_KEY = 0.1;
 
-        t(key, params = {}) {
-            let s = this.i18n.ru.strings[key] || key;
-            for (const k in params) {
-                s = s.replace('{' + k + '}', params[k]);
+        const GRID_SMALL = 16;
+        const GRID_MEDIUM = GRID_SMALL * 10;
+        const GRID_LARGE = GRID_MEDIUM * 10;
+        const GRID_TILE_WORLD = GRID_LARGE;
+
+        const GRID_LOD_MEDIUM_MIN = 0.15;
+        const GRID_LOD_SMALL_MIN  = 0.45;
+
+        const _clamp = (v, mn, mx) => v < mn ? mn : (v > mx ? mx : v);
+
+        class Camera {
+            constructor() {
+                this.x = 0;
+                this.y = 0;
+                this.zoom = 1.0;
+                this.viewportWidth = 0;
+                this.viewportHeight = 0;
+
+                this.velocityX = 0;
+                this.velocityY = 0;
+                this.velocityZoom = 0;
+                this.friction = 0.92;
+                this.frictionZoom = 0.85;
+                this.maxVelocity = 100;
+                this.maxVelocityZoom = 0.5;
+                this.isPhysicsEnabled = true;
+
+                this.isAnimating = false;
+                this.animationId = null;
+                this.animStartTime = 0;
+                this.animDuration = 300;
+
+                this.startX = 0; this.startY = 0; this.startZoom = 1.0;
+                this.targetX = 0; this.targetY = 0; this.targetZoom = 1.0;
+
+                this.bezierP1 = { x: 0.25, y: 0.1 };
+                this.bezierP2 = { x: 0.25, y: 1.0 };
+
+                this._cachedCenter = null;
+                this._listeners = {
+                    onZoom: [], onPan: [], onReset: [],
+                    onAnimationStart: [], onAnimationEnd: []
+                };
             }
-            return s;
-        },
 
-        add(key, value) {
-            this.i18n.ru.strings[key] = value;
+            setViewport(w, h) {
+                if (w <= 0 || h <= 0) return;
+                this.viewportWidth = w;
+                this.viewportHeight = h;
+                this._cachedCenter = null;
+            }
+
+            worldToScreen(wx, wy) {
+                return { x: (wx + this.x) * this.zoom, y: (wy + this.y) * this.zoom };
+            }
+            screenToWorld(sx, sy) {
+                return { x: sx / this.zoom - this.x, y: sy / this.zoom - this.y };
+            }
+            getViewCenter() {
+                if (this._cachedCenter) return this._cachedCenter;
+                this._cachedCenter = {
+                    x: this.viewportWidth / 2 / this.zoom - this.x,
+                    y: this.viewportHeight / 2 / this.zoom - this.y
+                };
+                return this._cachedCenter;
+            }
+            invalidateCache() { this._cachedCenter = null; }
+
+            setPhysicsParams(friction, frictionZoom, maxVelocity, maxVelocityZoom) {
+                this.friction = _clamp(friction, 0.5, 0.99);
+                this.frictionZoom = _clamp(frictionZoom, 0.5, 0.99);
+                this.maxVelocity = Math.max(1, maxVelocity);
+                this.maxVelocityZoom = Math.max(0.01, maxVelocityZoom);
+            }
+
+            applyImpulse(dx, dy, dZoom = 0) {
+                if (!this.isPhysicsEnabled) return;
+                this.velocityX += dx; this.velocityY += dy; this.velocityZoom += dZoom;
+            }
+
+            _updatePhysics(dt) {
+                if (!this.isPhysicsEnabled) return;
+                const d = Math.min(dt, 0.05);
+                if (Math.abs(this.velocityX) > 0.001 || Math.abs(this.velocityY) > 0.001) {
+                    this.x += this.velocityX * d;
+                    this.y += this.velocityY * d;
+                    this.velocityX *= this.friction;
+                    this.velocityY *= this.friction;
+                    if (Math.abs(this.velocityX) < 0.001) this.velocityX = 0;
+                    if (Math.abs(this.velocityY) < 0.001) this.velocityY = 0;
+                    this._cachedCenter = null;
+                }
+                if (Math.abs(this.velocityZoom) > 0.0001) {
+                    this.zoom = _clamp(this.zoom + this.velocityZoom * d, ZOOM_MIN, ZOOM_MAX);
+                    this.velocityZoom *= this.frictionZoom;
+                    if (Math.abs(this.velocityZoom) < 0.0001) this.velocityZoom = 0;
+                    this._cachedCenter = null;
+                }
+            }
+
+            zoomToPoint(targetZoom, screenX, screenY, animate = false) {
+                targetZoom = _clamp(targetZoom, ZOOM_MIN, ZOOM_MAX);
+                if (Math.abs(targetZoom - this.zoom) < 0.0005) return;
+
+                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
+                const worldBefore = this.screenToWorld(screenX, screenY);
+
+                if (!animate) {
+                    this.zoom = targetZoom;
+                    this.x = (screenX / this.zoom) - worldBefore.x;
+                    this.y = (screenY / this.zoom) - worldBefore.y;
+                    this._cachedCenter = null;
+                    this._emit('onZoom', { zoom: this.zoom });
+                    return;
+                }
+
+                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
+                this.targetZoom = targetZoom;
+                this.targetX = (screenX / targetZoom) - worldBefore.x;
+                this.targetY = (screenY / targetZoom) - worldBefore.y;
+                this.isAnimating = true;
+                this.animStartTime = performance.now();
+                this._startAnimation();
+                this._emit('onZoom', { zoom: targetZoom });
+            }
+
+            zoomToCenter(targetZoom, animate = true) {
+                targetZoom = _clamp(targetZoom, ZOOM_MIN, ZOOM_MAX);
+                if (Math.abs(targetZoom - this.zoom) < 0.0005) return;
+                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
+
+                const c = this.getViewCenter();
+                const newX = -(c.x) + this.viewportWidth / 2 / targetZoom;
+                const newY = -(c.y) + this.viewportHeight / 2 / targetZoom;
+
+                if (!animate) {
+                    this.x = newX; this.y = newY; this.zoom = targetZoom;
+                    this._cachedCenter = null;
+                    this._emit('onZoom', { zoom: this.zoom });
+                    return;
+                }
+                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
+                this.targetX = newX; this.targetY = newY; this.targetZoom = targetZoom;
+                this.isAnimating = true;
+                this.animStartTime = performance.now();
+                this._startAnimation();
+                this._emit('onZoom', { zoom: targetZoom });
+            }
+
+            zoomIn(step = ZOOM_STEP_KEY) { this.zoomToCenter(Math.min(ZOOM_MAX, this.zoom + step)); }
+            zoomOut(step = ZOOM_STEP_KEY) { this.zoomToCenter(Math.max(ZOOM_MIN, this.zoom - step)); }
+
+            moveCenterTo(worldX, worldY, animate = true) {
+                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
+                const targetX = -(worldX) + this.viewportWidth / 2 / this.zoom;
+                const targetY = -(worldY) + this.viewportHeight / 2 / this.zoom;
+
+                if (!animate) {
+                    this.x = targetX; this.y = targetY;
+                    this._cachedCenter = null;
+                    this._emit('onPan', { x: this.x, y: this.y });
+                    return;
+                }
+                this.startX = this.x; this.startY = this.y;
+                this.targetX = targetX; this.targetY = targetY;
+                this.startZoom = this.zoom; this.targetZoom = this.zoom;
+                this.isAnimating = true;
+                this.animStartTime = performance.now();
+                this._startAnimation();
+                this._emit('onPan', { x: targetX, y: targetY });
+            }
+
+            panByWorld(dxWorld, dyWorld) {
+                this.x -= dxWorld;
+                this.y -= dyWorld;
+                this._cachedCenter = null;
+                this._emit('onPan', { x: this.x, y: this.y });
+            }
+
+            reset(animate = true) {
+                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
+                if (!animate) {
+                    this.x = 0; this.y = 0; this.zoom = 1.0;
+                    this._cachedCenter = null;
+                    this.isAnimating = false;
+                    this._emit('onReset', { x: 0, y: 0, zoom: 1.0 });
+                    return;
+                }
+                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
+                this.targetX = 0; this.targetY = 0; this.targetZoom = 1.0;
+                this.isAnimating = true;
+                this.animStartTime = performance.now();
+                this._startAnimation();
+                this._emit('onReset', { x: 0, y: 0, zoom: 1.0 });
+            }
+
+            _bezierEasing(t) {
+                const p1x = this.bezierP1.x, p1y = this.bezierP1.y;
+                const p2x = this.bezierP2.x, p2y = this.bezierP2.y;
+                let g = t;
+                for (let i = 0; i < 10; i++) {
+                    const cx = 3 * p1x * (1 - g) * (1 - g) + 3 * p2x * (1 - g) * g * g + g ** 3;
+                    if (Math.abs(cx - t) < 0.001) break;
+                    g -= (cx - t) / (6 * (1 - g) * (p1x * (1 - g) + p2x * g) + 3 * (p2x - p1x) * g * g + 3 * g * g);
+                    g = _clamp(g, 0, 1);
+                }
+                return 3 * p1y * (1 - g) ** 2 + 3 * p2y * (1 - g) * g * g + g ** 3;
+            }
+
+            _startAnimation() {
+                if (this.animationId !== null) return;
+                this._emit('onAnimationStart', {});
+                this._animateStep();
+            }
+
+            _animateStep() {
+                if (!this.isAnimating) { this.animationId = null; return; }
+                const elapsed = performance.now() - this.animStartTime;
+                const p = Math.min(1, elapsed / this.animDuration);
+                const e = this._bezierEasing(p);
+
+                this.x = this.startX + (this.targetX - this.startX) * e;
+                this.y = this.startY + (this.targetY - this.startY) * e;
+                this.zoom = this.startZoom + (this.targetZoom - this.startZoom) * e;
+                this.zoom = Math.round(this.zoom * 1000) / 1000;
+                this._cachedCenter = null;
+
+                if (p >= 1) {
+                    this.x = this.targetX; this.y = this.targetY; this.zoom = this.targetZoom;
+                    this.isAnimating = false;
+                    this.animationId = null;
+                    this._cachedCenter = null;
+                    this._emit('onAnimationEnd', { x: this.x, y: this.y, zoom: this.zoom });
+                    return;
+                }
+                this.animationId = requestAnimationFrame(() => this._animateStep());
+            }
+
+            stopAnimation() {
+                this.isAnimating = false;
+                if (this.animationId) { cancelAnimationFrame(this.animationId); this.animationId = null; }
+                this._emit('onAnimationEnd', { canceled: true });
+            }
+
+            update(dt) { if (this.isPhysicsEnabled) this._updatePhysics(dt); }
+
+            on(e, cb) { if (this._listeners[e]) this._listeners[e].push(cb); return this; }
+            off(e, cb) {
+                if (this._listeners[e]) this._listeners[e] = this._listeners[e].filter(x => x !== cb);
+                return this;
+            }
+            _emit(e, d) {
+                if (this._listeners[e]) for (const cb of this._listeners[e]) {
+                    try { cb(d); } catch (err) { console.error(`[Camera] ${e}:`, err); }
+                }
+            }
+
+            getZoomPercent() { return Math.round(this.zoom * 100); }
+
+            destroy() { this.stopAnimation(); this._listeners = {}; }
         }
-    });
+
+        class GridCache {
+            constructor(theme) {
+                this.theme = theme || null;
+                this._tile = null;
+                this._tileDpr = 1;
+                this._tileZoomKey = null;
+                this._tileSizePx = 0;
+            }
+
+            static lodForZoom(z) {
+                if (z < GRID_LOD_MEDIUM_MIN) return { small: false, medium: false, large: true };
+                if (z < GRID_LOD_SMALL_MIN)  return { small: false, medium: true,  large: true };
+                return { small: true, medium: true, large: true };
+            }
+
+            _lodKey(lod) { return `${lod.small ? 1 : 0}${lod.medium ? 1 : 0}${lod.large ? 1 : 0}`; }
+
+            _palette() {
+                const p = this.theme && this.theme.palette ? this.theme.palette : null;
+                return {
+                    small:  (p && p.gridSmall)  || 'rgba(128,128,128,0.06)',
+                    medium: (p && p.gridMedium) || 'rgba(128,128,128,0.13)',
+                    large:  (p && p.gridLarge)  || 'rgba(128,128,128,0.22)'
+                };
+            }
+
+            ensureTile(zoom, dpr) {
+                const lod = GridCache.lodForZoom(zoom);
+                const key = this._lodKey(lod);
+                const tileSizeCss = GRID_TILE_WORLD * zoom;
+                const clampedSize = Math.max(64, Math.min(4096, Math.round(tileSizeCss)));
+
+                if (this._tile && this._tileZoomKey === key &&
+                    Math.abs(this._tileSizePx - clampedSize) < 0.5 &&
+                    this._tileDpr === dpr) {
+                    return { lod, tile: this._tile, tileSizeCss: this._tileSizePx / this._tileDpr };
+                }
+
+                this._tile = this._buildTile(lod, clampedSize, dpr);
+                this._tileZoomKey = key;
+                this._tileDpr = dpr;
+                this._tileSizePx = clampedSize;
+                return { lod, tile: this._tile, tileSizeCss: clampedSize / dpr };
+            }
+
+            _buildTile(lod, sizeCss, dpr) {
+                if (typeof document === 'undefined') return null;
+                const c = document.createElement('canvas');
+                c.width = Math.max(1, Math.floor(sizeCss * dpr));
+                c.height = Math.max(1, Math.floor(sizeCss * dpr));
+                const ctx = c.getContext('2d');
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, sizeCss, sizeCss);
+
+                const colors = this._palette();
+                const scale = sizeCss / GRID_TILE_WORLD;
+
+                const draw = (stepWorld, color) => {
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    const stepPx = stepWorld * scale;
+                    if (stepPx < 2) return;
+                    ctx.beginPath();
+                    for (let x = 0; x <= sizeCss + 0.5; x += stepPx) {
+                        const px = Math.round(x) + 0.5;
+                        ctx.moveTo(px, 0); ctx.lineTo(px, sizeCss);
+                    }
+                    for (let y = 0; y <= sizeCss + 0.5; y += stepPx) {
+                        const py = Math.round(y) + 0.5;
+                        ctx.moveTo(0, py); ctx.lineTo(sizeCss, py);
+                    }
+                    ctx.stroke();
+                };
+
+                if (lod.small)  draw(GRID_SMALL,  colors.small);
+                if (lod.medium) draw(GRID_MEDIUM, colors.medium);
+                if (lod.large)  draw(GRID_LARGE,  colors.large);
+
+                return c;
+            }
+
+            render(ctx, camera, w, h, dpr) {
+                const { tile, tileSizeCss } = this.ensureTile(camera.zoom, dpr);
+                if (!tile || tileSizeCss < 4) return;
+
+                const worldLeft = -camera.x;
+                const worldTop  = -camera.y;
+
+                const tileIndexX = Math.floor(worldLeft / GRID_TILE_WORLD);
+                const tileIndexY = Math.floor(worldTop  / GRID_TILE_WORLD);
+
+                const offsetX = (tileIndexX * GRID_TILE_WORLD - worldLeft) * camera.zoom;
+                const offsetY = (tileIndexY * GRID_TILE_WORLD - worldTop)  * camera.zoom;
+
+                const tilesX = Math.ceil(w / tileSizeCss) + 1;
+                const tilesY = Math.ceil(h / tileSizeCss) + 1;
+
+                ctx.save();
+                ctx.imageSmoothingEnabled = false;
+                for (let ty = 0; ty <= tilesY; ty++) {
+                    for (let tx = 0; tx <= tilesX; tx++) {
+                        const x = offsetX + tx * tileSizeCss;
+                        const y = offsetY + ty * tileSizeCss;
+                        if (x > w || y > h) continue;
+                        if (x + tileSizeCss < 0 || y + tileSizeCss < 0) continue;
+                        ctx.drawImage(tile, x, y, tileSizeCss, tileSizeCss);
+                    }
+                }
+                ctx.restore();
+            }
+
+            invalidate() { this._tile = null; this._tileZoomKey = null; this._tileSizePx = 0; }
+        }
+
+        registerComponent('utils', 'graph2d', {
+            version: '1.0.0',
+
+            ZOOM_MIN, ZOOM_MAX, ZOOM_STEP_KEY,
+            GRID_SMALL, GRID_MEDIUM, GRID_LARGE, GRID_TILE_WORLD,
+            GRID_LOD_MEDIUM_MIN, GRID_LOD_SMALL_MIN,
+            Camera, GridCache,
+
+            camera(opts = {}) {
+                const cam = new Camera();
+                if (opts.physics) {
+                    cam.setPhysicsParams(
+                        opts.physics.friction,
+                        opts.physics.frictionZoom,
+                        opts.physics.maxVelocity,
+                        opts.physics.maxVelocityZoom
+                    );
+                }
+                return cam;
+            },
+
+            gridCache(theme) {
+                return new GridCache(theme);
+            }
+        });
+    })();
 
 })();
