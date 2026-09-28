@@ -1,11 +1,10 @@
-/* index.css - полный файл со всеми стилями и анимациями */
-/* Версия 2.1.0 - ИСПРАВЛЕНО: +.logo-project-name (16.2) */
-/* - Добавлен .logo-project-name (index.html → #projectNameDisplay) */
-/* - Адаптив: 768 / 480 / 360 */
-/* - Светлая тема для .logo-project-name */
-/* - .logo теперь flex-wrap (имя проекта переносится при нехватке места) */
+/* index.css */
+/* Версия 2.5.0 — Вынесены стили графика (см. окно графика) и меню Windows (см. index.js). */
 
-/* ===== ТЁМНАЯ ТЕМА (по умолчанию) ===== */
+/* ================================================================
+   ТЁМНАЯ ТЕМА (по умолчанию)
+   ================================================================ */
+
 :root {
     --bg-dark: #0d0d0d;
     --bg-panel: #1a1a1a;
@@ -31,7 +30,7 @@
     --window-min-width: 200px;
     --window-min-height: 150px;
     --transition-speed: 0.3s;
-    
+
     --logo-glow-color1: var(--beige);
     --logo-glow-color2: var(--beige-dark);
     --logo-glow-color3: var(--accent-red);
@@ -39,7 +38,10 @@
     color-scheme: dark;
 }
 
-/* ===== СВЕТЛАЯ ТЕМА (бежевая, приглушённая) ===== */
+/* ================================================================
+   СВЕТЛАЯ ТЕМА
+   ================================================================ */
+
 [data-theme="light"] {
     --bg-dark: #e8ddd0;
     --bg-panel: #d5c8b8;
@@ -65,7 +67,10 @@
     color-scheme: light;
 }
 
-/* ===== ОБЩИЕ СТИЛИ ===== */
+/* ================================================================
+   ОБЩИЕ СТИЛИ
+   ================================================================ */
+
 * {
     margin: 0;
     padding: 0;
@@ -107,7 +112,10 @@ body {
     transition: background 0.4s ease;
 }
 
-/* ===== HEADER ===== */
+/* ================================================================
+   HEADER
+   ================================================================ */
+
 .header {
     display: flex;
     justify-content: space-between;
@@ -117,7 +125,7 @@ body {
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
     min-height: 46px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
     z-index: 100;
     animation: slideDown 0.3s ease;
@@ -125,47 +133,52 @@ body {
 }
 
 @keyframes slideDown {
-    from {
-        opacity: 0;
-        transform: translateY(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(-20px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
-/* ===== LOGO С ПЕРЕЛИВАНИЕМ И КЛИКОМ ===== */
+/* ================================================================
+   LOGO
+   ================================================================ */
+
 .logo {
     display: flex;
     align-items: center;
     gap: 8px;
-    cursor: pointer;
     user-select: none;
     padding: 4px 8px;
     border-radius: var(--radius-sm);
-    transition: background 0.3s ease, transform 0.3s ease;
     position: relative;
-    /* ✅ Имя проекта может быть длинным — позволяем перенос */
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-width: 0;
-}
-
-.logo:hover {
-    background: rgba(200, 184, 154, 0.08);
-    transform: scale(1.02);
-}
-
-.logo:active {
-    transform: scale(0.95);
+    flex: 0 1 auto;
 }
 
 .logo-img {
     height: 26px;
     width: 26px;
     object-fit: contain;
-    border-radius: 4px;
-    transition: opacity 0.4s ease;
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 2px;
+    box-shadow: inset 0 0 0 1px transparent;
+    transition:
+        box-shadow 0.25s ease,
+        opacity 0.4s ease;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.logo-img:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(200, 184, 154, 0.45),
+        0 0 10px rgba(200, 184, 154, 0.15);
+}
+
+.logo-img:active {
+    box-shadow:
+        inset 0 0 0 1px rgba(200, 184, 154, 0.7),
+        0 0 14px rgba(200, 184, 154, 0.25);
 }
 
 .logo-text {
@@ -185,45 +198,34 @@ body {
     background-clip: text;
     animation: logoShimmer 4s ease-in-out infinite;
     letter-spacing: 0.5px;
-    transition: background 0.6s ease;
+    transition:
+        box-shadow 0.25s ease,
+        background 0.6s ease;
     position: relative;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px transparent;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.logo-text:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(200, 184, 154, 0.45),
+        0 0 10px rgba(200, 184, 154, 0.15);
+}
+
+.logo-text:active {
+    box-shadow:
+        inset 0 0 0 1px rgba(200, 184, 154, 0.7),
+        0 0 14px rgba(200, 184, 154, 0.25);
 }
 
 @keyframes logoShimmer {
-    0% {
-        background-position: 0% 50%;
-    }
-    50% {
-        background-position: 100% 50%;
-    }
-    100% {
-        background-position: 0% 50%;
-    }
-}
-
-.logo::after {
-    content: '💡 Switch Theme';
-    position: absolute;
-    bottom: -28px;
-    left: 50%;
-    transform: translateX(-50%) scale(0.8);
-    background: var(--bg-panel);
-    color: var(--text-secondary);
-    font-size: 9px;
-    padding: 2px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--border-color);
-    opacity: 0;
-    pointer-events: none;
-    transition: all 0.3s ease;
-    white-space: nowrap;
-    font-weight: 400;
-    -webkit-text-fill-color: var(--text-secondary);
-}
-
-.logo:hover::after {
-    opacity: 1;
-    transform: translateX(-50%) scale(1);
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
 }
 
 .logo-sub {
@@ -234,9 +236,10 @@ body {
     border-left: 1px solid var(--border-color);
     padding-left: 8px;
     transition: color 0.4s ease, border-color 0.4s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
-/* ✅ НОВОЕ: имя проекта */
 .logo-project-name {
     font-size: 12px;
     font-weight: 400;
@@ -252,30 +255,36 @@ body {
     letter-spacing: 0.2px;
     position: relative;
     top: 0.5px;
-    /* По умолчанию видим */
     display: inline-block;
     opacity: 1;
+    flex-shrink: 1;
+    min-width: 0;
 }
 
-/* При наведении на лого — имя становится читаемее */
 .logo:hover .logo-project-name {
     color: var(--text-primary);
 }
 
-/* Точка-модификатор "*" (modified) */
 .logo-project-name:empty {
     display: none;
 }
 
-/* ===== MAIN MENU ===== */
+/* ================================================================
+   MAIN MENU
+   ================================================================ */
+
 .main-menu {
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 
-/* ===== BUTTONS ===== */
+/* ================================================================
+   BUTTONS (header)
+   ================================================================ */
+
 .btn {
     padding: 6px 16px;
     border: none;
@@ -381,7 +390,10 @@ body {
     height: 30px;
 }
 
-/* ===== DROPDOWN WRAPPER ===== */
+/* ================================================================
+   DROPDOWN WRAPPER (header)
+   ================================================================ */
+
 .dropdown-wrapper {
     position: relative;
     display: inline-block;
@@ -395,7 +407,6 @@ body {
     transform: rotate(180deg);
 }
 
-/* ===== DROPDOWN MENU ГЛАВНОЕ МЕНЮ ===== */
 .dropdown-menu {
     position: absolute;
     top: calc(100% + 6px);
@@ -441,7 +452,10 @@ body {
     to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ===== ПУНКТЫ МЕНЮ В ГЛАВНОМ МЕНЮ ===== */
+/* ================================================================
+   DROPDOWN ITEMS (header)
+   ================================================================ */
+
 .dropdown-menu .dropdown-item,
 .dropdown-menu .recent-item {
     display: flex;
@@ -496,14 +510,8 @@ body {
 .dropdown-menu .recent-item:nth-child(15) { animation-delay: 0.45s; }
 
 @keyframes mainMenuItemSlide {
-    from {
-        opacity: 0;
-        transform: translateX(-10px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
+    from { opacity: 0; transform: translateX(-10px); }
+    to { opacity: 1; transform: translateX(0); }
 }
 
 .dropdown-menu .dropdown-item:hover,
@@ -604,7 +612,10 @@ body {
     animation-delay: 0.01s;
 }
 
-/* ===== WORKSPACE ===== */
+/* ================================================================
+   WORKSPACE
+   ================================================================ */
+
 .workspace {
     flex: 1;
     position: relative;
@@ -613,7 +624,10 @@ body {
     transition: background 0.4s ease;
 }
 
-/* ===== WINDOWS ===== */
+/* ================================================================
+   WINDOWS
+   ================================================================ */
+
 .window-container {
     position: absolute;
     background: var(--bg-panel);
@@ -629,17 +643,14 @@ body {
 }
 
 @keyframes windowAppear {
-    from {
-        opacity: 0;
-        transform: scale(0.9);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
 }
 
-/* ===== DIALOG ===== */
+/* ================================================================
+   DIALOG (unsaved)
+   ================================================================ */
+
 .unsaved-dialog-overlay {
     position: fixed;
     top: 0;
@@ -673,14 +684,8 @@ body {
 }
 
 @keyframes dialogAppear {
-    from {
-        opacity: 0;
-        transform: scale(0.9) translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
+    from { opacity: 0; transform: scale(0.9) translateY(20px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .unsaved-dialog .dialog-icon {
@@ -752,7 +757,10 @@ body {
     border-color: #55dd99;
 }
 
-/* ===== OTHER ===== */
+/* ================================================================
+   OTHER
+   ================================================================ */
+
 .hidden {
     display: none !important;
 }
@@ -762,43 +770,36 @@ body {
     outline-offset: 2px;
 }
 
-/* ===== АНИМАЦИЯ УВЕДОМЛЕНИЙ ===== */
+/* ================================================================
+   TOAST NOTIFICATION
+   ================================================================ */
+
 @keyframes slideInRight {
-    from {
-        opacity: 0;
-        transform: translateX(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
 }
 
 @keyframes slideOutRight {
-    from {
-        opacity: 1;
-        transform: translateX(0);
-    }
-    to {
-        opacity: 0;
-        transform: translateX(20px);
-    }
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(20px); }
 }
 
-/* ===== ПЛАВНЫЙ ПЕРЕХОД МЕЖДУ ТЕМАМИ ===== */
+/* ================================================================
+   ПЛАВНЫЙ ПЕРЕХОД МЕЖДУ ТЕМАМИ
+   ================================================================ */
+
 .theme-transition * {
-    transition: background 0.4s ease, 
-                color 0.4s ease, 
+    transition: background 0.4s ease,
+                color 0.4s ease,
                 border-color 0.4s ease,
                 box-shadow 0.4s ease,
                 opacity 0.4s ease !important;
 }
 
 /* ================================================================
-   ===== СПЕЦИАЛЬНЫЕ СТИЛИ ДЛЯ ОКОН =====
+   WINDOW CONTENT / HEADER / ROOT
    ================================================================ */
 
-/* ===== WINDOW CONTENT - ИСПРАВЛЕНИЕ ОТСТУПОВ ===== */
 .window-content {
     flex: 1 1 auto;
     display: flex !important;
@@ -815,132 +816,6 @@ body {
     transition: background 0.4s ease;
 }
 
-/* ===== CHART CONTAINER - ЗАНИМАЕТ ВСЕ МЕСТО ===== */
-.chart-container {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: var(--bg-dark);
-    display: block;
-    cursor: crosshair;
-    transition: background 0.4s ease;
-}
-
-.chart-container canvas {
-    width: 100%;
-    height: 100%;
-    display: block;
-    position: absolute;
-    top: 0;
-    left: 0;
-}
-
-.chart-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(13, 13, 13, 0.85);
-    pointer-events: none;
-    transition: opacity 0.3s ease;
-    border-radius: var(--radius);
-    z-index: 5;
-}
-
-.chart-overlay.hidden {
-    opacity: 0;
-    pointer-events: none;
-}
-
-.chart-placeholder {
-    text-align: center;
-    color: var(--text-muted);
-    animation: pulsePlaceholder 3s ease-in-out infinite;
-}
-
-.chart-placeholder .chart-icon {
-    font-size: 48px;
-    display: block;
-    opacity: 0.2;
-    margin-bottom: 8px;
-}
-
-.chart-placeholder p {
-    font-size: 14px;
-    margin-top: 4px;
-}
-
-.chart-placeholder .hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    opacity: 0.5;
-}
-
-@keyframes pulsePlaceholder {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 1; }
-}
-
-.chart-tooltip {
-    position: absolute;
-    background: rgba(26, 26, 26, 0.95);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius);
-    padding: 6px 12px;
-    font-size: 12px;
-    color: var(--text-primary);
-    pointer-events: none;
-    z-index: 100;
-    display: none;
-    flex-direction: column;
-    gap: 2px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-    min-width: 90px;
-    font-family: 'Courier New', monospace;
-}
-
-.chart-tooltip.visible {
-    display: flex;
-}
-
-.chart-tooltip .tooltip-x {
-    color: var(--text-secondary);
-    font-size: 10px;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 4px;
-    margin-bottom: 2px;
-}
-
-.chart-tooltip .tooltip-value {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    padding: 1px 0;
-}
-
-.chart-tooltip .tooltip-value .color-dot {
-    display: inline-block;
-    width: 10px;
-    height: 2px;
-    flex-shrink: 0;
-}
-
-.chart-tooltip .tooltip-value .label {
-    color: rgba(200, 184, 154, 0.5);
-    font-size: 9px;
-}
-
-.chart-tooltip .tooltip-value .value {
-    font-weight: 600;
-}
-
-/* ===== WINDOW HEADER ===== */
 .window-header {
     overflow: visible !important;
     box-sizing: border-box;
@@ -1008,7 +883,10 @@ body {
     box-sizing: border-box;
 }
 
-/* ===== DROPDOWN ВНУТРИ ОКОН ===== */
+/* ================================================================
+   DROPDOWN ВНУТРИ ОКОН (RenderWindow)
+   ================================================================ */
+
 .window-dropdown {
     z-index: 999999 !important;
     position: absolute;
@@ -1049,14 +927,8 @@ body {
 }
 
 @keyframes dropdownItemSlide {
-    from {
-        opacity: 0;
-        transform: translateX(-8px);
-    }
-    to {
-        opacity: 1;
-        transform: translateX(0);
-    }
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
 }
 
 .window-dropdown .dropdown-header {
@@ -1078,13 +950,11 @@ body {
     opacity: 0.3;
 }
 
-/* ===== WINDOW CONTEXT MENU ===== */
 .window-context-menu {
     z-index: 999999 !important;
     pointer-events: auto;
 }
 
-/* ===== DRAG GHOST ===== */
 .window-ghost {
     z-index: 9999999 !important;
 }
@@ -1094,7 +964,7 @@ body {
 }
 
 /* ================================================================
-   ===== СВЕТЛАЯ ТЕМА - ВСЕ ЭЛЕМЕНТЫ =====
+   СВЕТЛАЯ ТЕМА — ЯДРО
    ================================================================ */
 
 [data-theme="light"] .header {
@@ -1102,8 +972,28 @@ body {
     border-bottom-color: #baaa98;
 }
 
-[data-theme="light"] .logo:hover {
-    background: rgba(74, 63, 53, 0.08);
+[data-theme="light"] .logo-img:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(74, 63, 53, 0.45),
+        0 0 10px rgba(74, 63, 53, 0.12);
+}
+
+[data-theme="light"] .logo-img:active {
+    box-shadow:
+        inset 0 0 0 1px rgba(74, 63, 53, 0.7),
+        0 0 14px rgba(74, 63, 53, 0.2);
+}
+
+[data-theme="light"] .logo-text:hover {
+    box-shadow:
+        inset 0 0 0 1px rgba(74, 63, 53, 0.45),
+        0 0 10px rgba(74, 63, 53, 0.12);
+}
+
+[data-theme="light"] .logo-text:active {
+    box-shadow:
+        inset 0 0 0 1px rgba(74, 63, 53, 0.7),
+        0 0 14px rgba(74, 63, 53, 0.2);
 }
 
 [data-theme="light"] .logo-sub {
@@ -1228,37 +1118,6 @@ body {
 
 [data-theme="light"] .window-content {
     background: #e8ddd0;
-}
-
-[data-theme="light"] .chart-container {
-    background: #e8ddd0;
-}
-
-[data-theme="light"] .chart-container canvas {
-    background: #e8ddd0;
-}
-
-[data-theme="light"] .chart-overlay {
-    background: rgba(200, 190, 180, 0.85);
-}
-
-[data-theme="light"] .chart-placeholder {
-    color: #6a5a4a;
-}
-
-[data-theme="light"] .chart-tooltip {
-    background: rgba(200, 190, 180, 0.95);
-    border-color: #baaa98;
-    color: #4a3f35;
-}
-
-[data-theme="light"] .chart-tooltip .tooltip-x {
-    color: #6a5a4a;
-    border-bottom-color: #baaa98;
-}
-
-[data-theme="light"] .chart-tooltip .tooltip-value .label {
-    color: rgba(74, 63, 53, 0.5);
 }
 
 [data-theme="light"] .window-header {
@@ -1388,7 +1247,7 @@ body {
 }
 
 /* ================================================================
-   ===== АДАПТИВ =====
+   АДАПТИВ ЯДРА
    ================================================================ */
 
 @media (max-width: 1024px) {
@@ -1438,9 +1297,6 @@ body {
         max-width: 140px;
         padding-left: 8px;
         margin-left: 6px;
-    }
-    .logo::after {
-        display: none;
     }
     .btn {
         padding: 4px 12px;
@@ -1504,14 +1360,8 @@ body {
         animation: slideDownMobile 0.25s ease;
     }
     @keyframes slideDownMobile {
-        from {
-            opacity: 0;
-            transform: translateY(-10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
     }
 }
 
@@ -1538,15 +1388,11 @@ body {
     .logo-sub {
         display: none;
     }
-    /* ✅ Имя проекта — тоже компактнее */
     .logo-project-name {
         font-size: 10px;
         max-width: 90px;
         padding-left: 6px;
         margin-left: 4px;
-    }
-    .logo::after {
-        display: none;
     }
     .btn {
         padding: 3px 8px;
@@ -1580,7 +1426,7 @@ body {
     }
     .main-menu {
         gap: 2px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         justify-content: flex-end;
     }
     .dropdown-menu {
@@ -1712,7 +1558,6 @@ body {
     .logo-text {
         font-size: 11px;
     }
-    /* ✅ Самое узкое — имя проекта скрываем */
     .logo-project-name {
         display: none;
     }
@@ -1861,7 +1706,10 @@ body {
     }
 }
 
-/* ===== TOUCH-ОПТИМИЗАЦИЯ ===== */
+/* ================================================================
+   TOUCH-ОПТИМИЗАЦИЯ ЯДРА
+   ================================================================ */
+
 @media (hover: none) and (pointer: coarse) {
     .btn:hover {
         transform: none;
@@ -1908,19 +1756,16 @@ body {
 }
 
 /* ================================================================
-   ===== HISTORY DROPDOWN =====
+   HISTORY
    ================================================================ */
 
 #historyDropdown .dropdown-menu {
     right: 0;
     left: auto;
-
     min-width: 220px;
     max-width: 300px;
-
     max-height: calc(100vh - 80px);
     overflow: hidden;
-
     transform: translateY(-8px) scale(0.95);
     transform-origin: top right;
 }
@@ -1934,10 +1779,6 @@ body {
     right: 24px;
     transform: translateX(0);
 }
-
-/* ================================================================
-   ===== HISTORY: UNDO / REDO ROW =====
-   ================================================================ */
 
 #historyMenu .history-actions-row {
     display: flex;
@@ -1981,15 +1822,10 @@ body {
     color: var(--text-muted);
 }
 
-/* ================================================================
-   ===== HISTORY: СПИСОК =====
-   ================================================================ */
-
 #historyMenu .history-list {
     display: flex;
     flex-direction: column;
     padding: 4px 0;
-
     max-height: 98px;
     min-height: 0;
     overflow-y: auto;
@@ -2014,10 +1850,6 @@ body {
     color: var(--text-muted);
     text-align: center;
 }
-
-/* ================================================================
-   ===== HISTORY: СТРОКА ЗАПИСИ =====
-   ================================================================ */
 
 #historyMenu .history-entry {
     display: flex;
@@ -2083,10 +1915,6 @@ body {
     white-space: nowrap;
 }
 
-/* ================================================================
-   ===== HISTORY: КНОПКА JUMP TO =====
-   ================================================================ */
-
 #historyMenu .history-jump-btn {
     flex-shrink: 0;
     display: inline-flex;
@@ -2124,10 +1952,6 @@ body {
     pointer-events: none;
 }
 
-/* ================================================================
-   ===== HISTORY: FOOTER =====
-   ================================================================ */
-
 #historyMenu .history-footer {
     padding: 6px 12px 4px 12px;
     border-top: 1px solid var(--border-color);
@@ -2137,10 +1961,6 @@ body {
     text-align: center;
     letter-spacing: 0.3px;
 }
-
-/* ================================================================
-   ===== HISTORY: СВЕТЛАЯ ТЕМА =====
-   ================================================================ */
 
 [data-theme="light"] #historyMenu .history-action-btn {
     background: #c8baa8;
@@ -2194,10 +2014,6 @@ body {
 [data-theme="light"] #historyMenu .history-empty {
     color: #8a7a6a;
 }
-
-/* ================================================================
-   ===== HISTORY: АДАПТИВ =====
-   ================================================================ */
 
 @media (max-width: 768px) {
     #historyDropdown .dropdown-menu {
@@ -2266,7 +2082,7 @@ body {
 }
 
 /* ================================================================
-   WINDOW FOCUS — ЖИВАЯ ИКОНКА (very soft beige)
+   WINDOW FOCUS — ЖИВАЯ ИКОНКА
    ================================================================ */
 
 .window-container .window-icon {
@@ -2317,7 +2133,6 @@ body {
     color: #ece4d6;
     opacity: 0.85;
     transform: scale(1.05);
-
     animation: iconFocusBeigeSoft 0.75s cubic-bezier(0.22, 1.4, 0.36, 1) 1;
 }
 
@@ -2405,204 +2220,6 @@ body {
 }
 
 /* ================================================================
-   МЕНЮ "WINDOWS" — компактное
-   ================================================================ */
-
-#windowTypeMenu {
-    padding: 0 !important;
-    overflow: hidden !important;
-
-    width: max-content !important;
-    min-width: 180px !important;
-    max-width: 340px !important;
-}
-
-.window-menu__search {
-    padding: 6px 8px 6px;
-    border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.08));
-    background: var(--bg-panel, #1a1a1a);
-}
-
-.window-menu__search-input {
-    display: block;
-    width: 100%;
-    padding: 5px 8px;
-    border-radius: 4px;
-    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-    background: var(--bg-input, #2a2a2a);
-    color: var(--text-primary, #e0d8cc);
-    font-size: 11px;
-    font-family: inherit;
-    outline: none;
-    box-sizing: border-box;
-    transition: border-color 0.15s ease;
-}
-
-.window-menu__search-input:focus {
-    border-color: var(--accent-red, #cc2233);
-}
-
-.window-menu__scroll {
-    max-height: 380px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 2px 0 4px;
-}
-
-.window-menu__scroll::-webkit-scrollbar {
-    width: 6px;
-}
-.window-menu__scroll::-webkit-scrollbar-track {
-    background: transparent;
-}
-.window-menu__scroll::-webkit-scrollbar-thumb {
-    background: rgba(200, 184, 154, 0.15);
-    border-radius: 3px;
-}
-.window-menu__scroll::-webkit-scrollbar-thumb:hover {
-    background: rgba(200, 184, 154, 0.3);
-}
-
-.window-menu__section {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px 3px;
-    font-size: 9px;
-    font-weight: 700;
-    color: var(--text-muted, rgba(200, 184, 154, 0.5));
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.06));
-    margin-bottom: 2px;
-}
-
-.window-menu__group-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 4px 10px;
-    border: none;
-    background: transparent;
-    color: var(--text-secondary, #a09888);
-    font-size: 10px;
-    font-weight: 700;
-    font-family: inherit;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.12s ease;
-}
-
-.window-menu__group-header:hover {
-    background: var(--bg-hover, rgba(40, 40, 40, 0.4));
-    color: var(--text-primary, #e0d8cc);
-}
-
-.window-menu__group-arrow {
-    font-size: 8px;
-    flex-shrink: 0;
-    width: 10px;
-    text-align: center;
-    opacity: 0.7;
-}
-
-.window-menu__group-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.window-menu__count {
-    font-size: 9px;
-    font-weight: 500;
-    color: var(--text-muted, rgba(200, 184, 154, 0.35));
-    padding: 1px 5px;
-    border-radius: 8px;
-    background: rgba(200, 184, 154, 0.06);
-    flex-shrink: 0;
-    text-transform: none;
-    letter-spacing: 0;
-}
-
-.window-menu__item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 5px 10px 5px 12px;
-    border: none;
-    background: transparent;
-    color: var(--text-primary, #e0d8cc);
-    font-size: 12px;
-    font-family: inherit;
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.12s ease;
-}
-
-.window-menu__item:hover {
-    background: var(--bg-hover, rgba(40, 40, 40, 0.5));
-}
-
-.window-menu__item--minimized .window-menu__label {
-    color: var(--text-secondary, #a09888);
-    font-style: italic;
-}
-
-.window-menu__icon {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    fill: currentColor;
-    opacity: 0.85;
-}
-
-.window-menu__icon--emoji {
-    font-size: 13px;
-    line-height: 1;
-    text-align: center;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.85;
-}
-
-.window-menu__label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.window-menu__id {
-    font-size: 9px;
-    color: var(--text-muted, rgba(200, 184, 154, 0.4));
-    flex-shrink: 0;
-    font-family: monospace;
-}
-
-.window-menu__empty {
-    padding: 16px 12px;
-    color: var(--text-muted, rgba(200, 184, 154, 0.5));
-    font-size: 11px;
-    text-align: center;
-}
-
-.window-menu__group-items {
-    padding: 0;
-}
-
-.window-menu__group-items .window-menu__item {
-    padding-left: 22px;
-}
-
-/* ================================================================
    DRAG & DROP
    ================================================================ */
 
@@ -2634,14 +2251,8 @@ body {
 }
 
 @keyframes lsMinimizeOut {
-    0% {
-        transform: scale(1);
-        opacity: 1;
-    }
-    100% {
-        transform: scale(0.6);
-        opacity: 0;
-    }
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(0.6); opacity: 0; }
 }
 
 .window-container.ls-restoring {
@@ -2650,14 +2261,8 @@ body {
 }
 
 @keyframes lsRestoreIn {
-    0% {
-        transform: scale(0.6);
-        opacity: 0;
-    }
-    100% {
-        transform: scale(1);
-        opacity: 1;
-    }
+    0% { transform: scale(0.6); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
 }
 
 .window-root.ls-flip-in {
@@ -2666,12 +2271,8 @@ body {
 }
 
 @keyframes lsFullscreenIn {
-    0% {
-        transform: var(--ls-flip-from, scale(1));
-    }
-    100% {
-        transform: scale(1);
-    }
+    0% { transform: var(--ls-flip-from, scale(1)); }
+    100% { transform: scale(1); }
 }
 
 .window-root.ls-flip-out {
@@ -2680,12 +2281,8 @@ body {
 }
 
 @keyframes lsFullscreenOut {
-    0% {
-        transform: scale(1);
-    }
-    100% {
-        transform: var(--ls-flip-to, scale(1));
-    }
+    0% { transform: scale(1); }
+    100% { transform: var(--ls-flip-to, scale(1)); }
 }
 
 body.ls-fullscreen .window-container:not(.ls-fullscreen-target) {
@@ -2715,12 +2312,8 @@ body.ls-fullscreen .window-container.ls-fullscreen-target {
 }
 
 /* ================================================================
-   ===== HEADER ITEMS (v2.2.0) =====
+   HEADER ITEMS
    ================================================================ */
-
-/* --- .window-custom-buttons: контейнер SOFT-части шапки --- */
-/* Любой дочерний элемент (кнопка, dropdown, separator, кастомный) */
-/* должен быть flex-item'ом и не ломать layout.                   */
 
 .window-custom-buttons > * {
     flex-shrink: 0;
@@ -2728,17 +2321,11 @@ body.ls-fullscreen .window-container.ls-fullscreen-target {
     box-sizing: border-box;
 }
 
-/* Кастомный render() может вернуть <span>, <div>, <svg> */
-/* Убеждаемся, что они не схлопываются и центрируются по вертикали. */
 .window-custom-buttons > *:not(button) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
 }
-
-/* --- .header-separator: встроенный тип headerItems 'separator' --- */
-/* Ядро уже задаёт инлайн-стили через RenderWindow._buildSeparator, */
-/* но оставим CSS-fallback для случаев, когда инлайн снят.        */
 
 .header-separator {
     display: inline-block;
@@ -2754,17 +2341,11 @@ body.ls-fullscreen .window-container.ls-fullscreen-target {
     user-select: none;
 }
 
-/* В узких шапках разделитель может стать визуально лишним — */
-/* но пусть ядро само решает через hidden/width.              */
-
-/* Светлая тема — border-color уже тематический, */
-/* но на всякий случай дадим чуть более тёмный вариант. */
 [data-theme="light"] .header-separator {
     background: var(--border-color, #baaa98);
     opacity: 0.5;
 }
 
-/* --- Адаптив: в очень узких шапках разделитель сжимаем --- */
 @media (max-width: 480px) {
     .header-separator {
         width: 1px;
@@ -2774,17 +2355,280 @@ body.ls-fullscreen .window-container.ls-fullscreen-target {
     }
 }
 
-/* --- На тач-устройствах: кастомные элементы не должны ломать шапку --- */
 @media (hover: none) and (pointer: coarse) {
     .window-custom-buttons > * {
         min-height: 22px;
     }
 }
 
-/* --- prefers-reduced-motion: если кастомный элемент анимирован --- */
 @media (prefers-reduced-motion: reduce) {
     .window-custom-buttons > * {
         animation: none !important;
         transition: none !important;
+    }
+}
+
+/* ================================================================
+   HEADER COLLAPSE — ISLAND MODE
+   ================================================================ */
+
+body.header-collapsed .header {
+    position: fixed;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+
+    min-height: 36px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.18));
+    border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.18));
+
+    background: color-mix(in srgb, var(--bg-panel, #1a1a1a) 85%, transparent);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    box-shadow:
+        0 10px 32px rgba(0, 0, 0, 0.45),
+        0 0 24px rgba(200, 184, 154, 0.06);
+
+    flex-wrap: nowrap;
+    gap: 4px;
+    width: auto;
+    max-width: calc(100vw - 32px);
+    animation: none;
+    transition:
+        background 0.35s ease,
+        border-color 0.35s ease,
+        box-shadow 0.35s ease,
+        padding 0.35s ease,
+        border-radius 0.35s ease,
+        opacity 0.25s ease;
+}
+
+body.header-collapsed .header:hover {
+    box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.5),
+        0 0 30px rgba(200, 184, 154, 0.1);
+    border-color: rgba(200, 184, 154, 0.3);
+}
+
+body.header-collapsed .app-container {
+    padding-top: 0;
+}
+
+body.header-collapsed .workspace {
+    height: 100vh;
+}
+
+body.header-collapsed .logo {
+    padding: 2px 4px;
+    gap: 4px;
+    flex-wrap: nowrap;
+    background: transparent;
+}
+
+body.header-collapsed .logo-sub,
+body.header-collapsed .logo-project-name {
+    display: none !important;
+}
+
+body.header-collapsed .logo-text {
+    font-size: 13px;
+    letter-spacing: 0.3px;
+    padding: 2px 6px;
+}
+
+body.header-collapsed .logo-img {
+    padding: 1px;
+}
+
+body.header-collapsed .main-menu {
+    gap: 3px;
+    flex-wrap: nowrap;
+    margin-left: 4px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border-color, rgba(200, 184, 154, 0.14));
+}
+
+body.header-collapsed .btn {
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0;
+    gap: 0;
+    border-radius: 50%;
+    justify-content: center;
+    overflow: hidden;
+}
+
+body.header-collapsed .btn span:not(.icon-svg) {
+    display: none !important;
+}
+
+body.header-collapsed .btn .icon-svg {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
+body.header-collapsed .btn[disabled],
+body.header-collapsed .btn.is-hidden-in-island {
+    display: none !important;
+}
+
+body.header-collapsed .header {
+    animation: islandAppear 0.32s cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+
+@keyframes islandAppear {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(-10px) scale(0.94);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0) scale(1);
+    }
+}
+
+body.header-collapsed .btn:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 20px rgba(200, 184, 154, 0.12);
+}
+
+body.header-collapsed .btn:active {
+    transform: scale(0.94);
+}
+
+[data-theme="light"] body.header-collapsed .header,
+body.header-collapsed[data-theme="light"] .header {
+    background: color-mix(in srgb, #d5c8b8 88%, transparent);
+    border-color: rgba(74, 63, 53, 0.2);
+    box-shadow:
+        0 10px 32px rgba(0, 0, 0, 0.12),
+        0 0 24px rgba(74, 63, 53, 0.06);
+}
+
+@media (max-width: 480px) {
+    body.header-collapsed .header {
+        top: 6px;
+        height: 32px;
+        padding: 0 6px;
+        max-width: calc(100vw - 16px);
+    }
+    body.header-collapsed .btn {
+        width: 24px;
+        min-width: 24px;
+        height: 24px;
+    }
+    body.header-collapsed .btn .icon-svg {
+        width: 12px;
+        height: 12px;
+    }
+    body.header-collapsed .logo-text {
+        font-size: 11px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body.header-collapsed .header,
+    body.header-collapsed .btn {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* ================================================================
+   COMPACT HEADER MODE — только иконки
+   ================================================================ */
+
+.header.is-compact .btn {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    gap: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    justify-content: center;
+}
+
+.header.is-compact .btn > span:not(.icon-svg),
+.header.is-compact .btn > .btn-label {
+    display: none !important;
+}
+
+.header.is-compact .btn .icon-svg {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
+.header.is-compact {
+    padding: 4px 12px;
+    gap: 4px;
+}
+
+.header.is-compact .main-menu {
+    gap: 4px;
+}
+
+.header.is-compact .logo-sub,
+.header.is-compact .logo-project-name {
+    display: none !important;
+}
+
+.header.is-compact .logo {
+    gap: 6px;
+    padding: 4px 6px;
+}
+
+.header.is-compact .btn:hover {
+    transform: none;
+    box-shadow: 0 0 20px rgba(200, 184, 154, 0.12);
+}
+
+.header.is-compact .btn:active {
+    transform: scale(0.95);
+}
+
+.header.is-compact .btn::before,
+.header.is-compact .btn::after {
+    display: none;
+}
+
+@media (max-width: 480px) {
+    .header.is-compact {
+        padding: 3px 8px;
+        gap: 3px;
+    }
+    .header.is-compact .btn {
+        width: 28px;
+        min-width: 28px;
+        height: 28px;
+    }
+    .header.is-compact .btn .icon-svg {
+        width: 13px;
+        height: 13px;
+    }
+    .header.is-compact .logo-text {
+        font-size: 13px;
+    }
+}
+
+@media (max-width: 360px) {
+    .header.is-compact .logo-text {
+        font-size: 11px;
+    }
+    .header.is-compact .btn {
+        width: 26px;
+        min-width: 26px;
+        height: 26px;
+    }
+    .header.is-compact .btn .icon-svg {
+        width: 12px;
+        height: 12px;
     }
 }

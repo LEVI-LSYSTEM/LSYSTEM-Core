@@ -1,45 +1,33 @@
 // core/API/BaseWindowInstance.js
-// Версия 2.4.0
-// - Feature: static get dataMenu() — окно само решает содержимое data-dropdown (📊).
-//            Три режима:
-//              1. ничего не объявлено → сток ядра
-//              2. static get dataMenu() → массив или функция от дефолта
-//              3. onDataMenuOpen(anchorEl, dropdownEl) → полный контроль
-// - Feature: _closeDataMenu(), _renderDefaultDataMenu() — публичные хелперы.
-// - v2.3.0: recordHistory(label).
-// - v2.2.0: прокси-методы BaseWindow API, отложенные drag-source и headerItems-мутации.
-// - v2.1.1: публичные геттеры getSlotId / getId / getType / getTitle / getIcon / getBaseWindow.
-//
-// ВАЖНО ПРО ПОРЯДОК ВЫЗОВОВ
-//
-//   BaseWindowInstance.constructor:
-//     1) _buildRoot()
-//     2) _setupChannels()
-//     3) buildContent()            ← здесь this._baseWindow ещё null
-//     4) if (this._baseWindow) _initAfterBaseWindow()
-//
-//   _baseWindow присваивается ИЗВНЕ (WindowRegistry / LayoutManager) уже
-//   ПОСЛЕ конструктора, через instance._baseWindow = baseWindow, и затем
-//   вызывается _initAfterBaseWindow() повторно, если он не был вызван.
-//
-// ПРО dataMenu (v2.4.0)
-//
-//   static get dataMenu() — три формы:
-//     null          → сток ядра: Импорт / Экспорт / ─ / Новый слот / Привязать
-//     Array         → полная замена
-//     function(def) → принимает дефолтный массив, возвращает изменённый
-//
-//   Если у окна определён onDataMenuOpen(anchorEl, dropdownEl) — он получает
-//   полный контроль. Ядро вызывает его вместо рендера по dataMenu.
-//
-//   Хелперы для окна:
-//     this._closeDataMenu()            — закрыть data-dropdown
-//     this._renderDefaultDataMenu(el)  — нарисовать стоковый набор в el
+// Версия 5.1.0
+// - DEFAULT_SYSTEM_HEADER_ITEMS без pin. Порядок определяет положение.
+// - Остальное без изменений.
 
 (function() {
     'use strict';
 
-    console.log('[BaseWindowInstance] Loading v2.4.0...');
+    var DEFAULT_SYSTEM_HEADER_ITEMS = [
+        { id: 'sys-data',       type: 'sys-data' },
+        { id: 'sys-changeType', type: 'sys-changeType' },
+        { id: 'sys-layout',     type: 'sys-layout' },
+        { type: 'separator' },
+        { id: 'sys-minimize',   type: 'sys-minimize' },
+        { id: 'sys-fullscreen', type: 'sys-fullscreen' },
+        { id: 'sys-close',      type: 'sys-close' }
+    ];
+
+    function cloneSystemItems() {
+        var out = [];
+        for (var i = 0; i < DEFAULT_SYSTEM_HEADER_ITEMS.length; i++) {
+            var item = DEFAULT_SYSTEM_HEADER_ITEMS[i];
+            var copy = {};
+            for (var k in item) {
+                if (Object.prototype.hasOwnProperty.call(item, k)) copy[k] = item[k];
+            }
+            out.push(copy);
+        }
+        return out;
+    }
 
     class BaseWindowInstance {
         constructor(container, windowData, options = {}) {
@@ -75,18 +63,19 @@
             this._hotkeyUnsub = null;
             this._requestUnsubs = [];
 
-            // runtime-мутации headerItems
             this._headerItemsRuntime = null;
 
-            // состояние polling drag-source
             this._dragSourcesTimer = null;
             this._dragSourcesAttempts = 0;
             this._dragSourcesMaxAttempts = 20;
 
-            // отложенные операции, требующие _baseWindow
             this._pendingDragSources = [];
             this._pendingHeaderOps = [];
             this._initAfterBaseWindowDone = false;
+
+            this._dragGuardInstalled = false;
+            this._dragGuardCleanups = [];
+            this._activePointerDrag = null;
 
             this._buildRoot();
             this._setupChannels();
@@ -95,21 +84,7 @@
             if (this._baseWindow) {
                 this._initAfterBaseWindow();
             }
-
-            console.log('[BaseWindowInstance] Created:', this.type, '(', this.id, ')');
         }
-
-        // ============================================================
-        // 0. STATIC: dataMenu
-        // ============================================================
-        //
-        // Переопределяется в окне. Формы:
-        //   null          → сток ядра
-        //   Array         → полная замена
-        //   function(def) → модифицировать дефолт
-        //
-        // Если нужно полностью контролировать рендер — определи метод
-        // onDataMenuOpen(anchorEl, dropdownEl) вместо/помимо этого.
 
         static get dataMenu() {
             return null;
@@ -146,16 +121,162 @@
 
             this._root.appendChild(this._content);
             this.container.appendChild(this._root);
+
+            this._installDragInterruptionGuard();
         }
 
         // ============================================================
-        // 2. КОНТЕНТ
+        // 2. DRAG INTERRUPTION GUARD
+        // ============================================================
+
+        _installDragInterruptionGuard() {
+            if (this._dragGuardInstalled) return;
+            this._dragGuardInstalled = true;
+
+            const root = this._root;
+            if (!root) return;
+
+            this._activePointerDrag = null;
+
+            const isExternalDrag = () => {
+                return !!(window.dragController && window.dragController.isDragging());
+            };
+
+            const onDown = (e) => {
+                if (this._isDestroyed) return;
+                if (isExternalDrag()) return;
+                if (e.button !== 0 && e.button !== 1 && e.button !== 2) return;
+                if (!root.contains(e.target)) return;
+
+                this._activePointerDrag = {
+                    target: e.target,
+                    button: e.button,
+                    buttons: e.buttons,
+                    pointerId: (e.pointerId != null) ? e.pointerId : null,
+                    pointerType: e.pointerType || 'mouse',
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startedAt: performance.now()
+                };
+            };
+
+            const releaseActiveDrag = (reason) => {
+                if (isExternalDrag()) return;
+
+                const drag = this._activePointerDrag;
+                if (!drag) return;
+                this._activePointerDrag = null;
+
+                const target = drag.target;
+
+                const opts = {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                    clientX: drag.startX,
+                    clientY: drag.startY,
+                    screenX: 0,
+                    screenY: 0,
+                    button: drag.button,
+                    buttons: 0,
+                    pointerId: drag.pointerId != null ? drag.pointerId : 1,
+                    pointerType: drag.pointerType,
+                    isPrimary: true,
+                    view: window
+                };
+
+                const dispatchTarget = (target && target.isConnected) ? target : document;
+
+                try {
+                    if (typeof PointerEvent === 'function') {
+                        dispatchTarget.dispatchEvent(new PointerEvent('pointerup', opts));
+                        dispatchTarget.dispatchEvent(new PointerEvent('pointercancel', opts));
+                    }
+                } catch (err) {}
+
+                try {
+                    dispatchTarget.dispatchEvent(new MouseEvent('mouseup', opts));
+                    dispatchTarget.dispatchEvent(new MouseEvent('mouseleave', opts));
+                } catch (err) {}
+
+                this._forceResetWindowInteractions(reason);
+            };
+
+            const onPointerUpAnywhere = () => {
+                this._activePointerDrag = null;
+            };
+
+            const onMouseLeaveRoot = (e) => {
+                if (isExternalDrag()) return;
+                if (!this._activePointerDrag) return;
+                if (!root.contains(e.relatedTarget)) {
+                    releaseActiveDrag('mouseleave');
+                }
+            };
+
+            const onWindowBlur = () => {
+                if (isExternalDrag()) return;
+                releaseActiveDrag('window-blur');
+            };
+
+            const onVisibilityChange = () => {
+                if (document.hidden) {
+                    if (isExternalDrag()) return;
+                    releaseActiveDrag('visibility-hidden');
+                }
+            };
+
+            const onKeyDown = (e) => {
+                if (e.key === 'Escape') {
+                    if (isExternalDrag()) return;
+                    releaseActiveDrag('escape');
+                }
+            };
+
+            root.addEventListener('mousedown', onDown, true);
+            root.addEventListener('pointerdown', onDown, true);
+            root.addEventListener('mouseleave', onMouseLeaveRoot, true);
+
+            document.addEventListener('pointerup', onPointerUpAnywhere, true);
+            document.addEventListener('mouseup', onPointerUpAnywhere, true);
+
+            window.addEventListener('blur', onWindowBlur);
+            document.addEventListener('visibilitychange', onVisibilityChange);
+            document.addEventListener('keydown', onKeyDown, true);
+
+            this._dragGuardCleanups = [
+                () => root.removeEventListener('mousedown', onDown, true),
+                () => root.removeEventListener('pointerdown', onDown, true),
+                () => root.removeEventListener('mouseleave', onMouseLeaveRoot, true),
+                () => document.removeEventListener('pointerup', onPointerUpAnywhere, true),
+                () => document.removeEventListener('mouseup', onPointerUpAnywhere, true),
+                () => window.removeEventListener('blur', onWindowBlur),
+                () => document.removeEventListener('visibilitychange', onVisibilityChange),
+                () => document.removeEventListener('keydown', onKeyDown, true)
+            ];
+        }
+
+        _forceResetWindowInteractions(reason) {
+            if (this._isDestroyed) return;
+            if (window.dragController && window.dragController.isDragging()) return;
+
+            if (typeof this.onExternalInteractionAbort === 'function') {
+                try {
+                    this.onExternalInteractionAbort(reason);
+                } catch (e) {
+                    console.error('[BaseWindowInstance] onExternalInteractionAbort error:', e);
+                }
+            }
+        }
+
+        // ============================================================
+        // 3. КОНТЕНТ
         // ============================================================
 
         buildContent(el) {}
 
         // ============================================================
-        // 3. ПОДПИСКИ
+        // 4. ПОДПИСКИ НА КАНАЛЫ
         // ============================================================
 
         _setupChannels() {
@@ -183,20 +304,15 @@
                 );
                 this._channelUnsubs.push(unsub);
             }
-
-            console.log(`[BaseWindowInstance #${this.id}] subscribed to`, channels);
         }
 
         // ============================================================
-        // 4. ИНИЦИАЛИЗАЦИЯ ПОСЛЕ BASE WINDOW
+        // 5. ИНИЦИАЛИЗАЦИЯ ПОСЛЕ BASE WINDOW
         // ============================================================
 
         onBaseWindowAttached(baseWindow) {
             this._baseWindow = baseWindow || this._baseWindow;
-            if (!this._baseWindow) {
-                console.warn('[BaseWindowInstance] onBaseWindowAttached: no baseWindow');
-                return;
-            }
+            if (!this._baseWindow) return;
             this._initAfterBaseWindow();
         }
 
@@ -226,12 +342,10 @@
                     console.error('[BaseWindowInstance] onReady error:', e);
                 }
             }
-
-            console.log(`[BaseWindowInstance #${this.id}] ready`);
         }
 
         // ============================================================
-        // 4.1. HEADER ITEMS
+        // 6. HEADER ITEMS
         // ============================================================
 
         getHeaderItems() {
@@ -241,10 +355,16 @@
 
             const menu = this.constructor.menu;
             if (!menu || !Array.isArray(menu.headerItems)) {
+                return cloneSystemItems();
+            }
+
+            const filtered = menu.headerItems.filter(x => x && typeof x === 'object');
+
+            if (filtered.length === 0 && menu.systemControls !== true) {
                 return [];
             }
 
-            return menu.headerItems.filter(x => x && typeof x === 'object');
+            return filtered;
         }
 
         _applyHeaderItems() {
@@ -262,10 +382,10 @@
                 return true;
             }
 
-            const rw = this._baseWindow.getRenderWindow?.();
-            if (rw && typeof rw.setHeaderItems === 'function') {
+            const header = this._baseWindow.getHeader && this._baseWindow.getHeader();
+            if (header && typeof header.setItems === 'function') {
                 try {
-                    rw.setHeaderItems(items);
+                    header.setItems(items);
                 } catch (e) {
                     console.error('[BaseWindowInstance] _applyHeaderItems error:', e);
                     return false;
@@ -359,16 +479,19 @@
 
         getRenderedHeaderItems() {
             if (!this._baseWindow) return [];
-            const rw = this._baseWindow.getRenderWindow?.();
-            if (!rw || typeof rw.getHeaderItems !== 'function') return [];
-            return rw.getHeaderItems();
+
+            const header = this._baseWindow.getHeader && this._baseWindow.getHeader();
+            if (!header || typeof header.getRenderedItems !== 'function') return [];
+
+            return header.getRenderedItems();
         }
 
         refreshDropdowns() {
             if (!this._baseWindow) return;
-            const rw = this._baseWindow.getRenderWindow?.();
-            if (rw && typeof rw.refreshDropdowns === 'function') {
-                try { rw.refreshDropdowns(); } catch (e) {}
+
+            const header = this._baseWindow.getHeader && this._baseWindow.getHeader();
+            if (header && typeof header.refreshDropdowns === 'function') {
+                try { header.refreshDropdowns(); } catch (e) {}
             }
         }
 
@@ -377,22 +500,8 @@
         }
 
         // ============================================================
-        // 4.2. DATA MENU (📊)
+        // 7. DATA MENU
         // ============================================================
-        //
-        // Разрешение содержимого data-dropdown. Возвращает массив пунктов.
-        //
-        // Форматы пункта:
-        //   { divider: true }
-        //   { header: 'текст' }
-        //   { icon, label, action, value?, payload?, danger?, disabled? }
-        //   { icon, label, onClick: (item, ctx) => void }
-        //
-        // Спец-action'ы ядра (обрабатываются в RenderWindow._buildDataMenuItem):
-        //   'import'    — Импорт JSON
-        //   'export'    — Экспорт JSON
-        //   'new-slot'  — Новый слот
-        //   'attach'    — Привязать (submenu)
 
         _resolveDataMenu() {
             const def = this.constructor.dataMenu;
@@ -427,109 +536,217 @@
                 && this.onDataMenuOpen !== BaseWindowInstance.prototype.onDataMenuOpen;
         }
 
-        /**
-         * Заглушка. Переопределяется в окне для полного контроля над
-         * data-dropdown (📊). Получает:
-         *   anchorEl    — кнопка 📊 (может быть null)
-         *   dropdownEl  — пустой <div class="window-dropdown data-dropdown">
-         *                 (уже display:block, opacity → 1 через rAF)
-         *
-         * Окно само наполняет dropdownEl. Ядро закроет dropdown по клику вне.
-         * Для ручного закрытия — this._closeDataMenu().
-         */
         onDataMenuOpen(anchorEl, dropdownEl) {
             // no-op
         }
 
-        /**
-         * Закрыть data-dropdown. Используется из onDataMenuOpen.
-         */
         _closeDataMenu() {
             if (!this._baseWindow) return;
-            const rw = this._baseWindow.getRenderWindow?.();
-            if (rw && typeof rw._closeDataMenu === 'function') {
-                try { rw._closeDataMenu(); } catch (e) {}
-            }
-        }
 
-        /**
-         * Нарисовать стоковый набор (Импорт / Экспорт / ─ / Новый слот / Привязать)
-         * в переданный dropdownEl. Полезно в onDataMenuOpen, если хочется
-         * начать со стока и добавить свои.
-         */
-        _renderDefaultDataMenu(dropdownEl) {
-            if (!dropdownEl) return;
-            if (!this._baseWindow) return;
+            const header = this._baseWindow.getHeader && this._baseWindow.getHeader();
+            if (!header || typeof header.getRenderedItems !== 'function') return;
 
-            const rw = this._baseWindow.getRenderWindow?.();
-            if (!rw || typeof rw._buildDataMenuItem !== 'function') return;
-
-            const items = this._resolveDataMenu();
-            for (const item of items) {
-                const el = rw._buildDataMenuItem(item, this);
-                if (el) dropdownEl.appendChild(el);
+            const items = header.getRenderedItems();
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (!item || !item.el) continue;
+                if (typeof item.el._closeDropdown === 'function') {
+                    try { item.el._closeDropdown(); } catch (e) {}
+                }
             }
         }
 
         // ============================================================
-        // 5. DROP-TARGET
+        // 8. DROP TARGET
         // ============================================================
 
         _registerDropTarget() {
-            if (!this._baseWindow || typeof this._baseWindow.registerDropTarget !== 'function') {
-                return;
-            }
-
             const dropConfig = this.constructor.dropTarget;
-            if (!dropConfig || typeof dropConfig !== 'object') {
-                return;
-            }
+            if (!dropConfig || typeof dropConfig !== 'object') return;
 
             const hasOnDrop = typeof this.onDrop === 'function'
                 && this.onDrop !== BaseWindowInstance.prototype.onDrop;
 
             if (!hasOnDrop) return;
 
-            const unsub = this._baseWindow.registerDropTarget({
-                acceptExtensions: dropConfig.acceptExtensions,
-                accept: dropConfig.accept,
-                multiple: dropConfig.multiple !== false,
+            if (!window.dragController) {
+                console.warn('[BaseWindowInstance] dragController not available');
+                return;
+            }
 
-                onDrop: async (files, meta) => {
-                    if (this._isDestroyed) return false;
-                    try {
-                        const result = await Promise.resolve(this.onDrop(files, meta));
-                        return result !== false;
-                    } catch (e) {
-                        console.error('[BaseWindowInstance] onDrop error:', e);
-                        return false;
+            const owner = this;
+
+            this._dropUnsub = window.dragController.registerTarget({
+                owner: owner,
+                element: this._root,
+
+                accept: (session) => {
+                    if (owner._isDestroyed) return false;
+                    if (session.source === owner) return false;
+
+                    if (session.kind === 'files') {
+                        const cfg = owner.constructor.dropTarget || {};
+                        const multiple = cfg.multiple !== false;
+                        if (!multiple && session.files && session.files.length > 1) return false;
+                        if (session.files && session.files.length > 0) {
+                            return owner._filterFiles(session.files, cfg).length > 0;
+                        }
                     }
+
+                    return true;
                 },
 
-                onDragEnter: (meta) => {
-                    if (this._isDestroyed) return;
-                    if (typeof this.onDragEnter === 'function') {
-                        try { this.onDragEnter(meta); } catch (e) {
+                onEnter: (session) => {
+                    if (owner._isDestroyed) return;
+                    const meta = owner._buildSessionMeta(session);
+                    if (typeof owner.onDragEnter === 'function') {
+                        try { owner.onDragEnter(meta); } catch (e) {
                             console.error('[BaseWindowInstance] onDragEnter error:', e);
                         }
                     }
                 },
 
-                onDragLeave: () => {
-                    if (this._isDestroyed) return;
-                    if (typeof this.onDragLeave === 'function') {
-                        try { this.onDragLeave(); } catch (e) {
+                onLeave: () => {
+                    if (owner._isDestroyed) return;
+                    if (typeof owner.onDragLeave === 'function') {
+                        try { owner.onDragLeave(); } catch (e) {
                             console.error('[BaseWindowInstance] onDragLeave error:', e);
                         }
                     }
+                },
+
+                onDrop: async (session) => {
+                    if (owner._isDestroyed) return false;
+
+                    const meta = owner._buildSessionMeta(session);
+                    let files = session.files || [];
+
+                    if (session.kind === 'files' && files.length > 0) {
+                        const cfg = owner.constructor.dropTarget || {};
+                        files = owner._filterFiles(files, cfg);
+                        if (files.length === 0) return false;
+                    }
+
+                    if (typeof owner.onDrop !== 'function') return false;
+                    if (owner.onDrop === BaseWindowInstance.prototype.onDrop) return false;
+
+                    try {
+                        const result = await Promise.resolve(owner.onDrop(files, meta));
+                        return result !== false;
+                    } catch (e) {
+                        console.error('[BaseWindowInstance] onDrop error:', e);
+                        return false;
+                    }
                 }
             });
+        }
 
-            this._dropUnsub = unsub;
+        _buildSessionMeta(session) {
+            if (!session) return { source: 'unknown' };
+
+            if (session.kind === 'files') {
+                const names = [];
+                const types = [];
+                const files = session.files || [];
+                for (let i = 0; i < files.length; i++) {
+                    names.push(files[i].name || '');
+                    types.push(files[i].type || '');
+                }
+                return {
+                    source: 'files',
+                    fileNames: names,
+                    fileTypes: types
+                };
+            }
+
+            const srcOwner = session.source && session.source.descriptor
+                ? session.source.descriptor.owner
+                : null;
+
+            return {
+                source: 'internal',
+                sourceWindowId: srcOwner ? srcOwner.id : null,
+                sourceType: srcOwner ? srcOwner.type : null,
+                channel: session.channel,
+                payload: session.payload
+            };
+        }
+
+        _filterFiles(files, config) {
+            const { accept, acceptExtensions } = config || {};
+            if (!accept && !acceptExtensions) return files;
+
+            const extList = acceptExtensions
+                ? String(acceptExtensions).split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+                : null;
+
+            const acceptList = Array.isArray(accept)
+                ? accept
+                : (typeof accept === 'string' ? [accept] : []);
+
+            return files.filter(file => {
+                const name = (file.name || '').toLowerCase();
+                const rawMime = (file.type || '').toLowerCase();
+                const mime = rawMime.split(';')[0].trim();
+
+                if (extList && extList.length > 0) {
+                    if (extList.some(ext => name.endsWith(ext))) return true;
+                }
+
+                if (acceptList.length > 0) {
+                    for (const a of acceptList) {
+                        const rule = String(a).toLowerCase().trim();
+                        if (rule === '*') return true;
+                        if (rule.endsWith('/*')) {
+                            const prefix = rule.slice(0, -1);
+                            if (mime.startsWith(prefix)) return true;
+                        } else if (rule.startsWith('.')) {
+                            if (name.endsWith(rule)) return true;
+                        } else if (rule === mime) {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        _callOnDragEnter(meta) {
+            if (this._isDestroyed) return true;
+            if (typeof this.onDragEnter === 'function') {
+                try { this.onDragEnter(meta); } catch (e) {
+                    console.error('[BaseWindowInstance] onDragEnter error:', e);
+                }
+            }
+            return true;
+        }
+
+        _callOnDragLeave() {
+            if (this._isDestroyed) return;
+            if (typeof this.onDragLeave === 'function') {
+                try { this.onDragLeave(); } catch (e) {
+                    console.error('[BaseWindowInstance] onDragLeave error:', e);
+                }
+            }
+        }
+
+        async _callOnDrop(files, meta) {
+            if (this._isDestroyed) return null;
+            if (typeof this.onDrop !== 'function') return null;
+            if (this.onDrop === BaseWindowInstance.prototype.onDrop) return null;
+
+            try {
+                const result = await Promise.resolve(this.onDrop(files, meta));
+                return result;
+            } catch (e) {
+                console.error('[BaseWindowInstance] onDrop error:', e);
+                return null;
+            }
         }
 
         // ============================================================
-        // 6. DRAG-SOURCE
+        // 9. DRAG SOURCE
         // ============================================================
 
         _registerMenuDragSources() {
@@ -555,8 +772,14 @@
                 return;
             }
 
-            const headerEl = this._baseWindow.getRenderWindow?.()?.getHeader?.();
-            if (!headerEl) {
+            const header = this._baseWindow.getHeader && this._baseWindow.getHeader();
+            const headerElement = header && header.nodeType === 1
+                ? header
+                : (this._baseWindow.getRenderWindow && this._baseWindow.getRenderWindow()?.getHeader
+                    ? this._baseWindow.getRenderWindow().getHeader()
+                    : null);
+
+            if (!headerElement) {
                 this._dragSourcesAttempts++;
                 this._dragSourcesTimer = setTimeout(
                     () => {
@@ -574,7 +797,7 @@
             let allFound = true;
             for (const it of dragItems) {
                 const sel = `.window-action-btn[data-action="${this._cssEscape(it.action)}"]`;
-                if (!headerEl.querySelector(sel)) {
+                if (!headerElement.querySelector(sel)) {
                     allFound = false;
                     break;
                 }
@@ -597,7 +820,7 @@
             for (const it of dragItems) {
                 const action = it.action;
                 const sel = `.window-action-btn[data-action="${this._cssEscape(action)}"]`;
-                const btn = headerEl.querySelector(sel);
+                const btn = headerElement.querySelector(sel);
                 if (!btn) continue;
 
                 const ds = it.dragSource;
@@ -610,8 +833,6 @@
                 });
 
                 this._dragUnsubs.push(unsub);
-
-                console.log(`[BaseWindowInstance #${this.id}] drag-source registered on "${action}"`);
             }
         }
 
@@ -636,10 +857,6 @@
                     console.error('[BaseWindowInstance] pending makeDraggable error:', e);
                 }
             }
-
-            if (queue.length > 0) {
-                console.log(`[BaseWindowInstance #${this.id}] applied ${queue.length} pending drag-source(s)`);
-            }
         }
 
         _cssEscape(s) {
@@ -650,7 +867,7 @@
         }
 
         // ============================================================
-        // 7. HOTKEYS
+        // 10. HOTKEYS
         // ============================================================
 
         _registerHotkeys() {
@@ -683,7 +900,7 @@
         }
 
         // ============================================================
-        // 8. СЛОТЫ / DATA
+        // 11. СЛОТЫ / DATA
         // ============================================================
 
         _loadFromSlot() {
@@ -771,7 +988,7 @@
         }
 
         // ============================================================
-        // 9. ХУКИ
+        // 12. ХУКИ
         // ============================================================
 
         onThemeChange(theme) {
@@ -832,7 +1049,7 @@
         onExport() { return null; }
 
         // ============================================================
-        // 10. ПРОКСИ-МЕТОДЫ к BaseWindow
+        // 13. ПРОКСИ-МЕТОДЫ
         // ============================================================
 
         getSlotId() {
@@ -999,10 +1216,6 @@
             }
         }
 
-        // ============================================================
-        // 10.1. ИСТОРИЯ
-        // ============================================================
-
         recordHistory(label = 'Действие') {
             if (this._isDestroyed) return false;
 
@@ -1062,7 +1275,7 @@
         }
 
         // ============================================================
-        // 11. MESSAGEBUS
+        // 14. MESSAGEBUS
         // ============================================================
 
         sendMessage(channel, data, targetId = null) {
@@ -1104,7 +1317,7 @@
         }
 
         // ============================================================
-        // 12. KEYBOARD CAPTURE
+        // 15. KEYBOARD CAPTURE
         // ============================================================
 
         captureKeyboard() {
@@ -1118,7 +1331,7 @@
         }
 
         // ============================================================
-        // 13. ПОИСК ОКОН
+        // 16. ПОИСК ОКОН
         // ============================================================
 
         findWindowByType(typeId) {
@@ -1175,7 +1388,7 @@
         }
 
         // ============================================================
-        // 14. DRAG SOURCE
+        // 17. DRAG SOURCE — публичный хелпер
         // ============================================================
 
         makeDraggable(element, opts = {}) {
@@ -1199,7 +1412,7 @@
         }
 
         // ============================================================
-        // 15. УТИЛИТЫ
+        // 18. УТИЛИТЫ
         // ============================================================
 
         escapeHtml(s) {
@@ -1213,13 +1426,22 @@
         }
 
         // ============================================================
-        // 16. DESTROY
+        // 19. DESTROY
         // ============================================================
 
         destroy() {
             if (this._isDestroyed) return;
             this._isDestroyed = true;
             this._isReady = false;
+
+            if (this._dragGuardCleanups) {
+                for (const fn of this._dragGuardCleanups) {
+                    try { fn(); } catch (e) {}
+                }
+                this._dragGuardCleanups = [];
+            }
+            this._activePointerDrag = null;
+            this._dragGuardInstalled = false;
 
             if (this._dragSourcesTimer) {
                 clearTimeout(this._dragSourcesTimer);
@@ -1288,34 +1510,33 @@
             this._root = null;
             this._content = null;
             this._headerItemsRuntime = null;
-
-            console.log(`[BaseWindowInstance] Destroyed: ${this.type} (${this.id})`);
         }
     }
 
     // ============================================================
-    // 17. СТАТИЧЕСКИЙ ПРОКИД
+    // СТАТИЧЕСКИЙ ПРОКИД
     // ============================================================
 
     BaseWindowInstance.registerHeaderItemType = function(type, builder) {
-        const RW = window.RenderWindow;
-        if (!RW || typeof RW.registerHeaderItemType !== 'function') {
-            console.error('[BaseWindowInstance] RenderWindow not available');
+        if (!window.HeaderController || typeof window.HeaderController.registerHeaderItemType !== 'function') {
+            console.error('[BaseWindowInstance] HeaderController not available');
             return false;
         }
-        return RW.registerHeaderItemType(type, builder);
+        return window.HeaderController.registerHeaderItemType(type, builder);
     };
 
     BaseWindowInstance.unregisterHeaderItemType = function(type) {
-        const RW = window.RenderWindow;
-        if (!RW || typeof RW.unregisterHeaderItemType !== 'function') return false;
-        return RW.unregisterHeaderItemType(type);
+        if (!window.HeaderController || typeof window.HeaderController.unregisterHeaderItemType !== 'function') {
+            return false;
+        }
+        return window.HeaderController.unregisterHeaderItemType(type);
     };
 
     BaseWindowInstance.getHeaderItemTypes = function() {
-        const RW = window.RenderWindow;
-        if (!RW || typeof RW.getHeaderItemTypes !== 'function') return [];
-        return RW.getHeaderItemTypes();
+        if (!window.HeaderController || typeof window.HeaderController.getHeaderItemTypes !== 'function') {
+            return [];
+        }
+        return window.HeaderController.getHeaderItemTypes();
     };
 
     // ============================================================
@@ -1328,7 +1549,6 @@
 
     if (typeof window !== 'undefined') {
         window.BaseWindowInstance = BaseWindowInstance;
-        console.log('[BaseWindowInstance] Registered globally v2.4.0');
     }
 
 })();

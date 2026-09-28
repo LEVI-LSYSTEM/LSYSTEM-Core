@@ -1,18 +1,13 @@
 // index.js
-// Версия 10.0.0 — EULA-гейт удалён полностью.
-// - Нет gateApplication/ungateApplication, нет canUseApp-проверки.
-// - Нет profile-ready, нет _isGated.
-// - Профиль — просто имя/организация, не блокирует UI.
-// - AppState.canUseApp() больше не используется.
+// Версия 10.6.0
+// - createModal и showNotification вставляют SVG-иконки через <use>, а не текст.
+// - Иконки модалок окрашиваются по типу (error/warning/success).
+// - setupGlobalHotkeys: handler ищется по entry.original.
 
 (function() {
     'use strict';
 
-    console.log('[LSYSTEM] Loading v10.0.0...');
-
-    // ================================================================
-    // 1. СОСТОЯНИЕ
-    // ================================================================
+    const HEADER_COLLAPSE_KEY = 'lsystem-header-collapsed';
 
     const state = {
         projectPath: null,
@@ -25,14 +20,13 @@
         windowSearchQuery: ''
     };
 
-    // ================================================================
-    // 2. DOM ЭЛЕМЕНТЫ
-    // ================================================================
-
     const el = {};
 
     function cacheElements() {
         el.workspace = document.getElementById('workspace');
+        el.header = document.getElementById('appHeader');
+        el.mainMenu = document.querySelector('.main-menu');
+
         el.newProjectBtn = document.getElementById('newProjectBtn');
         el.saveBtn = document.getElementById('saveBtn');
         el.saveBtnLabel = document.getElementById('saveBtnLabel');
@@ -53,12 +47,38 @@
         el.historyMenu = document.getElementById('historyMenu');
     }
 
-    // ================================================================
-    // 3. МОДАЛКИ
-    // ================================================================
+    // ============================================================
+    // ИКОНКИ
+    // ============================================================
+
+    function makeSvgIcon(iconId, size, color) {
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'icon-svg');
+        svg.style.cssText = [
+            'width:' + size + 'px',
+            'height:' + size + 'px',
+            'flex-shrink:0',
+            'fill:' + (color || 'currentColor'),
+            'display:block',
+            'margin:0'
+        ].join(';');
+
+        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        use.setAttribute('href', '#' + iconId);
+        svg.appendChild(use);
+        return svg;
+    }
+
+    function isSvgIcon(value) {
+        return typeof value === 'string' && value.indexOf('icon-') === 0;
+    }
+
+    // ============================================================
+    // МОДАЛКИ
+    // ============================================================
 
     function createModal({
-        icon = '⚠️',
+        icon = 'icon-warning',
         title = 'Внимание',
         message = '',
         type = 'warning',
@@ -97,15 +117,27 @@
             position: 'relative'
         });
 
+        let iconColor = 'var(--beige, #c8b89a)';
+        if (type === 'error') iconColor = 'var(--accent-red, #cc2233)';
+        else if (type === 'warning') iconColor = 'var(--warning-color, #ffaa33)';
+        else if (type === 'success') iconColor = 'var(--success-color, #44cc88)';
+
         const iconEl = document.createElement('div');
         Object.assign(iconEl.style, {
-            fontSize: '48px',
-            textAlign: 'center',
-            marginBottom: '12px',
-            display: 'block',
-            lineHeight: '1'
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: '14px',
+            lineHeight: '1',
+            color: iconColor
         });
-        iconEl.textContent = icon;
+
+        if (isSvgIcon(icon)) {
+            iconEl.appendChild(makeSvgIcon(icon, 42));
+        } else {
+            iconEl.style.fontSize = '48px';
+            iconEl.textContent = icon || '';
+        }
 
         const titleEl = document.createElement('div');
         Object.assign(titleEl.style, {
@@ -274,9 +306,9 @@
         return overlay;
     }
 
-    // ================================================================
-    // 4. УВЕДОМЛЕНИЯ
-    // ================================================================
+    // ============================================================
+    // УВЕДОМЛЕНИЯ
+    // ============================================================
 
     function showNotification(message, type = 'info', duration = 3000) {
         const old = document.querySelector('.toast-notification');
@@ -292,9 +324,19 @@
             info: '#c8b89a'
         };
 
+        const iconMap = {
+            success: 'icon-success',
+            warning: 'icon-warning',
+            error: 'icon-error',
+            info: 'icon-notification'
+        };
+
         const safeType = (type === 'success' || type === 'warning' || type === 'error')
             ? type
             : 'info';
+
+        const accent = colors[safeType] || colors.info;
+        const iconId = iconMap[safeType] || iconMap.info;
 
         Object.assign(toast.style, {
             position: 'fixed',
@@ -302,24 +344,34 @@
             left: '50%',
             transform: 'translateX(-50%) translateY(20px)',
             background: 'var(--bg-panel, #1a1a1a)',
-            border: '1px solid ' + (colors[safeType] || colors.info),
+            border: '1px solid ' + accent,
             borderRadius: '12px',
-            padding: '12px 28px',
+            padding: '12px 24px',
             color: 'var(--text-primary, #e0d8cc)',
             fontSize: '13px',
             fontWeight: '500',
             zIndex: '99998',
-            boxShadow: '0 8px 40px rgba(0,0,0,0.4), 0 0 30px ' + (colors[safeType] || colors.info) + '15',
+            boxShadow: '0 8px 40px rgba(0,0,0,0.4), 0 0 30px ' + accent + '15',
             backdropFilter: 'blur(12px)',
             opacity: '0',
             transition: 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)',
             maxWidth: '90%',
-            textAlign: 'center',
-            pointerEvents: 'none'
+            pointerEvents: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            boxSizing: 'border-box'
         });
 
-        const icons = { success: '✅', warning: '⚠️', error: '❌', info: 'ℹ️' };
-        toast.innerHTML = `<span style="margin-right:10px;">${icons[safeType] || 'ℹ️'}</span>${escapeHtml(String(message || ''))}`;
+        const iconEl = makeSvgIcon(iconId, 14, accent);
+        toast.appendChild(iconEl);
+
+        const textEl = document.createElement('span');
+        textEl.style.cssText = 'overflow:hidden;text-overflow:ellipsis;';
+        textEl.textContent = String(message || '');
+        toast.appendChild(textEl);
+
         document.body.appendChild(toast);
 
         requestAnimationFrame(() => {
@@ -345,9 +397,206 @@
             .replace(/'/g, '&#39;');
     }
 
-    // ================================================================
-    // 5. ИСТОРИЯ (UNDO / REDO)
-    // ================================================================
+    // ============================================================
+    // МЕНЮ WINDOWS — STYLES
+    // ============================================================
+
+    function injectWindowMenuCSS() {
+        if (document.getElementById('window-menu-styles')) return;
+
+        const style = document.createElement('style');
+        style.id = 'window-menu-styles';
+        style.textContent = `
+            #windowTypeMenu {
+                padding: 0 !important;
+                overflow: hidden !important;
+                width: max-content !important;
+                min-width: 180px !important;
+                max-width: 340px !important;
+            }
+
+            .window-menu__search {
+                padding: 6px 8px 6px;
+                border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.08));
+                background: var(--bg-panel, #1a1a1a);
+            }
+
+            .window-menu__search-input {
+                display: block;
+                width: 100%;
+                padding: 5px 8px;
+                border-radius: 4px;
+                border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+                background: var(--bg-input, #2a2a2a);
+                color: var(--text-primary, #e0d8cc);
+                font-size: 11px;
+                font-family: inherit;
+                outline: none;
+                box-sizing: border-box;
+                transition: border-color 0.15s ease;
+            }
+
+            .window-menu__search-input:focus {
+                border-color: var(--accent-red, #cc2233);
+            }
+
+            .window-menu__scroll {
+                max-height: 380px;
+                overflow-y: auto;
+                overflow-x: hidden;
+                padding: 2px 0 4px;
+            }
+
+            .window-menu__scroll::-webkit-scrollbar { width: 6px; }
+            .window-menu__scroll::-webkit-scrollbar-track { background: transparent; }
+            .window-menu__scroll::-webkit-scrollbar-thumb {
+                background: rgba(200, 184, 154, 0.15);
+                border-radius: 3px;
+            }
+            .window-menu__scroll::-webkit-scrollbar-thumb:hover {
+                background: rgba(200, 184, 154, 0.3);
+            }
+
+            .window-menu__section {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 10px 3px;
+                font-size: 9px;
+                font-weight: 700;
+                color: var(--text-muted, rgba(200, 184, 154, 0.5));
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                border-bottom: 1px solid var(--border-color, rgba(200, 184, 154, 0.06));
+                margin-bottom: 2px;
+            }
+
+            .window-menu__group-header {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                width: 100%;
+                padding: 4px 10px;
+                border: none;
+                background: transparent;
+                color: var(--text-secondary, #a09888);
+                font-size: 10px;
+                font-weight: 700;
+                font-family: inherit;
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+                cursor: pointer;
+                text-align: left;
+                transition: background 0.12s ease;
+            }
+
+            .window-menu__group-header:hover {
+                background: var(--bg-hover, rgba(40, 40, 40, 0.4));
+                color: var(--text-primary, #e0d8cc);
+            }
+
+            .window-menu__group-arrow {
+                font-size: 8px;
+                flex-shrink: 0;
+                width: 10px;
+                text-align: center;
+                opacity: 0.7;
+            }
+
+            .window-menu__group-name {
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .window-menu__count {
+                font-size: 9px;
+                font-weight: 500;
+                color: var(--text-muted, rgba(200, 184, 154, 0.35));
+                padding: 1px 5px;
+                border-radius: 8px;
+                background: rgba(200, 184, 154, 0.06);
+                flex-shrink: 0;
+                text-transform: none;
+                letter-spacing: 0;
+            }
+
+            .window-menu__item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                width: 100%;
+                padding: 5px 10px 5px 12px;
+                border: none;
+                background: transparent;
+                color: var(--text-primary, #e0d8cc);
+                font-size: 12px;
+                font-family: inherit;
+                cursor: pointer;
+                text-align: left;
+                transition: background 0.12s ease;
+            }
+
+            .window-menu__item:hover {
+                background: var(--bg-hover, rgba(40, 40, 40, 0.5));
+            }
+
+            .window-menu__item--minimized .window-menu__label {
+                color: var(--text-secondary, #a09888);
+                font-style: italic;
+            }
+
+            .window-menu__icon {
+                width: 14px;
+                height: 14px;
+                flex-shrink: 0;
+                fill: currentColor;
+                opacity: 0.85;
+            }
+
+            .window-menu__icon--emoji {
+                font-size: 13px;
+                line-height: 1;
+                text-align: center;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                opacity: 0.85;
+            }
+
+            .window-menu__label {
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .window-menu__id {
+                font-size: 9px;
+                color: var(--text-muted, rgba(200, 184, 154, 0.4));
+                flex-shrink: 0;
+                font-family: monospace;
+            }
+
+            .window-menu__empty {
+                padding: 16px 12px;
+                color: var(--text-muted, rgba(200, 184, 154, 0.5));
+                font-size: 11px;
+                text-align: center;
+            }
+
+            .window-menu__group-items { padding: 0; }
+            .window-menu__group-items .window-menu__item { padding-left: 22px; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    // ============================================================
+    // ИСТОРИЯ
+    // ============================================================
 
     function renderHistoryMenu() {
         if (!el.historyMenu) return;
@@ -679,15 +928,15 @@
         return typeId;
     }
 
-    // ================================================================
-    // 6. МОДАЛКИ СОХРАНЕНИЯ / ЗАГРУЗКИ
-    // ================================================================
+    // ============================================================
+    // МОДАЛКИ СОХРАНЕНИЯ / ЗАГРУЗКИ
+    // ============================================================
 
     function showSaveModal(onSave) {
         const currentName = state.projectName || 'project';
 
         createModal({
-            icon: '💾',
+            icon: 'icon-save',
             title: 'Сохранить проект',
             message: 'Введите название проекта',
             type: 'info',
@@ -718,7 +967,7 @@
         };
 
         createModal({
-            icon: '💾',
+            icon: 'icon-save',
             title: 'Несохранённые изменения',
             message: `У вас есть несохранённые изменения.<br>Сохранить перед <strong>${actionLabels[action] || 'продолжением'}</strong>?`,
             type: 'warning',
@@ -732,7 +981,7 @@
 
     function showConfirmModal(title, message, onConfirm) {
         createModal({
-            icon: '❓',
+            icon: 'icon-question',
             title: title,
             message: message,
             type: 'info',
@@ -745,7 +994,7 @@
 
     function showErrorModal(title, message) {
         createModal({
-            icon: '❌',
+            icon: 'icon-error',
             title: title,
             message: message,
             type: 'error',
@@ -755,7 +1004,7 @@
 
     function showInfoModal(title, message) {
         createModal({
-            icon: 'ℹ️',
+            icon: 'icon-notification',
             title: title,
             message: message,
             type: 'info',
@@ -763,24 +1012,21 @@
         });
     }
 
-    // ================================================================
-    // 7. ИНИЦИАЛИЗАЦИЯ
-    // ================================================================
+    // ============================================================
+    // ИНИЦИАЛИЗАЦИЯ
+    // ============================================================
 
     async function init() {
         cacheElements();
 
         if (!el.workspace) {
-            console.error('[LSYSTEM] ❌ Workspace not found!');
+            console.error('[LSYSTEM] Workspace not found');
             return;
         }
-
-        console.log('[LSYSTEM] ✅ Workspace found');
 
         if (window.__svgReady && typeof window.__svgReady.then === 'function') {
             try {
                 await window.__svgReady;
-                console.log('[LSYSTEM] ✅ SVG sprites ready');
             } catch (e) {
                 console.warn('[LSYSTEM] SVG sprites not ready:', e);
             }
@@ -788,38 +1034,24 @@
 
         try {
             window.appState = new AppState({ debug: false });
-            console.log('[LSYSTEM] ✅ AppState created');
-
             window.hotkeyRegistry = new HotkeyRegistry({ debug: false });
-            console.log('[LSYSTEM] ✅ HotkeyRegistry created');
-
             window.messageBus = new MessageBus({ maxHistory: 100, debug: false });
-            console.log('[LSYSTEM] ✅ MessageBus created');
 
             const registry = new WindowRegistry();
             registry.init();
             window.__registry = registry;
-            console.log('[LSYSTEM] ✅ WindowRegistry created');
 
             window.dataBus = new DataBus({ debug: false });
-            console.log('[LSYSTEM] ✅ DataBus created');
-
             window.eventBus = createEventBus();
-            console.log('[LSYSTEM] ✅ EventBus created');
 
             window.pluginSystem = new PluginSystem({
                 registry: registry,
-                dataBus: window.dataBus,
                 eventBus: window.eventBus,
-                messageBus: window.messageBus,
                 appState: window.appState,
-                windowPath: 'data/window/',
-                enableWindowAutoLoad: true,
-                enableGlobalScan: true,
-                enableUserPlugins: false
+                debug: false
             });
+
             await window.pluginSystem.loadAll();
-            console.log('[LSYSTEM] ✅ PluginSystem loaded');
 
             window.layoutManager = new LayoutManager({
                 workspace: el.workspace,
@@ -830,25 +1062,20 @@
                 messageBus: window.messageBus
             });
             window.layoutManager.init();
-            console.log('[LSYSTEM] ✅ LayoutManager created');
 
             window.messageBus.setLayoutManager(window.layoutManager);
-            console.log('[LSYSTEM] ✅ MessageBus bound to LayoutManager');
 
             window.hotkeyRegistry.attach(document);
-            console.log('[LSYSTEM] ✅ HotkeyRegistry attached');
 
             setupGlobalHotkeys();
 
             window.settingsModal = new SettingsModal();
-            console.log('[LSYSTEM] ✅ SettingsModal created');
 
             window.historyManager = new HistoryManager({
                 maxHistory: 100,
                 debug: false
             });
             window.historyManager.setSnapshotProvider(buildSnapshot);
-            console.log('[LSYSTEM] ✅ HistoryManager created');
 
             window.projectManager = new ProjectManager({
                 dataBus: window.dataBus,
@@ -857,12 +1084,14 @@
                 autoSave: true,
                 autoSaveInterval: 30000
             });
-            console.log('[LSYSTEM] ✅ ProjectManager created');
 
             setupProjectEvents();
             setupUIEvents();
             setupHistoryEvents();
             setupTheme();
+            setupHeaderCollapse();
+            setupHeaderAdaptive();
+            injectWindowMenuCSS();
 
             populateWindowMenu();
 
@@ -886,18 +1115,15 @@
                 }
             }, 300);
 
-            console.log('[LSYSTEM] ✅ Initialized v10.0.0');
-            console.log('[LSYSTEM] Registered types:', registry.getAllTypes().map(t => t.id));
-
         } catch (error) {
-            console.error('[LSYSTEM] ❌ Initialization error:', error);
+            console.error('[LSYSTEM] Initialization error:', error);
             showErrorModal('Ошибка инициализации', error.message || 'Не удалось запустить приложение');
         }
     }
 
-    // ================================================================
-    // 8. EVENT BUS
-    // ================================================================
+    // ============================================================
+    // EVENT BUS
+    // ============================================================
 
     function createEventBus() {
         const listeners = {};
@@ -920,18 +1146,11 @@
         };
     }
 
-    // ================================================================
-    // 9. ТЕМА
-    // ================================================================
+    // ============================================================
+    // ТЕМА
+    // ============================================================
 
     function setupTheme() {
-        if (el.logo) {
-            el.logo.addEventListener('click', () => {
-                const next = window.appState.toggleTheme();
-                showNotification('Тема: ' + next, 'info', 1500);
-            });
-        }
-
         if (window.appState) {
             window.appState.subscribe('theme', (theme) => {
                 console.log('[LSYSTEM] Theme changed:', theme,
@@ -944,9 +1163,264 @@
         }
     }
 
-    // ================================================================
-    // 10. ГЛОБАЛЬНЫЕ ХОТКЕИ
-    // ================================================================
+    // ============================================================
+    // СВОРАЧИВАНИЕ HEADER → ОСТРОВ
+    // ============================================================
+
+    function isHeaderCollapsed() {
+        return document.body.classList.contains('header-collapsed');
+    }
+
+    function setHeaderCollapsed(collapsed, animate = true) {
+        const next = !!collapsed;
+        const current = isHeaderCollapsed();
+
+        if (next === current) return;
+
+        if (!animate) {
+            document.body.style.transition = 'none';
+        }
+
+        document.body.classList.toggle('header-collapsed', next);
+
+        if (!animate) {
+            void document.body.offsetWidth;
+            document.body.style.transition = '';
+        }
+
+        try {
+            localStorage.setItem(HEADER_COLLAPSE_KEY, next ? '1' : '0');
+        } catch (e) {}
+
+        refreshLogoImageTitle();
+
+        if (window.layoutManager) {
+            requestAnimationFrame(() => {
+                if (window.layoutManager) window.layoutManager.resizeAll();
+            });
+        }
+    }
+
+    function toggleHeaderCollapsed() {
+        setHeaderCollapsed(!isHeaderCollapsed());
+    }
+
+    function restoreHeaderCollapsedState() {
+        let saved = null;
+        try { saved = localStorage.getItem(HEADER_COLLAPSE_KEY); } catch (e) {}
+
+        const collapsed = isHeaderCollapsed();
+        if (saved === '1' && !collapsed) {
+            setHeaderCollapsed(true, false);
+        } else if (saved !== '1' && collapsed) {
+            setHeaderCollapsed(false, false);
+        }
+    }
+
+    function setupHeaderCollapse() {
+        if (!el.logo) return;
+
+        restoreHeaderCollapsedState();
+
+        const logoText = el.logo.querySelector('.logo-text');
+        if (logoText) {
+            logoText.title = 'Switch Theme';
+            logoText.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (!window.appState) return;
+                const next = window.appState.toggleTheme();
+                showNotification('Тема: ' + next, 'info', 1500);
+            });
+        }
+
+        const logoImg = el.logo.querySelector('.logo-img');
+        if (logoImg) {
+            logoImg.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleHeaderCollapsed();
+            });
+        }
+
+        refreshLogoImageTitle();
+        refreshIslandButtons();
+    }
+
+    function refreshLogoImageTitle() {
+        const logoImg = el.logo?.querySelector('.logo-img');
+        if (!logoImg) return;
+
+        const collapsed = isHeaderCollapsed();
+        logoImg.title = collapsed ? 'Expand Header' : 'Collapse Header';
+    }
+
+    function refreshIslandButtons() {
+        if (!isHeaderCollapsed()) return;
+
+        const hasWindows = (window.layoutManager?.getWindowCount() || 0) > 0;
+        const visibleCount = window.layoutManager?.getVisibleWindowCount() || 0;
+        const maxed = visibleCount >= 4;
+
+        if (el.saveBtn) {
+            el.saveBtn.classList.toggle('is-hidden-in-island', !hasWindows);
+        }
+
+        if (el.newProjectBtn) {
+            el.newProjectBtn.classList.toggle('is-hidden-in-island', !hasWindows);
+        }
+
+        if (el.newWindowBtn) {
+            el.newWindowBtn.classList.toggle('is-hidden-in-island', maxed);
+        }
+    }
+
+    // ============================================================
+    // АДАПТИВ ПОЛНОЙ ШАПКИ — COMPACT MODE
+    // ============================================================
+
+    function setupHeaderAdaptive() {
+        if (!el.header) return;
+
+        let fullContentWidth = 0;
+        let measuredForState = '';
+
+        let compact = false;
+        let rafId = null;
+        let lastHeaderW = -1;
+
+        const buildStateKey = () => {
+            const parts = [];
+            if (el.saveBtn) {
+                parts.push('s:' + (el.saveBtnLabel ? el.saveBtnLabel.textContent : ''));
+                parts.push('sd:' + (el.saveBtn.disabled ? 1 : 0));
+            }
+            if (el.newProjectBtn) {
+                parts.push('n:' + (el.newProjectBtn.disabled ? 1 : 0));
+            }
+            if (el.newWindowBtn) {
+                parts.push('w:' + (el.newWindowBtn.disabled ? 1 : 0));
+            }
+            if (el.historyBtn) {
+                parts.push('h:' + (el.historyBtn.style.opacity || '1'));
+            }
+            const name = state.projectName || '';
+            parts.push('p:' + name);
+            return parts.join('|');
+        };
+
+        const measureFullWidth = () => {
+            const key = buildStateKey();
+            if (key === measuredForState && fullContentWidth > 0) {
+                return fullContentWidth;
+            }
+
+            const hadCompact = el.header.classList.contains('is-compact');
+            if (hadCompact) el.header.classList.remove('is-compact');
+
+            const prevMinWidth = el.mainMenu ? el.mainMenu.style.minWidth : '';
+            const prevFlex = el.mainMenu ? el.mainMenu.style.flex : '';
+
+            if (el.mainMenu) {
+                el.mainMenu.style.minWidth = 'max-content';
+                el.mainMenu.style.flex = '0 0 auto';
+            }
+
+            void el.header.offsetWidth;
+
+            const logoW = el.logo ? el.logo.scrollWidth : 0;
+            const menuW = el.mainMenu ? el.mainMenu.scrollWidth : 0;
+            const padding = 40;
+
+            fullContentWidth = logoW + menuW + padding;
+            measuredForState = key;
+
+            if (el.mainMenu) {
+                el.mainMenu.style.minWidth = prevMinWidth || '';
+                el.mainMenu.style.flex = prevFlex || '';
+            }
+
+            if (hadCompact) el.header.classList.add('is-compact');
+
+            return fullContentWidth;
+        };
+
+        const applyState = () => {
+            rafId = null;
+
+            const headerW = el.header.clientWidth || 0;
+            if (headerW === 0) return;
+
+            if (headerW === lastHeaderW) return;
+            lastHeaderW = headerW;
+
+            const fullW = measureFullWidth();
+
+            const ENTER_THRESHOLD = 8;
+            const EXIT_THRESHOLD = 24;
+
+            let shouldCompact = compact;
+            if (!compact) {
+                shouldCompact = fullW > headerW - ENTER_THRESHOLD;
+            } else {
+                shouldCompact = fullW > headerW - EXIT_THRESHOLD;
+            }
+
+            if (shouldCompact !== compact) {
+                compact = shouldCompact;
+                el.header.classList.toggle('is-compact', compact);
+            }
+        };
+
+        const schedule = () => {
+            if (rafId !== null) return;
+            rafId = requestAnimationFrame(applyState);
+        };
+
+        setupHeaderAdaptive._apply = () => {
+            measuredForState = '';
+            fullContentWidth = 0;
+            lastHeaderW = -1;
+            schedule();
+        };
+
+        setupHeaderAdaptive._invalidateMeasurement = () => {
+            measuredForState = '';
+            fullContentWidth = 0;
+        };
+
+        requestAnimationFrame(() => {
+            requestAnimationFrame(applyState);
+        });
+
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(() => {
+                schedule();
+            });
+            ro.observe(el.header);
+            setupHeaderAdaptive._ro = ro;
+        }
+
+        window.addEventListener('resize', () => {
+            clearTimeout(setupHeaderAdaptive._t);
+            setupHeaderAdaptive._t = setTimeout(schedule, 60);
+        });
+
+        document.addEventListener('layout-changed', () => {
+            if (setupHeaderAdaptive._invalidateMeasurement) {
+                setupHeaderAdaptive._invalidateMeasurement();
+            }
+            schedule();
+        });
+    }
+
+    function refreshHeaderCompact() {
+        if (setupHeaderAdaptive._apply) {
+            setupHeaderAdaptive._apply();
+        }
+    }
+
+    // ============================================================
+    // ГЛОБАЛЬНЫЕ ХОТКЕИ
+    // ============================================================
 
     function setupGlobalHotkeys() {
         if (!window.hotkeyRegistry) return;
@@ -960,6 +1434,7 @@
             'Ctrl+O':       { label: 'Открыть проект' },
             'Ctrl+N':       { label: 'Новый проект' },
             'Ctrl+,':       { label: 'Настройки' },
+            'Ctrl+Shift+H': { label: 'Свернуть/развернуть панель' },
             'Escape':       { label: 'Закрыть меню / Отмена' }
         });
 
@@ -973,6 +1448,7 @@
             'Ctrl+O':       () => handleLoad(),
             'Ctrl+N':       () => handleNewProject(),
             'Ctrl+,':       () => window.settingsModal?.toggle(),
+            'Ctrl+Shift+H': () => toggleHeaderCollapsed(),
             'Escape':       () => {
                 closeDropdown(el.loadDropdown);
                 closeDropdown(el.newWindowDropdown);
@@ -981,11 +1457,15 @@
         };
 
         for (const [originalCombo, entry] of Object.entries(globalHotkeys)) {
-            const handler = actions[originalCombo];
+            const effectiveOriginal = entry.original || originalCombo;
+            const handler = actions[effectiveOriginal];
             if (!handler) continue;
 
-            const combo = entry.combo || originalCombo;
-            window.hotkeyRegistry.registerGlobal(combo, handler, { source: 'global' });
+            const combo = entry.combo || effectiveOriginal;
+            window.hotkeyRegistry.registerGlobal(combo, handler, {
+                source: 'global',
+                original: effectiveOriginal
+            });
         }
 
         if (window.layoutManager && window.layoutManager._windowInstances) {
@@ -997,13 +1477,11 @@
                 }
             });
         }
-
-        console.log('[LSYSTEM] ✅ Global hotkeys registered');
     }
 
-    // ================================================================
-    // 11. ПРОЕКТНЫЕ СОБЫТИЯ
-    // ================================================================
+    // ============================================================
+    // ПРОЕКТНЫЕ СОБЫТИЯ
+    // ============================================================
 
     function setupProjectEvents() {
         document.addEventListener('project-new', () => {
@@ -1077,9 +1555,9 @@
         });
     }
 
-    // ================================================================
-    // 12. UI СОБЫТИЯ
-    // ================================================================
+    // ============================================================
+    // UI СОБЫТИЯ
+    // ============================================================
 
     function setupUIEvents() {
         el.newProjectBtn?.addEventListener('click', handleNewProject);
@@ -1134,9 +1612,9 @@
         });
     }
 
-    // ================================================================
-    // 13. DROPDOWN
-    // ================================================================
+    // ============================================================
+    // DROPDOWN
+    // ============================================================
 
     function closeAllTopbarDropdowns(except = null) {
         const dropdowns = [
@@ -1183,9 +1661,9 @@
         }
     }
 
-    // ================================================================
-    // 14. НОВЫЙ ПРОЕКТ
-    // ================================================================
+    // ============================================================
+    // НОВЫЙ ПРОЕКТ
+    // ============================================================
 
     async function handleNewProject() {
         if (!window.projectManager) {
@@ -1231,9 +1709,9 @@
         showNotification('Новый проект создан', 'success');
     }
 
-    // ================================================================
-    // 15. СОХРАНЕНИЕ
-    // ================================================================
+    // ============================================================
+    // СОХРАНЕНИЕ
+    // ============================================================
 
     function handleSave() {
         return new Promise((resolve) => {
@@ -1305,9 +1783,9 @@
         }
     }
 
-    // ================================================================
-    // 16. ЗАГРУЗКА
-    // ================================================================
+    // ============================================================
+    // ЗАГРУЗКА
+    // ============================================================
 
     async function handleLoad() {
         if (state.isLoading) return;
@@ -1404,9 +1882,9 @@
         });
     }
 
-    // ================================================================
-    // 17. НЕДАВНИЕ ПРОЕКТЫ
-    // ================================================================
+    // ============================================================
+    // НЕДАВНИЕ ПРОЕКТЫ
+    // ============================================================
 
     async function loadRecentProject(path) {
         if (!path) return;
@@ -1468,9 +1946,9 @@
         }
     }
 
-    // ================================================================
-    // 18. МЕНЮ "WINDOWS"
-    // ================================================================
+    // ============================================================
+    // МЕНЮ WINDOWS
+    // ============================================================
 
     function populateWindowMenu() {
         if (!el.windowTypeMenu) return;
@@ -1654,9 +2132,9 @@
         return String(s).replace(/([^\w-])/g, '\\$1');
     }
 
-    // ================================================================
-    // 19. СОЗДАНИЕ ОКНА
-    // ================================================================
+    // ============================================================
+    // СОЗДАНИЕ ОКНА
+    // ============================================================
 
     function createWindow(type) {
         if (!window.layoutManager) {
@@ -1693,9 +2171,9 @@
         }
     }
 
-    // ================================================================
-    // 20. НЕДАВНИЕ ПРОЕКТЫ (UI)
-    // ================================================================
+    // ============================================================
+    // НЕДАВНИЕ ПРОЕКТЫ (UI)
+    // ============================================================
 
     function updateRecentProjects() {
         if (!el.recentList) return;
@@ -1749,9 +2227,9 @@
         });
     }
 
-    // ================================================================
-    // 21. UI ОБНОВЛЕНИЕ
-    // ================================================================
+    // ============================================================
+    // UI ОБНОВЛЕНИЕ
+    // ============================================================
 
     function updateUI() {
         const windowCount = window.layoutManager?.getWindowCount() || 0;
@@ -1794,24 +2272,38 @@
             el.loadBtn.style.opacity = '1';
             el.loadBtn.style.pointerEvents = '';
         }
+
+        refreshIslandButtons();
+        refreshHeaderCompact();
     }
 
-    // ================================================================
-    // 22. ЗАПУСК
-    // ================================================================
+    // ============================================================
+    // ЗАПУСК
+    // ============================================================
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
+    function bootstrap() {
+        try {
+            const saved = localStorage.getItem(HEADER_COLLAPSE_KEY);
+            if (saved === '1') {
+                document.body.classList.add('header-collapsed');
+            }
+        } catch (e) {}
+
         init();
     }
 
-    // ================================================================
-    // 23. ГЛОБАЛЬНЫЙ ДОСТУП
-    // ================================================================
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bootstrap);
+    } else {
+        bootstrap();
+    }
+
+    // ============================================================
+    // ГЛОБАЛЬНЫЙ ДОСТУП
+    // ============================================================
 
     window.showNotification = showNotification;
-    
+
     window.__lsystem = {
         state,
         updateUI,
@@ -1831,9 +2323,15 @@
         updateHistoryButton: refreshHistoryButton,
         renderHistoryMenu,
 
+        isHeaderCollapsed,
+        setHeaderCollapsed,
+        toggleHeaderCollapsed,
+        refreshHeaderCompact,
+
         getAppState: () => window.appState,
         getHotkeyRegistry: () => window.hotkeyRegistry,
         getSettingsModal: () => window.settingsModal,
+        getPluginSystem: () => window.pluginSystem,
 
         reloadPlugins: async () => {
             if (!window.pluginSystem) return false;
@@ -1846,7 +2344,5 @@
         getAutoThemeHours: () => window.appState?.getAutoThemeHours(),
         setAutoThemeHours: (cfg) => window.appState?.setAutoThemeHours(cfg)
     };
-
-    console.log('[LSYSTEM] App ready v10.0.0');
 
 })();

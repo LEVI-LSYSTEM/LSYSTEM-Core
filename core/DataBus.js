@@ -1,49 +1,36 @@
 // core/DataBus.js
-// Версия 4.2.1 - Fix: рекурсия в _notifySlot → итеративный цикл с лимитом
-// - MAX_NOTIFY_DEPTH = 8
-// - _notifySlot: while-loop вместо рекурсии
-// - v4.2.0: ArrayBuffer по ссылке (без изменений)
+// Версия 5.0.0
+// - attachedWindows теперь Set<string>. Публичные методы возвращают массивы.
+// - Все внутренние проверки .length → .size, .indexOf → .has, push → .add.
+// - API не изменился: getSlotWindows / attachWindowToSlot / detachWindowFromSlot
+//   возвращают/принимают те же типы.
 
 (function() {
     'use strict';
 
-    console.log('[DataBus] Loading v4.2.1...');
-
-    // ============================================================
-    // КОНСТАНТЫ ЛИМИТОВ
-    // ============================================================
-
-    const LIMITS = {
+    var LIMITS = {
         ACTIVE_PER_TYPE: 4,
         ARCHIVED_PER_TYPE: 4,
         ARCHIVED_TOTAL: 16
     };
 
-    const MAX_NOTIFY_DEPTH = 8;
+    var MAX_NOTIFY_DEPTH = 8;
 
-    // ============================================================
-    // СЕРИАЛИЗАЦИЯ Map / Set / ArrayBuffer
-    // ============================================================
-
-    const SERIALIZE_TYPE_KEY = '__lsType';
-    const SERIALIZE_VALUE_KEY = '__lsValue';
+    var SERIALIZE_TYPE_KEY = '__lsType';
+    var SERIALIZE_VALUE_KEY = '__lsValue';
 
     function isPlainObject(obj) {
         if (obj === null || typeof obj !== 'object') return false;
-        const proto = Object.getPrototypeOf(obj);
+        var proto = Object.getPrototypeOf(obj);
         return proto === Object.prototype || proto === null;
     }
 
-    // ============================================================
-    // BASE64 HELPERS
-    // ============================================================
-
     function bytesToBase64(bytes) {
         if (typeof btoa === 'function') {
-            let binary = '';
-            const chunkSize = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                const chunk = bytes.subarray(i, i + chunkSize);
+            var binary = '';
+            var chunkSize = 0x8000;
+            for (var i = 0; i < bytes.length; i += chunkSize) {
+                var chunk = bytes.subarray(i, i + chunkSize);
                 binary += String.fromCharCode.apply(null, chunk);
             }
             return btoa(binary);
@@ -56,9 +43,9 @@
 
     function base64ToBytes(b64) {
         if (typeof atob === 'function') {
-            const binary = atob(b64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
+            var binary = atob(b64);
+            var bytes = new Uint8Array(binary.length);
+            for (var i = 0; i < binary.length; i++) {
                 bytes[i] = binary.charCodeAt(i);
             }
             return bytes;
@@ -69,69 +56,71 @@
         return new Uint8Array(0);
     }
 
-    // ============================================================
-    // SERIALIZE (in-memory → JSON)
-    // ============================================================
-
     function serializeSpecial(obj) {
         if (obj === null || obj === undefined) return obj;
         if (typeof obj !== 'object') return obj;
 
         if (ArrayBuffer.isView(obj)) {
-            const ctor = obj.constructor.name;
-            const bytes = new Uint8Array(
+            var ctor = obj.constructor.name;
+            var bytes = new Uint8Array(
                 obj.buffer,
                 obj.byteOffset || 0,
                 obj.byteLength
             );
-            return {
-                [SERIALIZE_TYPE_KEY]: ctor,
-                [SERIALIZE_VALUE_KEY]: bytesToBase64(bytes)
-            };
+            var out = {};
+            out[SERIALIZE_TYPE_KEY] = ctor;
+            out[SERIALIZE_VALUE_KEY] = bytesToBase64(bytes);
+            return out;
         }
         if (obj instanceof ArrayBuffer) {
-            return {
-                [SERIALIZE_TYPE_KEY]: 'ArrayBuffer',
-                [SERIALIZE_VALUE_KEY]: bytesToBase64(new Uint8Array(obj))
-            };
+            var out2 = {};
+            out2[SERIALIZE_TYPE_KEY] = 'ArrayBuffer';
+            out2[SERIALIZE_VALUE_KEY] = bytesToBase64(new Uint8Array(obj));
+            return out2;
         }
         if (obj instanceof Map) {
-            const entries = [];
-            for (const [k, v] of obj) {
+            var entries = [];
+            obj.forEach(function(v, k) {
                 entries.push([serializeSpecial(k), serializeSpecial(v)]);
-            }
-            return { [SERIALIZE_TYPE_KEY]: 'Map', [SERIALIZE_VALUE_KEY]: entries };
+            });
+            var out3 = {};
+            out3[SERIALIZE_TYPE_KEY] = 'Map';
+            out3[SERIALIZE_VALUE_KEY] = entries;
+            return out3;
         }
         if (obj instanceof Set) {
-            const values = [];
-            for (const v of obj) values.push(serializeSpecial(v));
-            return { [SERIALIZE_TYPE_KEY]: 'Set', [SERIALIZE_VALUE_KEY]: values };
+            var values = [];
+            obj.forEach(function(v) { values.push(serializeSpecial(v)); });
+            var out4 = {};
+            out4[SERIALIZE_TYPE_KEY] = 'Set';
+            out4[SERIALIZE_VALUE_KEY] = values;
+            return out4;
         }
         if (obj instanceof Date) {
-            return { [SERIALIZE_TYPE_KEY]: 'Date', [SERIALIZE_VALUE_KEY]: obj.toISOString() };
+            var out5 = {};
+            out5[SERIALIZE_TYPE_KEY] = 'Date';
+            out5[SERIALIZE_VALUE_KEY] = obj.toISOString();
+            return out5;
         }
         if (obj instanceof RegExp) {
-            return {
-                [SERIALIZE_TYPE_KEY]: 'RegExp',
-                [SERIALIZE_VALUE_KEY]: { source: obj.source, flags: obj.flags }
-            };
+            var out6 = {};
+            out6[SERIALIZE_TYPE_KEY] = 'RegExp';
+            out6[SERIALIZE_VALUE_KEY] = { source: obj.source, flags: obj.flags };
+            return out6;
         }
         if (Array.isArray(obj)) {
             return obj.map(serializeSpecial);
         }
         if (isPlainObject(obj)) {
-            const result = {};
-            for (const [k, v] of Object.entries(obj)) {
-                result[k] = serializeSpecial(v);
+            var result = {};
+            for (var key in obj) {
+                if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+                result[key] = serializeSpecial(obj[key]);
             }
             return result;
         }
         return undefined;
     }
-
-    // ============================================================
-    // DESERIALIZE (JSON → in-memory)
-    // ============================================================
 
     function deserializeSpecial(obj) {
         if (obj === null || obj === undefined) return obj;
@@ -141,30 +130,34 @@
             return obj.map(deserializeSpecial);
         }
 
-        const t = obj[SERIALIZE_TYPE_KEY];
+        var t = obj[SERIALIZE_TYPE_KEY];
         if (t !== undefined) {
-            const v = obj[SERIALIZE_VALUE_KEY];
+            var v = obj[SERIALIZE_VALUE_KEY];
 
             switch (t) {
                 case 'Map': {
-                    const m = new Map();
-                    for (const [k, val] of (v || [])) {
-                        m.set(deserializeSpecial(k), deserializeSpecial(val));
+                    var m = new Map();
+                    var arr = v || [];
+                    for (var i = 0; i < arr.length; i++) {
+                        m.set(deserializeSpecial(arr[i][0]), deserializeSpecial(arr[i][1]));
                     }
                     return m;
                 }
                 case 'Set': {
-                    const s = new Set();
-                    for (const val of (v || [])) s.add(deserializeSpecial(val));
+                    var s = new Set();
+                    var arr2 = v || [];
+                    for (var j = 0; j < arr2.length; j++) {
+                        s.add(deserializeSpecial(arr2[j]));
+                    }
                     return s;
                 }
                 case 'Date':
                     return new Date(v);
                 case 'RegExp':
-                    return new RegExp(v?.source || '', v?.flags || '');
+                    return new RegExp((v && v.source) || '', (v && v.flags) || '');
 
                 case 'ArrayBuffer': {
-                    const bytes = (typeof v === 'string')
+                    var bytes = (typeof v === 'string')
                         ? base64ToBytes(v)
                         : new Uint8Array(v || []);
                     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -173,12 +166,12 @@
                 default: {
                     if (typeof globalThis[t] === 'function') {
                         try {
-                            const bytes = (typeof v === 'string')
+                            var bytes2 = (typeof v === 'string')
                                 ? base64ToBytes(v)
                                 : new Uint8Array(v || []);
 
-                            const copy = new Uint8Array(bytes.length);
-                            copy.set(bytes);
+                            var copy = new Uint8Array(bytes2.length);
+                            copy.set(bytes2);
 
                             if (t === 'DataView') {
                                 return new DataView(copy.buffer);
@@ -194,9 +187,10 @@
         }
 
         if (isPlainObject(obj)) {
-            const result = {};
-            for (const [k, val] of Object.entries(obj)) {
-                result[k] = deserializeSpecial(val);
+            var result = {};
+            for (var key in obj) {
+                if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+                result[key] = deserializeSpecial(obj[key]);
             }
             return result;
         }
@@ -204,12 +198,10 @@
         return obj;
     }
 
-    // ============================================================
-    // КЛАСС
-    // ============================================================
-
     class DataBus {
-        constructor(options = {}) {
+        constructor(options) {
+            options = options || {};
+
             this._slots = new Map();
             this._typeIndex = new Map();
             this._windowSlotIndex = new Map();
@@ -225,9 +217,7 @@
             this._slotCounters = new Map();
             this._pendingUpdates = new Map();
 
-            this._debug = options.debug || false;
-
-            console.log('[DataBus] Initialized v4.2.1 (slots mode)');
+            this._debug = !!options.debug;
         }
 
         // ============================================================
@@ -242,21 +232,27 @@
             if (obj instanceof ArrayBuffer) return obj;
 
             if (obj instanceof Map) {
-                const result = new Map();
-                for (const [key, value] of obj) {
-                    result.set(this._deepCopy(key), this._deepCopy(value));
-                }
-                return result;
+                var mapResult = new Map();
+                var self1 = this;
+                obj.forEach(function(value, key) {
+                    mapResult.set(self1._deepCopy(key), self1._deepCopy(value));
+                });
+                return mapResult;
             }
             if (obj instanceof Set) {
-                const result = new Set();
-                for (const value of obj) {
-                    result.add(this._deepCopy(value));
-                }
-                return result;
+                var setResult = new Set();
+                var self2 = this;
+                obj.forEach(function(value) {
+                    setResult.add(self2._deepCopy(value));
+                });
+                return setResult;
             }
             if (Array.isArray(obj)) {
-                return obj.map(item => this._deepCopy(item));
+                var arrResult = [];
+                for (var i = 0; i < obj.length; i++) {
+                    arrResult.push(this._deepCopy(obj[i]));
+                }
+                return arrResult;
             }
             if (obj instanceof Date) {
                 return new Date(obj.getTime());
@@ -266,9 +262,10 @@
             }
 
             if (isPlainObject(obj)) {
-                const result = {};
-                for (const [key, value] of Object.entries(obj)) {
-                    result[key] = this._deepCopy(value);
+                var result = {};
+                for (var key in obj) {
+                    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
+                    result[key] = this._deepCopy(obj[key]);
                 }
                 return result;
             }
@@ -281,9 +278,9 @@
         // ============================================================
 
         _generateSlotId(typeId) {
-            const counter = (this._slotCounters.get(typeId) || 0) + 1;
+            var counter = (this._slotCounters.get(typeId) || 0) + 1;
             this._slotCounters.set(typeId, counter);
-            return `${typeId}-${counter}`;
+            return typeId + '-' + counter;
         }
 
         // ============================================================
@@ -298,12 +295,11 @@
         }
 
         _removeFromTypeIndex(typeId, slotId) {
-            const set = this._typeIndex.get(typeId);
-            if (set) {
-                set.delete(slotId);
-                if (set.size === 0) {
-                    this._typeIndex.delete(typeId);
-                }
+            var set = this._typeIndex.get(typeId);
+            if (!set) return;
+            set.delete(slotId);
+            if (set.size === 0) {
+                this._typeIndex.delete(typeId);
             }
         }
 
@@ -311,20 +307,22 @@
         // 4. СОЗДАНИЕ СЛОТА
         // ============================================================
 
-        createSlot(typeId, options = {}) {
+        createSlot(typeId, options) {
+            options = options || {};
+
             if (!typeId) {
                 console.error('[DataBus] createSlot: typeId is required');
                 return null;
             }
 
-            const slotId = options.slotId || this._generateSlotId(typeId);
+            var slotId = options.slotId || this._generateSlotId(typeId);
 
             if (this._slots.has(slotId)) {
                 console.warn('[DataBus] createSlot: slot already exists:', slotId);
                 return slotId;
             }
 
-            const activeCount = this.getActiveSlotsByType(typeId).length
+            var activeCount = this.getActiveSlotsByType(typeId).length
                 + this.getFreeActiveSlotsByType(typeId).length;
 
             if (activeCount >= LIMITS.ACTIVE_PER_TYPE) {
@@ -336,7 +334,7 @@
                 return null;
             }
 
-            const slot = {
+            var slot = {
                 id: slotId,
                 type: typeId,
                 data: options.data !== undefined ? this._deepCopy(options.data) : null,
@@ -346,17 +344,13 @@
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
                 archivedAt: null,
-                attachedWindows: [],
+                attachedWindows: new Set(),
                 _isUpdating: false
             };
 
             this._slots.set(slotId, slot);
             this._addToTypeIndex(typeId, slotId);
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Slot created:', slotId, '(type:', typeId + ')');
-            }
 
             return slotId;
         }
@@ -378,13 +372,13 @@
         // ============================================================
 
         deleteSlot(slotId) {
-            const sid = String(slotId);
-            const slot = this._slots.get(sid);
+            var sid = String(slotId);
+            var slot = this._slots.get(sid);
             if (!slot) return false;
 
-            for (const windowId of slot.attachedWindows.slice()) {
+            slot.attachedWindows.forEach(function(windowId) {
                 this._windowSlotIndex.delete(String(windowId));
-            }
+            }, this);
 
             this._slots.delete(sid);
             this._removeFromTypeIndex(slot.type, sid);
@@ -392,11 +386,6 @@
             this._pendingUpdates.delete(sid);
 
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Slot deleted:', sid);
-            }
-
             return true;
         }
 
@@ -405,87 +394,78 @@
         // ============================================================
 
         archiveSlot(slotId) {
-            const sid = String(slotId);
-            const slot = this._slots.get(sid);
+            var sid = String(slotId);
+            var slot = this._slots.get(sid);
             if (!slot) return false;
             if (slot.archived) return true;
 
             slot.archived = true;
             slot.archivedAt = Date.now();
 
-            const archivedOfType = this.getArchivedSlotsByType(slot.type);
+            var archivedOfType = this.getArchivedSlotsByType(slot.type);
             while (archivedOfType.length > LIMITS.ARCHIVED_PER_TYPE) {
-                const oldest = this._findOldestArchived(slot.type);
-                if (oldest) {
-                    this.deleteSlot(oldest);
-                    archivedOfType.shift();
-                } else {
-                    break;
-                }
+                var oldest = this._findOldestArchived(slot.type);
+                if (!oldest) break;
+                this.deleteSlot(oldest);
+                archivedOfType.shift();
             }
 
-            const allArchived = this._getAllArchivedSlotIds();
+            var allArchived = this._getAllArchivedSlotIds();
             while (allArchived.length > LIMITS.ARCHIVED_TOTAL) {
-                const oldest = this._findOldestArchived(null);
-                if (oldest) {
-                    this.deleteSlot(oldest);
-                    allArchived.shift();
-                } else {
-                    break;
-                }
+                var oldest2 = this._findOldestArchived(null);
+                if (!oldest2) break;
+                this.deleteSlot(oldest2);
+                allArchived.shift();
             }
 
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Slot archived:', sid);
-            }
-
             return true;
         }
 
         unarchiveSlot(slotId) {
-            const sid = String(slotId);
-            const slot = this._slots.get(sid);
+            var sid = String(slotId);
+            var slot = this._slots.get(sid);
             if (!slot) return false;
             if (!slot.archived) return true;
 
             slot.archived = false;
             slot.archivedAt = null;
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Slot unarchived:', sid);
-            }
-
             return true;
         }
 
-        _findOldestArchived(typeId = null) {
-            let oldest = null;
-            let oldestTime = Infinity;
+        _findOldestArchived(typeId) {
+            var oldest = null;
+            var oldestTime = Infinity;
 
-            const source = typeId
+            var source = typeId
                 ? (this._typeIndex.get(typeId) || new Set())
                 : this._slots.keys();
 
-            for (const sid of source) {
-                const slot = this._slots.get(sid);
-                if (!slot || !slot.archived) continue;
+            var self = this;
+            var iterate = function(sid) {
+                var slot = self._slots.get(sid);
+                if (!slot || !slot.archived) return;
                 if (slot.archivedAt < oldestTime) {
                     oldestTime = slot.archivedAt;
                     oldest = sid;
                 }
+            };
+
+            if (typeId) {
+                source.forEach(iterate);
+            } else {
+                source.forEach(iterate);
             }
 
             return oldest;
         }
 
         _getAllArchivedSlotIds() {
-            const result = [];
-            for (const [sid, slot] of this._slots) {
+            var result = [];
+            this._slots.forEach(function(slot, sid) {
                 if (slot.archived) result.push(sid);
-            }
+            });
             return result;
         }
 
@@ -494,47 +474,57 @@
         // ============================================================
 
         getActiveSlotsByType(typeId) {
-            const ids = this._typeIndex.get(typeId);
+            var ids = this._typeIndex.get(typeId);
             if (!ids) return [];
-            const result = [];
-            for (const sid of ids) {
-                const slot = this._slots.get(sid);
-                if (slot && !slot.archived && slot.attachedWindows.length > 0) {
+
+            var result = [];
+            var self = this;
+            ids.forEach(function(sid) {
+                var slot = self._slots.get(sid);
+                if (slot && !slot.archived && slot.attachedWindows.size > 0) {
                     result.push(sid);
                 }
-            }
+            });
             return result;
         }
 
         getFreeActiveSlotsByType(typeId) {
-            const ids = this._typeIndex.get(typeId);
+            var ids = this._typeIndex.get(typeId);
             if (!ids) return [];
-            const result = [];
-            for (const sid of ids) {
-                const slot = this._slots.get(sid);
-                if (slot && !slot.archived && slot.attachedWindows.length === 0) {
+
+            var result = [];
+            var self = this;
+            ids.forEach(function(sid) {
+                var slot = self._slots.get(sid);
+                if (slot && !slot.archived && slot.attachedWindows.size === 0) {
                     result.push(sid);
                 }
-            }
+            });
             return result;
         }
 
         getArchivedSlotsByType(typeId) {
-            const ids = this._typeIndex.get(typeId);
+            var ids = this._typeIndex.get(typeId);
             if (!ids) return [];
-            const result = [];
-            for (const sid of ids) {
-                const slot = this._slots.get(sid);
+
+            var result = [];
+            var self = this;
+            ids.forEach(function(sid) {
+                var slot = self._slots.get(sid);
                 if (slot && slot.archived) {
-                    result.push({ sid, archivedAt: slot.archivedAt });
+                    result.push({ sid: sid, archivedAt: slot.archivedAt });
                 }
-            }
-            result.sort((a, b) => b.archivedAt - a.archivedAt);
-            return result.map(r => r.sid);
+            });
+
+            result.sort(function(a, b) { return b.archivedAt - a.archivedAt; });
+
+            var out = [];
+            for (var i = 0; i < result.length; i++) out.push(result[i].sid);
+            return out;
         }
 
         getAllSlotsByType(typeId) {
-            const ids = this._typeIndex.get(typeId);
+            var ids = this._typeIndex.get(typeId);
             if (!ids) return [];
             return Array.from(ids);
         }
@@ -544,7 +534,7 @@
         // ============================================================
 
         getSlotData(slotId) {
-            const slot = this._slots.get(String(slotId));
+            var slot = this._slots.get(String(slotId));
             if (!slot) return null;
             return {
                 metadata: this._deepCopy(slot.metadata),
@@ -553,9 +543,10 @@
             };
         }
 
-        setSlotData(slotId, payload = {}) {
-            const sid = String(slotId);
-            const slot = this._slots.get(sid);
+        setSlotData(slotId, payload) {
+            payload = payload || {};
+            var sid = String(slotId);
+            var slot = this._slots.get(sid);
             if (!slot) {
                 console.error('[DataBus] setSlotData: slot not found:', sid);
                 return false;
@@ -570,10 +561,6 @@
                     data: payload.data,
                     uiState: payload.uiState
                 });
-
-                if (this._debug) {
-                    console.warn('[DataBus] setSlotData: queued for', sid);
-                }
                 return true;
             }
 
@@ -600,62 +587,48 @@
         // ============================================================
 
         attachWindowToSlot(slotId, windowId) {
-            const sid = String(slotId);
-            const wid = String(windowId);
+            var sid = String(slotId);
+            var wid = String(windowId);
 
-            const slot = this._slots.get(sid);
+            var slot = this._slots.get(sid);
             if (!slot) {
                 console.error('[DataBus] attachWindowToSlot: slot not found:', sid);
                 return false;
             }
 
-            const currentSlotId = this._windowSlotIndex.get(wid);
+            var currentSlotId = this._windowSlotIndex.get(wid);
             if (currentSlotId && currentSlotId !== sid) {
                 this.detachWindowFromSlot(currentSlotId, wid);
             }
 
-            if (!slot.attachedWindows.includes(windowId)) {
-                slot.attachedWindows.push(windowId);
-            }
+            slot.attachedWindows.add(wid);
             this._windowSlotIndex.set(wid, sid);
 
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Window', wid, 'attached to slot', sid);
-            }
-
             return true;
         }
 
         detachWindowFromSlot(slotId, windowId) {
-            const sid = String(slotId);
-            const wid = String(windowId);
+            var sid = String(slotId);
+            var wid = String(windowId);
 
-            const slot = this._slots.get(sid);
+            var slot = this._slots.get(sid);
             if (!slot) return false;
 
-            const idx = slot.attachedWindows.indexOf(windowId);
-            if (idx !== -1) {
-                slot.attachedWindows.splice(idx, 1);
-            }
+            slot.attachedWindows.delete(wid);
 
             if (this._windowSlotIndex.get(wid) === sid) {
                 this._windowSlotIndex.delete(wid);
             }
 
             this._markDirty();
-
-            if (this._debug) {
-                console.log('[DataBus] Window', wid, 'detached from slot', sid);
-            }
-
             return true;
         }
 
         getSlotWindows(slotId) {
-            const slot = this._slots.get(String(slotId));
-            return slot ? slot.attachedWindows.slice() : [];
+            var slot = this._slots.get(String(slotId));
+            if (!slot) return [];
+            return Array.from(slot.attachedWindows);
         }
 
         getWindowSlot(windowId) {
@@ -667,19 +640,19 @@
         // ============================================================
 
         subscribeToSlot(slotId, callback) {
-            const sid = String(slotId);
+            var sid = String(slotId);
             if (!this._slotSubscribers.has(sid)) {
                 this._slotSubscribers.set(sid, new Set());
             }
             this._slotSubscribers.get(sid).add(callback);
 
-            return () => {
-                const set = this._slotSubscribers.get(sid);
-                if (set) {
-                    set.delete(callback);
-                    if (set.size === 0) {
-                        this._slotSubscribers.delete(sid);
-                    }
+            var self = this;
+            return function() {
+                var set = self._slotSubscribers.get(sid);
+                if (!set) return;
+                set.delete(callback);
+                if (set.size === 0) {
+                    self._slotSubscribers.delete(sid);
                 }
             };
         }
@@ -690,43 +663,34 @@
             }
             this._typeSubscribers.get(typeId).add(callback);
 
-            return () => {
-                const set = this._typeSubscribers.get(typeId);
-                if (set) {
-                    set.delete(callback);
-                    if (set.size === 0) {
-                        this._typeSubscribers.delete(typeId);
-                    }
+            var self = this;
+            return function() {
+                var set = self._typeSubscribers.get(typeId);
+                if (!set) return;
+                set.delete(callback);
+                if (set.size === 0) {
+                    self._typeSubscribers.delete(typeId);
                 }
             };
         }
 
         // ============================================================
-        // 12. NOTIFY (✅ FIX: итеративный цикл вместо рекурсии)
+        // 12. NOTIFY
         // ============================================================
 
-        /**
-         * ✅ FIX v4.2.1:
-         * Раньше после finally с pending-обновлениями вызывался _notifySlot(sid)
-         * рекурсивно. Это могло привести к глубокой рекурсии, если подписчик
-         * снова писал в слот.
-         *
-         * Теперь — while-loop с лимитом MAX_NOTIFY_DEPTH.
-         * Pending-обновления обрабатываются в следующей итерации цикла.
-         */
         _notifySlot(slotId) {
-            const sid = String(slotId);
+            var sid = String(slotId);
 
-            let depth = 0;
+            var depth = 0;
 
             while (true) {
-                const slot = this._slots.get(sid);
+                var slot = this._slots.get(sid);
                 if (!slot) return;
 
                 if (depth >= MAX_NOTIFY_DEPTH) {
                     console.error(
-                        `[DataBus] _notifySlot: depth exceeded (${MAX_NOTIFY_DEPTH}) for slot "${sid}" — ` +
-                        `possible subscriber loop. Dropping pending updates.`
+                        '[DataBus] _notifySlot: depth exceeded (' + MAX_NOTIFY_DEPTH + ') for slot "' + sid + '" — ' +
+                        'possible subscriber loop. Dropping pending updates.'
                     );
                     slot._isUpdating = false;
                     this._pendingUpdates.delete(sid);
@@ -735,7 +699,7 @@
 
                 slot._isUpdating = true;
 
-                const payload = {
+                var payload = {
                     slotId: sid,
                     type: slot.type,
                     metadata: this._deepCopy(slot.metadata),
@@ -744,38 +708,38 @@
                 };
 
                 try {
-                    const slotSubs = this._slotSubscribers.get(sid);
+                    var slotSubs = this._slotSubscribers.get(sid);
                     if (slotSubs) {
-                        for (const cb of slotSubs) {
+                        slotSubs.forEach(function(cb) {
                             try { cb(payload); } catch (e) {
                                 console.error('[DataBus] Slot subscriber error:', e);
                             }
-                        }
+                        });
                     }
 
-                    const typeSubs = this._typeSubscribers.get(slot.type);
+                    var typeSubs = this._typeSubscribers.get(slot.type);
                     if (typeSubs) {
-                        for (const cb of typeSubs) {
+                        typeSubs.forEach(function(cb) {
                             try { cb(payload); } catch (e) {
                                 console.error('[DataBus] Type subscriber error:', e);
                             }
-                        }
+                        });
                     }
                 } finally {
                     slot._isUpdating = false;
                 }
 
-                // Проверяем: не накопились ли pending-обновления во время notify?
-                const pending = this._pendingUpdates.get(sid);
+                var pending = this._pendingUpdates.get(sid);
                 if (!pending || pending.length === 0) {
-                    return; // всё чисто — выходим из цикла
+                    return;
                 }
 
                 this._pendingUpdates.delete(sid);
 
-                const merged = {};
-                let hasAny = false;
-                for (const p of pending) {
+                var merged = {};
+                var hasAny = false;
+                for (var i = 0; i < pending.length; i++) {
+                    var p = pending[i];
                     if (p.metadata !== undefined) { merged.metadata = p.metadata; hasAny = true; }
                     if (p.data !== undefined) { merged.data = p.data; hasAny = true; }
                     if (p.uiState !== undefined) { merged.uiState = p.uiState; hasAny = true; }
@@ -793,7 +757,6 @@
                 this._markDirty();
 
                 depth++;
-                // продолжаем while-loop → следующая итерация notify с новыми данными
             }
         }
 
@@ -802,11 +765,11 @@
         // ============================================================
 
         exportSlots() {
-            const slots = {};
-            const archive = {};
+            var slots = {};
+            var archive = {};
 
-            for (const [sid, slot] of this._slots) {
-                const data = {
+            this._slots.forEach(function(slot, sid) {
+                var data = {
                     id: slot.id,
                     type: slot.type,
                     metadata: serializeSpecial(slot.metadata),
@@ -821,12 +784,17 @@
                 } else {
                     slots[sid] = data;
                 }
-            }
+            });
+
+            var counters = {};
+            this._slotCounters.forEach(function(value, key) {
+                counters[key] = value;
+            });
 
             return {
-                slots,
-                archive,
-                counters: Object.fromEntries(this._slotCounters)
+                slots: slots,
+                archive: archive,
+                counters: counters
             };
         }
 
@@ -848,31 +816,29 @@
                 this._pendingUpdates.clear();
 
                 if (data.counters && typeof data.counters === 'object') {
-                    for (const [typeId, counter] of Object.entries(data.counters)) {
-                        this._slotCounters.set(typeId, counter);
+                    for (var typeId in data.counters) {
+                        if (!Object.prototype.hasOwnProperty.call(data.counters, typeId)) continue;
+                        this._slotCounters.set(typeId, data.counters[typeId]);
                     }
                 }
 
                 if (data.slots && typeof data.slots === 'object') {
-                    for (const [sid, s] of Object.entries(data.slots)) {
-                        this._restoreSlot(sid, s, false);
+                    for (var sid in data.slots) {
+                        if (!Object.prototype.hasOwnProperty.call(data.slots, sid)) continue;
+                        this._restoreSlot(sid, data.slots[sid], false);
                     }
                 }
 
                 if (data.archive && typeof data.archive === 'object') {
-                    for (const [sid, s] of Object.entries(data.archive)) {
-                        this._restoreSlot(sid, s, true);
+                    for (var sid2 in data.archive) {
+                        if (!Object.prototype.hasOwnProperty.call(data.archive, sid2)) continue;
+                        this._restoreSlot(sid2, data.archive[sid2], true);
                     }
                 }
 
                 this._isDirty = false;
                 this._lastSaveTime = Date.now();
                 this._version++;
-
-                if (this._debug) {
-                    console.log('[DataBus] Slots imported:',
-                        this._slots.size, 'total');
-                }
 
                 return true;
             } catch (error) {
@@ -884,10 +850,10 @@
         }
 
         _restoreSlot(slotId, source, archived) {
-            const sid = String(slotId);
-            const typeId = source.type || 'unknown';
+            var sid = String(slotId);
+            var typeId = source.type || 'unknown';
 
-            const slot = {
+            var slot = {
                 id: sid,
                 type: typeId,
                 data: source.data !== undefined ? deserializeSpecial(source.data) : null,
@@ -897,7 +863,7 @@
                 createdAt: source.createdAt || Date.now(),
                 updatedAt: source.updatedAt || Date.now(),
                 archivedAt: source.archivedAt || (archived ? Date.now() : null),
-                attachedWindows: [],
+                attachedWindows: new Set(),
                 _isUpdating: false
             };
 
@@ -906,7 +872,7 @@
         }
 
         // ============================================================
-        // 14. СНАПШОТ (для истории)
+        // 14. СНАПШОТ
         // ============================================================
 
         exportSnapshot() {
@@ -918,15 +884,15 @@
         }
 
         // ============================================================
-        // 15. СТАТИСТИКА / ОТЛАДКА
+        // 15. СТАТИСТИКА
         // ============================================================
 
         getStats() {
-            let active = 0;
-            let archived = 0;
-            const byType = {};
+            var active = 0;
+            var archived = 0;
+            var byType = {};
 
-            for (const [sid, slot] of this._slots) {
+            this._slots.forEach(function(slot) {
                 if (!byType[slot.type]) {
                     byType[slot.type] = { active: 0, archived: 0 };
                 }
@@ -937,16 +903,20 @@
                     active++;
                     byType[slot.type].active++;
                 }
-            }
+            });
 
             return {
                 totalSlots: this._slots.size,
                 activeSlots: active,
                 archivedSlots: archived,
-                byType,
+                byType: byType,
                 attachedWindows: this._windowSlotIndex.size,
                 pendingUpdates: this._pendingUpdates.size,
-                limits: { ...LIMITS },
+                limits: {
+                    ACTIVE_PER_TYPE: LIMITS.ACTIVE_PER_TYPE,
+                    ARCHIVED_PER_TYPE: LIMITS.ARCHIVED_PER_TYPE,
+                    ARCHIVED_TOTAL: LIMITS.ARCHIVED_TOTAL
+                },
                 isDirty: this._isDirty,
                 lastSaveTime: this._lastSaveTime,
                 version: this._version
@@ -980,18 +950,10 @@
             this._slotCounters.clear();
             this._pendingUpdates.clear();
             this._markDirty();
-            console.log('[DataBus] Cleared all slots');
         }
 
-        enableDebug() {
-            this._debug = true;
-            console.log('[DataBus] Debug mode enabled');
-        }
-
-        disableDebug() {
-            this._debug = false;
-            console.log('[DataBus] Debug mode disabled');
-        }
+        enableDebug() { this._debug = true; }
+        disableDebug() { this._debug = false; }
 
         destroy() {
             this._slots.clear();
@@ -1001,7 +963,6 @@
             this._typeSubscribers.clear();
             this._slotCounters.clear();
             this._pendingUpdates.clear();
-            console.log('[DataBus] Destroyed');
         }
     }
 
@@ -1011,17 +972,16 @@
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
-            DataBus,
-            LIMITS,
-            serializeSpecial,
-            deserializeSpecial
+            DataBus: DataBus,
+            LIMITS: LIMITS,
+            serializeSpecial: serializeSpecial,
+            deserializeSpecial: deserializeSpecial
         };
     }
 
     if (typeof window !== 'undefined') {
         window.DataBus = DataBus;
         window.DataBus.LIMITS = LIMITS;
-        console.log('[DataBus] Registered globally v4.2.1');
     }
 
 })();

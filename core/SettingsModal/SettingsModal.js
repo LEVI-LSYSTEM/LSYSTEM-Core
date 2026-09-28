@@ -1,16 +1,11 @@
-// core/SettingsModal/SettingsModal.js
-// Версия 10.0.0 — EULA как информационный блок (без принятия и гейта).
-// - Нет чекбокса, нет eulaAccepted, нет profile-ready, нет gate.
-// - EULA — только текст + кнопки "Скачать .md" и "Открыть".
-// - Профиль: только Имя / Организация.
+// core/settingsModal/SettingsModal.js
+// Версия 13.0.0
+// - Hotkeys: работа с entry.original / entry.overridden.
+// - Строки с переопределённой комбой получают класс is-overridden.
+// - _applyHotkeyChange сверяет конфликты по effective original.
 
 (function() {
     'use strict';
-
-    console.log('[SettingsModal] Loading v10.0.0...');
-
-    var LS_MANIFEST_OVERRIDE = 'lsystem_window_manifest_override';
-    var WINDOW_MANIFEST_URL = 'data/window/window.json';
 
     var EULA_TEXT = [
         '# Соглашение о неразглашении (EULA)',
@@ -53,10 +48,6 @@
         '**© 2025 LSYSTEM. Все права защищены.**'
     ].join('\n');
 
-    // ============================================================
-    // HTML — SettingsModal
-    // ============================================================
-
     var SETTINGS_HTML = [
         '<div class="settings-modal-overlay" id="settingsModalOverlay">',
         '    <div class="settings-modal" id="settingsModal" role="dialog" aria-modal="true">',
@@ -71,7 +62,6 @@
         '        </div>',
         '        <div class="settings-modal__body">',
 
-        /* ===== ПРОФИЛЬ ===== */
         '            <section class="settings-group">',
         '                <header class="settings-group__header">',
         '                    <svg class="icon-svg settings-group__icon"><use href="#icon-user"></use></svg>',
@@ -104,6 +94,14 @@
         '                    </div>',
 
         '                    <div class="settings-group__actions">',
+        '                        <button class="settings-btn settings-btn--ghost" id="profileExportBtn" type="button" title="Экспорт профиля">',
+        '                            <svg class="icon-svg"><use href="#icon-download"></use></svg>',
+        '                            <span>Экспорт</span>',
+        '                        </button>',
+        '                        <button class="settings-btn settings-btn--ghost" id="profileImportBtn" type="button" title="Импорт профиля">',
+        '                            <svg class="icon-svg"><use href="#icon-load"></use></svg>',
+        '                            <span>Импорт</span>',
+        '                        </button>',
         '                        <button class="settings-btn settings-btn--ghost" id="profileClearBtn" type="button">',
         '                            <svg class="icon-svg"><use href="#icon-trash"></use></svg>',
         '                            <span>Сбросить</span>',
@@ -117,7 +115,6 @@
         '                </div>',
         '            </section>',
 
-        /* ===== ТЕМА ===== */
         '            <section class="settings-group">',
         '                <header class="settings-group__header">',
         '                    <svg class="icon-svg settings-group__icon"><use href="#icon-layout"></use></svg>',
@@ -127,17 +124,14 @@
 
         '                    <div class="theme-switch" id="themeSwitch" data-mode="auto" tabindex="0">',
         '                        <span class="theme-switch__thumb" aria-hidden="true"></span>',
-
         '                        <button class="theme-switch__opt" data-mode="auto" type="button" title="Авто">',
         '                            <svg class="icon-svg"><use href="#icon-history"></use></svg>',
         '                            <span>Авто</span>',
         '                        </button>',
-
         '                        <button class="theme-switch__opt" data-mode="dark" type="button" title="Тёмная">',
         '                            <svg class="icon-svg"><use href="#icon-eye-off"></use></svg>',
         '                            <span>Тёмная</span>',
         '                        </button>',
-
         '                        <button class="theme-switch__opt" data-mode="light" type="button" title="Светлая">',
         '                            <svg class="icon-svg"><use href="#icon-eye"></use></svg>',
         '                            <span>Светлая</span>',
@@ -172,39 +166,68 @@
         '                </div>',
         '            </section>',
 
-        /* ===== ПЛАГИНЫ ===== */
         '            <section class="settings-group">',
         '                <header class="settings-group__header">',
-        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-refresh"></use></svg>',
+        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-window-type"></use></svg>',
         '                    <span class="settings-group__title">Плагины</span>',
-        '                    <span class="settings-group__count" id="pluginsCount">0</span>',
-        '                    <button class="plugins-show-hidden-btn" id="pluginsShowHiddenBtn" type="button" title="Показать скрытые" style="display:none;">',
-        '                        <svg class="icon-svg"><use href="#icon-eye"></use></svg>',
-        '                        <span class="plugins-show-hidden-btn__label">Скрытых: <span id="pluginsHiddenCount">0</span></span>',
-        '                    </button>',
         '                </header>',
         '                <div class="settings-group__body">',
+
+        '                    <div class="settings-folder-banner" id="pluginsFolderBanner" style="display:none;">',
+        '                        <svg class="icon-svg settings-folder-banner__icon"><use href="#icon-warning"></use></svg>',
+        '                        <div class="settings-folder-banner__text">',
+        '                            <div class="settings-folder-banner__title">Требуется доступ к папке плагинов</div>',
+        '                            <div class="settings-folder-banner__desc">Разрешите чтение файлов, чтобы загрузить установленные плагины.</div>',
+        '                        </div>',
+        '                        <button class="settings-btn settings-btn--primary" id="pluginsGrantAccessBtn" type="button">',
+        '                            <span>Разрешить</span>',
+        '                        </button>',
+        '                    </div>',
+
+        '                    <div class="settings-row">',
+        '                        <span class="settings-row__label">Рабочая папка</span>',
+        '                        <div class="settings-row__control">',
+        '                            <code class="settings-path" id="pluginsWorkingFolder">— не выбрана —</code>',
+        '                            <button class="settings-btn settings-btn--ghost" id="pluginsChooseFolderBtn" type="button" title="Выбрать директорию">',
+        '                                <svg class="icon-svg"><use href="#icon-folder"></use></svg>',
+        '                            </button>',
+        '                            <button class="settings-btn settings-btn--ghost" id="pluginsScanFolderBtn" type="button" title="Пересканировать папку">',
+        '                                <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
+        '                            </button>',
+        '                            <button class="settings-btn settings-btn--ghost" id="pluginsForgetFolderBtn" type="button" title="Забыть папку">',
+        '                                <svg class="icon-svg"><use href="#icon-close"></use></svg>',
+        '                            </button>',
+        '                        </div>',
+        '                    </div>',
+
+        '                    <div class="plugins-tabs" id="pluginsTabs">',
+        '                        <button type="button" class="plugins-tab is-active" data-tab="active">',
+        '                            <span>Активные</span>',
+        '                            <span class="plugins-tab__count" id="pluginsActiveCount">0</span>',
+        '                        </button>',
+        '                        <button type="button" class="plugins-tab" data-tab="hidden">',
+        '                            <span>Скрытые</span>',
+        '                            <span class="plugins-tab__count" id="pluginsHiddenCount">0</span>',
+        '                        </button>',
+        '                    </div>',
 
         '                    <div class="plugins-toolbar">',
         '                        <div class="plugins-search">',
         '                            <svg class="plugins-search__icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>',
         '                            <input type="text" class="plugins-search__input" id="pluginsSearchInput" placeholder="Поиск плагинов..." autocomplete="off" />',
         '                        </div>',
-        '                        <button class="settings-btn settings-btn--ghost" id="pluginsRefreshBtn" type="button" title="Обновить из манифеста">',
-        '                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
+        '                        <button class="settings-btn settings-btn--ghost" id="pluginsInstallUrlBtn" type="button" title="Установить по URL">',
+        '                            <svg class="icon-svg"><use href="#icon-plus"></use></svg>',
+        '                            <span>+ URL</span>',
         '                        </button>',
         '                    </div>',
 
         '                    <div class="plugins-list" id="pluginsList"></div>',
 
         '                    <div class="settings-group__actions">',
-        '                        <button class="settings-btn settings-btn--ghost" id="pluginsDownloadBtn" type="button" title="Скачать window.json">',
+        '                        <button class="settings-btn settings-btn--ghost" id="pluginsCheckUpdatesBtn" type="button" title="Проверить обновления URL-плагинов">',
         '                            <svg class="icon-svg"><use href="#icon-download"></use></svg>',
-        '                            <span>Скачать window.json</span>',
-        '                        </button>',
-        '                        <button class="settings-btn settings-btn--ghost" id="pluginsResetBtn" type="button" title="Сбросить override манифеста">',
-        '                            <svg class="icon-svg"><use href="#icon-trash"></use></svg>',
-        '                            <span>Сбросить</span>',
+        '                            <span>Проверить обновления</span>',
         '                        </button>',
         '                        <button class="settings-btn settings-btn--primary" id="pluginsReloadBtn" type="button">',
         '                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
@@ -215,7 +238,6 @@
         '                </div>',
         '            </section>',
 
-        /* ===== ХОТКЕИ ===== */
         '            <section class="settings-group">',
         '                <header class="settings-group__header">',
         '                    <svg class="icon-svg settings-group__icon"><use href="#icon-settings"></use></svg>',
@@ -256,10 +278,6 @@
         '</div>'
     ].join('\n');
 
-    // ============================================================
-    // HTML — EULA Modal
-    // ============================================================
-
     var EULA_MODAL_HTML = [
         '<div class="eula-modal-overlay" id="eulaModalOverlay">',
         '    <div class="eula-modal" role="dialog" aria-modal="true">',
@@ -291,10 +309,6 @@
         '    </div>',
         '</div>'
     ].join('\n');
-
-    // ============================================================
-    // Markdown
-    // ============================================================
 
     function escapeHtml(s) {
         if (s == null) return '';
@@ -388,10 +402,6 @@
         return html.join('\n');
     }
 
-    // ============================================================
-    // КЛАСС
-    // ============================================================
-
     function SettingsModal() {
         this._overlay = null;
         this._eulaOverlay = null;
@@ -402,19 +412,13 @@
         this._closeHandlers = [];
         this._nowTimer = null;
 
+        this._pluginsTab = 'active';
         this._pluginsSearchQuery = '';
-        this._showHiddenPlugins = false;
-
-        this._baseManifest = { groups: {} };
-        this._overrideManifest = null;
-        this._manifestLoaded = false;
 
         this._init();
     }
 
     SettingsModal.prototype._init = function() {
-        console.log('[SettingsModal] Initializing v10.0.0...');
-
         var overlay = document.getElementById('settingsModalOverlay');
         if (!overlay) {
             var tmp = document.createElement('div');
@@ -437,244 +441,36 @@
         if (content) content.innerHTML = renderMarkdown(EULA_TEXT);
 
         this._bindEvents();
-        console.log('[SettingsModal] ✅ Ready v10.0.0');
+        this._subscribePluginEvents();
     };
 
-    // ============================================================
-    // МАНИФЕСТ
-    // ============================================================
+    SettingsModal.prototype._subscribePluginEvents = function() {
+        var self = this;
 
-    SettingsModal.prototype._loadOverride = function() {
-        try {
-            var raw = localStorage.getItem(LS_MANIFEST_OVERRIDE);
-            if (!raw) return null;
-            var parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== 'object') return null;
-            if (!parsed.groups || typeof parsed.groups !== 'object') return null;
-            return parsed;
-        } catch (e) {
-            return null;
-        }
+        var onChange = function() {
+            if (!self._isOpen) return;
+            self._renderPlugins();
+        };
+        var onFolderChange = function() {
+            if (!self._isOpen) return;
+            self._renderWorkingFolder();
+            self._renderPluginsFolderBanner();
+        };
+        var onPermissionNeeded = function() {
+            if (!self._isOpen) return;
+            self._renderPluginsFolderBanner();
+        };
+
+        document.addEventListener('plugins:changed', onChange);
+        document.addEventListener('plugins:folder-changed', onFolderChange);
+        document.addEventListener('plugins:folder-permission-needed', onPermissionNeeded);
+
+        this._closeHandlers.push(function() {
+            document.removeEventListener('plugins:changed', onChange);
+            document.removeEventListener('plugins:folder-changed', onFolderChange);
+            document.removeEventListener('plugins:folder-permission-needed', onPermissionNeeded);
+        });
     };
-
-    SettingsModal.prototype._saveOverride = function(manifest) {
-        try {
-            if (!manifest) {
-                localStorage.removeItem(LS_MANIFEST_OVERRIDE);
-                this._overrideManifest = null;
-            } else {
-                var payload = { groups: {} };
-                for (var g in manifest.groups) {
-                    if (!Object.prototype.hasOwnProperty.call(manifest.groups, g)) continue;
-                    payload.groups[g] = manifest.groups[g].map(function(e) {
-                        return { file: e.file, hidden: !!e.hidden };
-                    });
-                }
-                localStorage.setItem(LS_MANIFEST_OVERRIDE, JSON.stringify(payload));
-                this._overrideManifest = payload;
-            }
-        } catch (e) {}
-    };
-
-    SettingsModal.prototype._normalizeEntry = function(entry) {
-        if (typeof entry === 'string') {
-            return { file: entry, hidden: false };
-        }
-        if (entry && typeof entry === 'object') {
-            return {
-                file: String(entry.file || ''),
-                hidden: !!entry.hidden
-            };
-        }
-        return null;
-    };
-
-    SettingsModal.prototype._normalizeRaw = function(raw) {
-        var result = { groups: {} };
-        if (!raw || typeof raw !== 'object') return result;
-
-        if (raw.groups && typeof raw.groups === 'object' && !Array.isArray(raw.groups)) {
-            for (var g in raw.groups) {
-                if (!Object.prototype.hasOwnProperty.call(raw.groups, g)) continue;
-                var list = raw.groups[g];
-                if (!Array.isArray(list)) continue;
-                var entries = [];
-                for (var i = 0; i < list.length; i++) {
-                    var norm = this._normalizeEntry(list[i]);
-                    if (norm && norm.file && /\.js$/i.test(norm.file)) {
-                        entries.push(norm);
-                    }
-                }
-                if (entries.length > 0) result.groups[g] = entries;
-            }
-            return result;
-        }
-
-        if (Array.isArray(raw.files)) {
-            var entries2 = [];
-            for (var j = 0; j < raw.files.length; j++) {
-                var f = raw.files[j];
-                if (typeof f === 'string' && /\.js$/i.test(f)) {
-                    entries2.push({ file: f, hidden: false });
-                }
-            }
-            if (entries2.length > 0) result.groups['Other'] = entries2;
-        }
-
-        return result;
-    };
-
-    SettingsModal.prototype._fetchBaseManifest = async function() {
-        try {
-            var url = WINDOW_MANIFEST_URL + '?_=' + Date.now();
-            var res = await fetch(url, { cache: 'no-cache' });
-            if (!res.ok) {
-                console.warn('[SettingsModal] window.json not found (status ' + res.status + ')');
-                this._baseManifest = { groups: {} };
-                return;
-            }
-            var raw = await res.json();
-            this._baseManifest = this._normalizeRaw(raw);
-            console.log('[SettingsModal] window.json loaded:',
-                Object.keys(this._baseManifest.groups).length, 'groups');
-        } catch (e) {
-            console.warn('[SettingsModal] Error fetching window.json:', e);
-            this._baseManifest = { groups: {} };
-        }
-    };
-
-    SettingsModal.prototype._getEffectiveManifest = function() {
-        var result = { groups: {} };
-
-        for (var g in this._baseManifest.groups) {
-            if (!Object.prototype.hasOwnProperty.call(this._baseManifest.groups, g)) continue;
-            result.groups[g] = this._baseManifest.groups[g].map(function(e) {
-                return { file: e.file, hidden: !!e.hidden };
-            });
-        }
-
-        if (this._overrideManifest && this._overrideManifest.groups) {
-            var override = this._overrideManifest.groups;
-
-            var overrideMap = {};
-            for (var og in override) {
-                if (!Object.prototype.hasOwnProperty.call(override, og)) continue;
-                var list = override[og];
-                if (!Array.isArray(list)) continue;
-                for (var oi = 0; oi < list.length; oi++) {
-                    var norm = this._normalizeEntry(list[oi]);
-                    if (norm && norm.file) {
-                        overrideMap[norm.file] = {
-                            group: og,
-                            hidden: !!norm.hidden
-                        };
-                    }
-                }
-            }
-
-            for (var bg in result.groups) {
-                if (!Object.prototype.hasOwnProperty.call(result.groups, bg)) continue;
-                result.groups[bg] = result.groups[bg].map(function(e) {
-                    if (overrideMap[e.file]) {
-                        return { file: e.file, hidden: overrideMap[e.file].hidden };
-                    }
-                    return e;
-                });
-            }
-
-            var flat = [];
-            for (var fg in result.groups) {
-                if (!Object.prototype.hasOwnProperty.call(result.groups, fg)) continue;
-                for (var fi = 0; fi < result.groups[fg].length; fi++) {
-                    var entry = result.groups[fg][fi];
-                    var ov = overrideMap[entry.file];
-                    flat.push({
-                        file: entry.file,
-                        hidden: ov ? ov.hidden : entry.hidden,
-                        group: ov ? ov.group : fg
-                    });
-                }
-            }
-
-            for (var of_ in overrideMap) {
-                if (!Object.prototype.hasOwnProperty.call(overrideMap, of_)) continue;
-                var exists = false;
-                for (var k = 0; k < flat.length; k++) {
-                    if (flat[k].file === of_) { exists = true; break; }
-                }
-                if (!exists) {
-                    flat.push({
-                        file: of_,
-                        hidden: overrideMap[of_].hidden,
-                        group: overrideMap[of_].group
-                    });
-                }
-            }
-
-            result.groups = {};
-            for (var n = 0; n < flat.length; n++) {
-                var f = flat[n];
-                if (!result.groups[f.group]) result.groups[f.group] = [];
-                result.groups[f.group].push({
-                    file: f.file,
-                    hidden: f.hidden
-                });
-            }
-        }
-
-        return result;
-    };
-
-    SettingsModal.prototype._setHiddenFlag = function(filename, hidden) {
-        var manifest = this._getEffectiveManifest();
-
-        var found = false;
-        for (var g in manifest.groups) {
-            if (!Object.prototype.hasOwnProperty.call(manifest.groups, g)) continue;
-            for (var i = 0; i < manifest.groups[g].length; i++) {
-                if (manifest.groups[g][i].file === filename) {
-                    manifest.groups[g][i].hidden = !!hidden;
-                    found = true;
-                }
-            }
-        }
-
-        if (!found) {
-            if (!manifest.groups['Other']) manifest.groups['Other'] = [];
-            manifest.groups['Other'].push({ file: filename, hidden: !!hidden });
-        }
-
-        this._saveOverride(manifest);
-    };
-
-    SettingsModal.prototype._setGroup = function(filename, groupName) {
-        if (!filename || !groupName) return;
-
-        var manifest = this._getEffectiveManifest();
-
-        var hidden = false;
-        for (var g in manifest.groups) {
-            if (!Object.prototype.hasOwnProperty.call(manifest.groups, g)) continue;
-            for (var i = 0; i < manifest.groups[g].length; i++) {
-                if (manifest.groups[g][i].file === filename) {
-                    hidden = manifest.groups[g][i].hidden;
-                }
-            }
-            manifest.groups[g] = manifest.groups[g].filter(function(e) {
-                return e.file !== filename;
-            });
-            if (manifest.groups[g].length === 0) delete manifest.groups[g];
-        }
-
-        if (!manifest.groups[groupName]) manifest.groups[groupName] = [];
-        manifest.groups[groupName].push({ file: filename, hidden: hidden });
-
-        this._saveOverride(manifest);
-    };
-
-    // ============================================================
-    // СОБЫТИЯ
-    // ============================================================
 
     SettingsModal.prototype._bindEvents = function() {
         var self = this;
@@ -707,23 +503,27 @@
             self._clearProfile();
         });
 
+        overlay.querySelector('#profileExportBtn').addEventListener('click', function() {
+            self._notifyStub('Экспорт профиля', 'LSUManager будет подключён следующей итерацией');
+        });
+        overlay.querySelector('#profileImportBtn').addEventListener('click', function() {
+            self._notifyStub('Импорт профиля', 'LSUManager будет подключён следующей итерацией');
+        });
+
         overlay.querySelector('#eulaDownloadBtn').addEventListener('click', function() {
             self._downloadEULA();
         });
-
         overlay.querySelector('#eulaOpenBtn').addEventListener('click', function() {
             self._openEulaModal();
+        });
+        eulaOverlay.querySelector('#eulaModalDownloadBtn').addEventListener('click', function() {
+            self._downloadEULA();
         });
 
         overlay.querySelector('#profileName').addEventListener('input', function() {
             self._updateSaveState();
         });
 
-        eulaOverlay.querySelector('#eulaModalDownloadBtn').addEventListener('click', function() {
-            self._downloadEULA();
-        });
-
-        // ===== Тема =====
         var themeSwitch = overlay.querySelector('#themeSwitch');
         if (themeSwitch) {
             themeSwitch.addEventListener('click', function(e) {
@@ -822,23 +622,16 @@
         this._renderProfile();
         this._renderThemeMode();
         this._renderHotkeys();
+        this._renderWorkingFolder();
+        this._renderPluginsFolderBanner();
+        this._renderPlugins();
         this._startNowTimer();
 
         var self = this;
-        this._loadOverride();
-        this._fetchBaseManifest().then(function() {
-            self._manifestLoaded = true;
-            self._renderPluginsList();
-        });
-
-        this._renderPluginsList();
-
         setTimeout(function() {
             var inp = self._overlay.querySelector('#profileName');
             if (inp) inp.focus();
         }, 100);
-
-        console.log('[SettingsModal] Opened');
     };
 
     SettingsModal.prototype.close = function() {
@@ -850,15 +643,11 @@
         this._closeEulaModal();
         this._cancelCapture();
         this._stopNowTimer();
-        console.log('[SettingsModal] Closed');
     };
 
     SettingsModal.prototype.toggle = function() {
-        if (this._isOpen) {
-            this.close();
-        } else {
-            this.open();
-        }
+        if (this._isOpen) this.close();
+        else this.open();
     };
 
     SettingsModal.prototype.isOpen = function() { return this._isOpen; };
@@ -919,14 +708,13 @@
             name: name
         };
 
-        window.appState.setAccount(payload);
+        if (window.appState) window.appState.setAccount(payload);
 
         if (window.__lsystem) {
             var welcomeName = name || 'пользователь';
             window.__lsystem.showNotification('Профиль сохранён: ' + welcomeName, 'success');
         }
 
-        console.log('[SettingsModal] Profile saved:', { name: name });
         return true;
     };
 
@@ -998,7 +786,6 @@
         if (s === e) {
             band.style.left = '0%';
             band.style.width = '100%';
-            band.style.background = '';
             band.style.backgroundImage = '';
         } else if (s < e) {
             band.style.left = (s / 24 * 100) + '%';
@@ -1010,7 +797,6 @@
 
             band.style.left = '0%';
             band.style.width = '100%';
-
             band.style.backgroundImage =
                 'linear-gradient(to right, ' +
                 'rgba(200, 184, 154, 0.75) 0%, ' +
@@ -1067,64 +853,188 @@
     };
 
     // ============================================================
-    // ПЛАГИНЫ
+    // ПЛАГИНЫ — рабочая папка
+    // ============================================================
+
+    SettingsModal.prototype._renderWorkingFolder = function() {
+        var el = this._overlay.querySelector('#pluginsWorkingFolder');
+        if (!el) return;
+
+        var ps = window.pluginSystem;
+        if (!ps) {
+            el.textContent = '— pluginSystem не загружен —';
+            return;
+        }
+
+        var state = ps.getFolderState();
+        var name = ps.getFolderName();
+
+        if (state === 'granted') {
+            el.textContent = name || 'выбрана';
+        } else if (state === 'prompt') {
+            el.textContent = (name || 'выбрана') + ' — требуется разрешение';
+        } else if (state === 'denied') {
+            el.textContent = (name || 'выбрана') + ' — доступ запрещён';
+        } else {
+            el.textContent = '— не выбрана —';
+        }
+    };
+
+    SettingsModal.prototype._renderPluginsFolderBanner = function() {
+        var banner = this._overlay.querySelector('#pluginsFolderBanner');
+        if (!banner) return;
+
+        var ps = window.pluginSystem;
+        if (!ps) {
+            banner.style.display = 'none';
+            return;
+        }
+
+        var state = ps.getFolderState();
+        if (state === 'prompt' || state === 'denied') {
+            banner.style.display = 'flex';
+        } else {
+            banner.style.display = 'none';
+        }
+    };
+
+    // ============================================================
+    // ПЛАГИНЫ — события
     // ============================================================
 
     SettingsModal.prototype._bindPluginsEvents = function() {
         var self = this;
         var overlay = this._overlay;
 
+        var tabsWrap = overlay.querySelector('#pluginsTabs');
+        if (tabsWrap) {
+            tabsWrap.addEventListener('click', function(e) {
+                var tab = e.target.closest('.plugins-tab');
+                if (!tab || !tabsWrap.contains(tab)) return;
+                var name = tab.dataset.tab;
+                if (!name || name === self._pluginsTab) return;
+
+                self._pluginsTab = name;
+                tabsWrap.querySelectorAll('.plugins-tab').forEach(function(t) {
+                    t.classList.toggle('is-active', t.dataset.tab === name);
+                });
+                self._pluginsSearchQuery = '';
+                var inp = overlay.querySelector('#pluginsSearchInput');
+                if (inp) inp.value = '';
+                self._renderPlugins();
+            });
+        }
+
         var searchInput = overlay.querySelector('#pluginsSearchInput');
         if (searchInput) {
             searchInput.addEventListener('input', function() {
                 self._pluginsSearchQuery = searchInput.value || '';
-                self._renderPluginsList();
+                self._renderPlugins();
             });
         }
 
-        var showHiddenBtn = overlay.querySelector('#pluginsShowHiddenBtn');
-        if (showHiddenBtn) {
-            showHiddenBtn.addEventListener('click', function() {
-                self._showHiddenPlugins = !self._showHiddenPlugins;
-                self._renderPluginsList();
-            });
-        }
-
-        var refreshBtn = overlay.querySelector('#pluginsRefreshBtn');
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', async function() {
-                refreshBtn.disabled = true;
-                var orig = refreshBtn.innerHTML;
-                refreshBtn.innerHTML = '<svg class="icon-svg icon-spin"><use href="#icon-refresh"></use></svg>';
-
-                try {
-                    self._loadOverride();
-                    await self._fetchBaseManifest();
-                    self._renderPluginsList();
+        var chooseBtn = overlay.querySelector('#pluginsChooseFolderBtn');
+        if (chooseBtn) {
+            chooseBtn.addEventListener('click', async function() {
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                var ok = await ps.pickFolder();
+                if (ok) {
                     if (window.__lsystem) {
-                        window.__lsystem.showNotification('Манифест обновлён', 'success');
+                        window.__lsystem.showNotification('Папка плагинов выбрана: ' + ps.getFolderName(), 'success');
+                    }
+                }
+                self._renderWorkingFolder();
+                self._renderPluginsFolderBanner();
+            });
+        }
+
+        var scanBtn = overlay.querySelector('#pluginsScanFolderBtn');
+        if (scanBtn) {
+            scanBtn.addEventListener('click', async function() {
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                scanBtn.disabled = true;
+                try {
+                    await ps.rescanFolder();
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Папка пересканирована', 'info', 1500);
                     }
                 } finally {
-                    refreshBtn.disabled = false;
-                    refreshBtn.innerHTML = orig;
+                    scanBtn.disabled = false;
                 }
             });
         }
 
-        var downloadBtn = overlay.querySelector('#pluginsDownloadBtn');
-        if (downloadBtn) {
-            downloadBtn.addEventListener('click', function() {
-                self._downloadManifest();
+        var forgetBtn = overlay.querySelector('#pluginsForgetFolderBtn');
+        if (forgetBtn) {
+            forgetBtn.addEventListener('click', function() {
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                ps.forgetFolder();
+                self._renderWorkingFolder();
+                self._renderPluginsFolderBanner();
+                if (window.__lsystem) {
+                    window.__lsystem.showNotification('Папка плагинов забыта', 'info', 1500);
+                }
             });
         }
 
-        var resetBtn = overlay.querySelector('#pluginsResetBtn');
-        if (resetBtn) {
-            resetBtn.addEventListener('click', function() {
-                self._saveOverride(null);
-                self._renderPluginsList();
-                if (window.__lsystem) {
-                    window.__lsystem.showNotification('Изменения манифеста сброшены', 'info');
+        var grantBtn = overlay.querySelector('#pluginsGrantAccessBtn');
+        if (grantBtn) {
+            grantBtn.addEventListener('click', async function() {
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                grantBtn.disabled = true;
+                try {
+                    var ok = await ps.requestFolderPermission();
+                    if (!ok) {
+                        if (window.__lsystem) {
+                            window.__lsystem.showNotification('Доступ не предоставлен', 'warning');
+                        }
+                    }
+                } finally {
+                    grantBtn.disabled = false;
+                    self._renderWorkingFolder();
+                    self._renderPluginsFolderBanner();
+                }
+            });
+        }
+
+        var installBtn = overlay.querySelector('#pluginsInstallUrlBtn');
+        if (installBtn) {
+            installBtn.addEventListener('click', function() {
+                self._openInstallUrlModal();
+            });
+        }
+
+        var updatesBtn = overlay.querySelector('#pluginsCheckUpdatesBtn');
+        if (updatesBtn) {
+            updatesBtn.addEventListener('click', async function() {
+                var ps = window.pluginSystem;
+                if (!ps || typeof ps.checkUpdates !== 'function') return;
+                updatesBtn.disabled = true;
+                try {
+                    var results = await ps.checkUpdates();
+                    var withUpdates = results.filter(function(r) { return r.hasUpdate; });
+                    if (window.__lsystem) {
+                        if (withUpdates.length === 0) {
+                            window.__lsystem.showNotification('Обновлений нет', 'info', 1500);
+                        } else {
+                            window.__lsystem.showNotification(
+                                'Доступно обновлений: ' + withUpdates.length,
+                                'info',
+                                2500
+                            );
+                        }
+                    }
+                } catch (err) {
+                    console.error('[SettingsModal] checkUpdates error:', err);
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Ошибка проверки', 'error');
+                    }
+                } finally {
+                    updatesBtn.disabled = false;
                 }
             });
         }
@@ -1132,20 +1042,15 @@
         var reloadBtn = overlay.querySelector('#pluginsReloadBtn');
         if (reloadBtn) {
             reloadBtn.addEventListener('click', async function() {
-                var btn = reloadBtn;
-                var origText = btn.innerHTML;
-                btn.innerHTML = '<span>Загрузка…</span>';
-                btn.disabled = true;
-
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                var orig = reloadBtn.innerHTML;
+                reloadBtn.disabled = true;
+                reloadBtn.innerHTML = '<span>Загрузка…</span>';
                 try {
-                    if (window.pluginSystem && typeof window.pluginSystem.reload === 'function') {
-                        await window.pluginSystem.reload();
-                        self._loadOverride();
-                        await self._fetchBaseManifest();
-                        self._renderPluginsList();
-                        if (window.__lsystem) {
-                            window.__lsystem.showNotification('Плагины перезагружены', 'success');
-                        }
+                    await ps.reload();
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Плагины перезагружены', 'success');
                     }
                 } catch (err) {
                     console.error('[SettingsModal] Reload plugins error:', err);
@@ -1153,215 +1058,84 @@
                         window.__lsystem.showNotification('Ошибка перезагрузки', 'error');
                     }
                 } finally {
-                    btn.innerHTML = origText;
-                    btn.disabled = false;
+                    reloadBtn.disabled = false;
+                    reloadBtn.innerHTML = orig;
                 }
             });
         }
     };
 
-    SettingsModal.prototype._downloadManifest = function() {
-        var manifest = this._getEffectiveManifest();
+    // ============================================================
+    // ПЛАГИНЫ — рендер
+    // ============================================================
 
-        var payload = { groups: {} };
-        for (var g in manifest.groups) {
-            if (!Object.prototype.hasOwnProperty.call(manifest.groups, g)) continue;
-            payload.groups[g] = manifest.groups[g].map(function(e) {
-                return { file: e.file, hidden: !!e.hidden };
-            });
-        }
-
-        var json = JSON.stringify(payload, null, 2);
-        var blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = 'window.json';
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-
-        if (window.__lsystem) {
-            window.__lsystem.showNotification('window.json скачан', 'success');
-        }
-    };
-
-    SettingsModal.prototype._buildPluginsData = function() {
-        var manifest = this._getEffectiveManifest();
-
-        var byFile = {};
-
-        for (var g in manifest.groups) {
-            if (!Object.prototype.hasOwnProperty.call(manifest.groups, g)) continue;
-            var list = manifest.groups[g];
-            for (var i = 0; i < list.length; i++) {
-                var entry = list[i];
-                if (!entry || !entry.file) continue;
-                byFile[entry.file] = {
-                    file: entry.file,
-                    group: g,
-                    hidden: !!entry.hidden
-                };
-            }
-        }
-
-        var ps = window.pluginSystem;
-        var loadedByFile = {};
-
-        if (ps && typeof ps.getPlugins === 'function') {
-            var plugins = ps.getPlugins();
-            for (var j = 0; j < plugins.length; j++) {
-                var plugin = plugins[j];
-                var file = plugin.file;
-                if (!file) continue;
-
-                if (!byFile[file]) {
-                    byFile[file] = {
-                        file: file,
-                        group: plugin.group || 'Other',
-                        hidden: false
-                    };
-                }
-
-                var reg = window.__registry ? window.__registry.getType(plugin.id) : null;
-
-                loadedByFile[file] = {
-                    id: plugin.id,
-                    name: plugin.name,
-                    displayName: (reg && reg.name) || plugin.id,
-                    icon: (reg && reg.icon) || 'icon-window',
-                    loaded: true,
-                    type: plugin.type || 'window',
-                    autoRegistered: !!plugin.autoRegistered
-                };
-            }
-        }
-
-        var result = [];
-        for (var filename in byFile) {
-            if (!Object.prototype.hasOwnProperty.call(byFile, filename)) continue;
-            var meta = byFile[filename];
-            var loaded = loadedByFile[filename] || null;
-
-            result.push({
-                file: filename,
-                group: meta.group || 'Other',
-                hidden: !!meta.hidden,
-                id: loaded ? loaded.id : null,
-                displayName: loaded ? loaded.displayName : filename.replace(/\.js$/, ''),
-                icon: loaded ? loaded.icon : (meta.hidden ? 'icon-eye-off' : 'icon-window'),
-                loaded: !!loaded,
-                type: loaded ? loaded.type : (meta.hidden ? 'hidden' : 'pending'),
-                autoRegistered: loaded ? loaded.autoRegistered : false
-            });
-        }
-
-        result.sort(function(a, b) {
-            if (a.group !== b.group) return a.group.localeCompare(b.group);
-            return (a.displayName || '').localeCompare(b.displayName || '');
-        });
-
-        return result;
-    };
-
-    SettingsModal.prototype._renderPluginsList = function() {
+    SettingsModal.prototype._renderPlugins = function() {
         var listEl = this._overlay.querySelector('#pluginsList');
         if (!listEl) return;
 
-        var countEl = this._overlay.querySelector('#pluginsCount');
-        var showHiddenBtn = this._overlay.querySelector('#pluginsShowHiddenBtn');
+        var activeCountEl = this._overlay.querySelector('#pluginsActiveCount');
+        var hiddenCountEl = this._overlay.querySelector('#pluginsHiddenCount');
 
-        var all = this._buildPluginsData();
-
-        var hiddenCount = 0;
-        for (var i = 0; i < all.length; i++) {
-            if (all[i].hidden) hiddenCount++;
-        }
-
-        if (showHiddenBtn) {
-            if (hiddenCount > 0) {
-                showHiddenBtn.style.display = 'inline-flex';
-                showHiddenBtn.classList.toggle('is-active', this._showHiddenPlugins);
-                var label = showHiddenBtn.querySelector('.plugins-show-hidden-btn__label');
-                if (label) {
-                    label.innerHTML = this._showHiddenPlugins
-                        ? 'Скрыть'
-                        : 'Скрытых: <span id="pluginsHiddenCount">' + hiddenCount + '</span>';
-                }
-            } else {
-                showHiddenBtn.style.display = 'none';
-                this._showHiddenPlugins = false;
-            }
-        }
-
-        var plugins = all.filter(function(p) {
-            if (p.hidden && !this._showHiddenPlugins) return false;
-            return true;
-        }, this);
-
-        var query = (this._pluginsSearchQuery || '').toLowerCase().trim();
-        if (query) {
-            plugins = plugins.filter(function(p) {
-                var inName = (p.displayName || '').toLowerCase().indexOf(query) !== -1;
-                var inFile = (p.file || '').toLowerCase().indexOf(query) !== -1;
-                var inGroup = (p.group || '').toLowerCase().indexOf(query) !== -1;
-                return inName || inFile || inGroup;
-            });
-        }
-
-        if (countEl) countEl.textContent = plugins.length;
-
-        if (plugins.length === 0) {
-            listEl.innerHTML = '<div class="plugins-list__empty">' +
-                (query ? 'Ничего не найдено'
-                    : (this._showHiddenPlugins ? 'Нет скрытых' : 'Нет плагинов')) + '</div>';
+        var ps = window.pluginSystem;
+        if (!ps || typeof ps.getAllPlugins !== 'function') {
+            listEl.innerHTML = '<div class="plugins-list__empty">pluginSystem не загружен</div>';
+            if (activeCountEl) activeCountEl.textContent = '0';
+            if (hiddenCountEl) hiddenCountEl.textContent = '0';
             return;
         }
 
-        var groupSet = {};
-        all.forEach(function(p) {
-            if (p.group) groupSet[p.group] = true;
-        });
-        var groupNames = Object.keys(groupSet).sort();
+        var all = ps.getAllPlugins() || [];
 
-        var self = this;
+        var active = all.filter(function(p) { return p.enabled; });
+        var hidden = all.filter(function(p) { return !p.enabled; });
+
+        if (activeCountEl) activeCountEl.textContent = String(active.length);
+        if (hiddenCountEl) hiddenCountEl.textContent = String(hidden.length);
+
+        var current = (this._pluginsTab === 'hidden') ? hidden : active;
+
+        var query = (this._pluginsSearchQuery || '').toLowerCase().trim();
+        if (query) {
+            current = current.filter(function(p) {
+                return (p.name || '').toLowerCase().indexOf(query) !== -1
+                    || (p.id || '').toLowerCase().indexOf(query) !== -1
+                    || (p.author || '').toLowerCase().indexOf(query) !== -1;
+            });
+        }
+
         listEl.innerHTML = '';
 
-        plugins.forEach(function(p) {
-            listEl.appendChild(self._makePluginRow(p, groupNames));
-        });
+        if (current.length === 0) {
+            var empty = document.createElement('div');
+            empty.className = 'plugins-list__empty';
+            if (query) {
+                empty.textContent = 'Ничего не найдено';
+            } else if (this._pluginsTab === 'hidden') {
+                empty.textContent = 'Скрытых плагинов нет';
+            } else {
+                empty.textContent = 'Активных плагинов нет';
+            }
+            listEl.appendChild(empty);
+            return;
+        }
 
-        var existingList = this._overlay.querySelector('#pluginsGroupList');
-        if (existingList) existingList.remove();
-
-        var datalist = document.createElement('datalist');
-        datalist.id = 'pluginsGroupList';
-        groupNames.forEach(function(g) {
-            var opt = document.createElement('option');
-            opt.value = g;
-            datalist.appendChild(opt);
+        var self = this;
+        current.forEach(function(p) {
+            listEl.appendChild(self._makePluginRow(p));
         });
-        listEl.appendChild(datalist);
     };
 
-    SettingsModal.prototype._makePluginRow = function(p, groupNames) {
-        var self = this;
-        var isHidden = !!p.hidden;
-
+    SettingsModal.prototype._makePluginRow = function(p) {
         var row = document.createElement('div');
-        row.className = 'plugin-row' + (isHidden ? ' is-hidden' : '');
-        row.dataset.file = p.file;
+        row.className = 'plugin-row';
+        row.dataset.pluginId = p.id;
 
         var main = document.createElement('div');
         main.className = 'plugin-row__main';
 
         var iconEl = document.createElement('div');
         iconEl.className = 'plugin-row__icon';
-        if (isHidden) {
-            iconEl.innerHTML = '<svg class="icon-svg"><use href="#icon-eye-off"></use></svg>';
-        } else if (p.icon && p.icon.indexOf('icon-') === 0) {
+        if (p.icon && p.icon.indexOf('icon-') === 0) {
             iconEl.innerHTML = '<svg class="icon-svg"><use href="#' + p.icon + '"></use></svg>';
         } else {
             iconEl.textContent = p.icon || '📄';
@@ -1371,90 +1145,233 @@
         var infoEl = document.createElement('div');
         infoEl.className = 'plugin-row__info';
 
-        var nameEl = document.createElement('div');
-        nameEl.className = 'plugin-row__name';
-        nameEl.textContent = p.displayName || p.file;
-        infoEl.appendChild(nameEl);
+        var nameRow = document.createElement('div');
+        nameRow.style.display = 'flex';
+        nameRow.style.alignItems = 'center';
+        nameRow.style.gap = '6px';
+        nameRow.style.minWidth = '0';
+        nameRow.style.overflow = 'hidden';
 
-        var metaEl = document.createElement('div');
-        metaEl.className = 'plugin-row__meta';
-        var statusText = p.loaded ? 'loaded' : (isHidden ? 'hidden' : 'pending');
-        metaEl.textContent = p.file + '  ·  ' + statusText;
-        infoEl.appendChild(metaEl);
+        var nameEl = document.createElement('span');
+        nameEl.className = 'plugin-row__name';
+        nameEl.textContent = p.name || p.id;
+        nameRow.appendChild(nameEl);
+
+        var badgeSource = document.createElement('span');
+        badgeSource.className = 'plugin-row__badge';
+        if (p.source === 'url') badgeSource.textContent = 'URL';
+        else if (p.source === 'folder') badgeSource.textContent = 'Folder';
+        else badgeSource.textContent = 'Core';
+        nameRow.appendChild(badgeSource);
+
+        var badgeVersion = document.createElement('span');
+        badgeVersion.className = 'plugin-row__badge';
+        badgeVersion.textContent = 'v' + (p.version || '0.0.0');
+        nameRow.appendChild(badgeVersion);
+
+        infoEl.appendChild(nameRow);
+
+        if (p.author || p.description) {
+            var metaEl = document.createElement('div');
+            metaEl.className = 'plugin-row__meta';
+            metaEl.textContent = p.author || p.description || '';
+            infoEl.appendChild(metaEl);
+        }
 
         main.appendChild(infoEl);
 
-        var groupWrap = document.createElement('div');
-        groupWrap.className = 'plugin-row__group';
+        var isCore = p.source === 'core';
+        var isFolder = p.source === 'folder';
 
-        var groupInput = document.createElement('input');
-        groupInput.type = 'text';
-        groupInput.className = 'plugin-row__group-input';
-        groupInput.value = p.group || 'Other';
-        groupInput.placeholder = 'Группа';
-        groupInput.setAttribute('list', 'pluginsGroupList');
-        groupInput.title = isHidden ? 'Группа (файл скрыт)' : 'Изменить группу';
-        groupInput.disabled = isHidden;
+        if (!isCore) {
+            var toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'plugin-row__btn plugin-row__btn--toggle' + (p.enabled ? ' is-on' : '');
+            toggleBtn.title = p.enabled ? 'Отключить (переместить в скрытые)' : 'Включить (переместить в активные)';
+            toggleBtn.innerHTML = '<svg class="icon-svg"><use href="#' + (p.enabled ? 'icon-eye' : 'icon-eye-off') + '"></use></svg>';
 
-        if (!isHidden) {
-            groupInput.addEventListener('change', function() {
-                var newGroup = (groupInput.value || '').trim() || 'Other';
-                if (newGroup === p.group) return;
-                self._setGroup(p.file, newGroup);
-                if (window.__lsystem) {
-                    window.__lsystem.showNotification(
-                        'Группа изменена: ' + newGroup + ' (перезагрузите)', 'info', 2500
-                    );
+            toggleBtn.addEventListener('click', async function() {
+                var ps = window.pluginSystem;
+                if (!ps) return;
+                toggleBtn.disabled = true;
+                try {
+                    var target = !p.enabled;
+                    if (typeof ps.setEnabled === 'function') {
+                        await ps.setEnabled(p.id, target);
+                    } else if (target && typeof ps.enablePlugin === 'function') {
+                        await ps.enablePlugin(p.id);
+                    } else if (!target && typeof ps.disablePlugin === 'function') {
+                        await ps.disablePlugin(p.id);
+                    }
+                } finally {
+                    toggleBtn.disabled = false;
                 }
             });
+
+            main.appendChild(toggleBtn);
+
+            if (!isFolder) {
+                var delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.className = 'plugin-row__btn plugin-row__btn--danger';
+                delBtn.title = 'Удалить плагин';
+                delBtn.innerHTML = '<svg class="icon-svg"><use href="#icon-trash"></use></svg>';
+
+                delBtn.addEventListener('click', async function() {
+                    var ps = window.pluginSystem;
+                    if (!ps) return;
+                    delBtn.disabled = true;
+                    try {
+                        var ok = await ps.uninstallPlugin(p.id);
+                        if (ok && window.__lsystem) {
+                            window.__lsystem.showNotification('Плагин удалён: ' + p.name, 'info', 1800);
+                        }
+                    } finally {
+                        delBtn.disabled = false;
+                    }
+                });
+
+                main.appendChild(delBtn);
+            }
         }
 
-        groupWrap.appendChild(groupInput);
-        main.appendChild(groupWrap);
+        row.appendChild(main);
+        return row;
+    };
 
-        var hideBtn = document.createElement('button');
-        hideBtn.type = 'button';
-        hideBtn.className = 'plugin-row__btn';
-        hideBtn.title = isHidden
-            ? 'Показать (файл снова будет загружаться)'
-            : 'Скрыть (файл не будет загружаться)';
-        hideBtn.innerHTML = '<svg class="icon-svg"><use href="#' + (isHidden ? 'icon-eye' : 'icon-eye-off') + '"></use></svg>';
+    // ============================================================
+    // ПЛАГИНЫ — модалка установки по URL
+    // ============================================================
 
-        hideBtn.addEventListener('click', async function() {
-            self._setHiddenFlag(p.file, !isHidden);
-
-            var btnOriginalHTML = hideBtn.innerHTML;
-            hideBtn.innerHTML = '<svg class="icon-svg icon-spin"><use href="#icon-refresh"></use></svg>';
-            hideBtn.disabled = true;
-
-            try {
-                if (window.pluginSystem && typeof window.pluginSystem.reload === 'function') {
-                    await window.pluginSystem.reload();
-                }
-                self._loadOverride();
-                await self._fetchBaseManifest();
-            } catch (err) {
-                console.error('[SettingsModal] Auto-reload error:', err);
-            } finally {
-                hideBtn.disabled = false;
-                hideBtn.innerHTML = btnOriginalHTML;
-            }
-
-            self._renderPluginsList();
-
-            if (window.__lsystem) {
-                window.__lsystem.showNotification(
-                    isHidden ? 'Плагин показан' : 'Плагин скрыт',
-                    'info',
-                    1500
-                );
-            }
+    SettingsModal.prototype._openInstallUrlModal = function() {
+        var overlay = document.createElement('div');
+        overlay.className = 'plugin-install-overlay';
+        Object.assign(overlay.style, {
+            position: 'fixed',
+            inset: '0',
+            background: 'rgba(0,0,0,0.65)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: '1000001',
+            padding: '20px'
         });
 
-        main.appendChild(hideBtn);
-        row.appendChild(main);
+        var modal = document.createElement('div');
+        Object.assign(modal.style, {
+            background: 'var(--bg-panel, #1a1a1a)',
+            border: '1px solid var(--border-color, rgba(200,184,154,0.12))',
+            borderRadius: '10px',
+            padding: '20px 22px',
+            maxWidth: '480px',
+            width: '100%',
+            boxShadow: '0 24px 80px rgba(0,0,0,0.6)'
+        });
 
-        return row;
+        var title = document.createElement('div');
+        title.textContent = 'Установить плагин по URL';
+        Object.assign(title.style, {
+            fontSize: '14px',
+            fontWeight: '700',
+            color: 'var(--text-primary, #e0d8cc)',
+            marginBottom: '12px'
+        });
+        modal.appendChild(title);
+
+        var hint = document.createElement('div');
+        hint.textContent = 'Введите прямую ссылку на файл плагина (.js)';
+        Object.assign(hint.style, {
+            fontSize: '11px',
+            color: 'var(--text-muted, #6a6a6a)',
+            marginBottom: '10px'
+        });
+        modal.appendChild(hint);
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'https://example.com/plugin.js';
+        input.className = 'settings-input';
+        input.style.marginBottom = '16px';
+        modal.appendChild(input);
+
+        var actions = document.createElement('div');
+        Object.assign(actions.style, {
+            display: 'flex',
+            gap: '8px',
+            justifyContent: 'flex-end'
+        });
+
+        var cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'settings-btn settings-btn--ghost';
+        cancelBtn.textContent = 'Отмена';
+        cancelBtn.addEventListener('click', function() {
+            document.body.removeChild(overlay);
+        });
+        actions.appendChild(cancelBtn);
+
+        var installBtn = document.createElement('button');
+        installBtn.type = 'button';
+        installBtn.className = 'settings-btn settings-btn--primary';
+        installBtn.textContent = 'Установить';
+        installBtn.addEventListener('click', async function() {
+            var url = (input.value || '').trim();
+            if (!url) {
+                if (window.__lsystem) {
+                    window.__lsystem.showNotification('Введите URL', 'warning');
+                }
+                return;
+            }
+
+            var ps = window.pluginSystem;
+            if (!ps) {
+                if (window.__lsystem) {
+                    window.__lsystem.showNotification('pluginSystem не загружен', 'error');
+                }
+                return;
+            }
+
+            installBtn.disabled = true;
+            installBtn.textContent = 'Установка...';
+
+            try {
+                var ok = await ps.installFromUrl(url);
+                document.body.removeChild(overlay);
+
+                if (ok) {
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Плагин установлен', 'success');
+                    }
+                } else {
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Не удалось установить плагин', 'error');
+                    }
+                }
+            } catch (err) {
+                console.error('[SettingsModal] installFromUrl error:', err);
+                if (window.__lsystem) {
+                    window.__lsystem.showNotification('Ошибка установки', 'error');
+                }
+                document.body.removeChild(overlay);
+            }
+        });
+        actions.appendChild(installBtn);
+
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        setTimeout(function() { input.focus(); }, 50);
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') installBtn.click();
+            if (e.key === 'Escape') cancelBtn.click();
+        });
+
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) document.body.removeChild(overlay);
+        });
     };
 
     // ============================================================
@@ -1470,15 +1387,22 @@
             globalList.innerHTML = '';
             var globalHotkeys = appState.getGlobalHotkeys();
 
-            for (var originalCombo in globalHotkeys) {
-                if (!Object.prototype.hasOwnProperty.call(globalHotkeys, originalCombo)) continue;
-                var entry = globalHotkeys[originalCombo];
-                globalList.appendChild(this._makeHotkeyRow({
-                    originalCombo: originalCombo,
-                    combo: entry.combo || originalCombo,
-                    label: entry.label || originalCombo,
-                    source: 'global'
-                }, 'global', null));
+            for (var key in globalHotkeys) {
+                if (!Object.prototype.hasOwnProperty.call(globalHotkeys, key)) continue;
+                var entry = globalHotkeys[key];
+
+                var row = this._makeHotkeyRow({
+                    originalCombo: entry.original || key,
+                    combo: entry.combo || key,
+                    label: entry.label || key,
+                    source: 'global',
+                    overridden: !!entry.overridden
+                }, 'global', null);
+
+                if (entry.overridden) {
+                    row.classList.add('is-overridden');
+                }
+                globalList.appendChild(row);
             }
         }
 
@@ -1498,10 +1422,10 @@
                 var section = document.createElement('div');
                 section.style.marginBottom = '10px';
 
-                var title = document.createElement('div');
-                title.className = 'settings-subgroup__title';
-                title.textContent = typeId;
-                section.appendChild(title);
+                var titleEl = document.createElement('div');
+                titleEl.className = 'settings-subgroup__title';
+                titleEl.textContent = typeId;
+                section.appendChild(titleEl);
 
                 var inner = document.createElement('div');
                 inner.className = 'settings-hotkeys';
@@ -1509,12 +1433,19 @@
                 for (var origCombo in bucket) {
                     if (!Object.prototype.hasOwnProperty.call(bucket, origCombo)) continue;
                     var e2 = bucket[origCombo];
-                    inner.appendChild(this._makeHotkeyRow({
-                        originalCombo: origCombo,
+
+                    var row2 = this._makeHotkeyRow({
+                        originalCombo: e2.original || origCombo,
                         combo: e2.combo || origCombo,
                         label: e2.label || origCombo,
-                        source: typeId
-                    }, 'window', typeId));
+                        source: typeId,
+                        overridden: !!e2.overridden
+                    }, 'window', typeId);
+
+                    if (e2.overridden) {
+                        row2.classList.add('is-overridden');
+                    }
+                    inner.appendChild(row2);
                 }
                 section.appendChild(inner);
                 windowList.appendChild(section);
@@ -1622,50 +1553,51 @@
     };
 
     SettingsModal.prototype._applyHotkeyChange = function(scope, typeId, originalCombo, oldCombo, newCombo) {
-        if (window.appState) {
-            var overrides = window.appState.getHotkeyOverrides();
-            var conflict = null;
+        if (!window.appState) return;
 
-            if (scope === 'global') {
-                var globalMap = overrides.global || {};
-                for (var key in globalMap) {
-                    if (Object.prototype.hasOwnProperty.call(globalMap, key) &&
-                        key !== originalCombo &&
-                        globalMap[key].combo === newCombo) {
-                        conflict = key;
-                        break;
-                    }
-                }
-            } else if (scope === 'window' && typeId) {
-                var windowMap = (overrides.windows && overrides.windows[typeId]) || {};
-                for (var key2 in windowMap) {
-                    if (Object.prototype.hasOwnProperty.call(windowMap, key2) &&
-                        key2 !== originalCombo &&
-                        windowMap[key2].combo === newCombo) {
-                        conflict = key2;
-                        break;
-                    }
-                }
-            }
-
-            if (conflict) {
-                if (window.__lsystem) {
-                    window.__lsystem.showNotification(
-                        'Конфликт: ' + newCombo + ' уже назначен на ' + conflict,
-                        'warning'
-                    );
-                }
-            }
-
-            window.appState.setHotkeyOverride(scope, typeId, originalCombo, newCombo);
-        }
-
-        if (!window.hotkeyRegistry) return;
+        var overrides = window.appState.getHotkeyOverrides();
+        var conflict = null;
 
         if (scope === 'global') {
-            window.hotkeyRegistry.rebindGlobal(oldCombo, newCombo);
+            var globalMap = overrides.global || {};
+            for (var key in globalMap) {
+                if (!Object.prototype.hasOwnProperty.call(globalMap, key)) continue;
+                var rec = globalMap[key];
+                if (!rec) continue;
+                if ((rec.original || key) === originalCombo) continue;
+                if (rec.combo === newCombo) {
+                    conflict = rec.label || key;
+                    break;
+                }
+            }
         } else if (scope === 'window' && typeId) {
-            if (window.layoutManager) {
+            var windowMap = (overrides.windows && overrides.windows[typeId]) || {};
+            for (var key2 in windowMap) {
+                if (!Object.prototype.hasOwnProperty.call(windowMap, key2)) continue;
+                var rec2 = windowMap[key2];
+                if (!rec2) continue;
+                if ((rec2.original || key2) === originalCombo) continue;
+                if (rec2.combo === newCombo) {
+                    conflict = rec2.label || key2;
+                    break;
+                }
+            }
+        }
+
+        if (conflict && window.__lsystem) {
+            window.__lsystem.showNotification(
+                'Конфликт: ' + newCombo + ' уже назначен на «' + conflict + '»',
+                'warning',
+                2600
+            );
+        }
+
+        window.appState.setHotkeyOverride(scope, typeId, originalCombo, newCombo);
+
+        if (window.hotkeyRegistry) {
+            if (scope === 'global') {
+                window.hotkeyRegistry.rebindGlobal(oldCombo, newCombo);
+            } else if (scope === 'window' && typeId && window.layoutManager) {
                 var windows = window.layoutManager.getWindowsByType(typeId);
                 for (var i = 0; i < windows.length; i++) {
                     window.hotkeyRegistry.rebindWindow(windows[i].id, oldCombo, newCombo);
@@ -1702,6 +1634,18 @@
     };
 
     // ============================================================
+    // УТИЛИТЫ
+    // ============================================================
+
+    SettingsModal.prototype._notifyStub = function(title, message) {
+        if (window.__lsystem) {
+            window.__lsystem.showNotification(title + ' — ' + message, 'info', 2400);
+        } else {
+            console.log('[SettingsModal stub]', title, '—', message);
+        }
+    };
+
+    // ============================================================
     // УНИЧТОЖЕНИЕ
     // ============================================================
 
@@ -1724,8 +1668,6 @@
             this._eulaOverlay.parentNode.removeChild(this._eulaOverlay);
         }
         this._eulaOverlay = null;
-
-        console.log('[SettingsModal] Destroyed');
     };
 
     // ============================================================
@@ -1739,7 +1681,6 @@
     if (typeof window !== 'undefined') {
         window.SettingsModal = SettingsModal;
         window.SettingsModal.EULA_TEXT = EULA_TEXT;
-        console.log('[SettingsModal] Registered globally v10.0.0');
     }
 
 })();

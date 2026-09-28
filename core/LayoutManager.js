@@ -1,21 +1,29 @@
 // core/LayoutManager.js
-// Версия 6.1.2 - Fix: заглушка "Нет активных окон" теперь показывается всегда
-// - init() вызывает render() — заглушка видна сразу при старте
-// - render() нормализует root при 0 видимых окон
-// - loadProjectData() при отсутствии данных рендерит пустое состояние
-// - _renderEmptyWorkspace() защищён от дублирования
-// - v6.1.1: утечка mousemove/mouseup в split-divider (_activeDividerDrag)
-// - v6.1.0: window-visibility-changed + get*WindowsByType
+// Версия 8.0.0
+//
+// Архитектура:
+//   - Единственный источник истины — this.root (LayoutNode).
+//   - render() синхронизирует DOM с this.root.
+//   - _ensureRootStructureMatches гарантирует: нет пустых leaf'ов, структура
+//     соответствует currentLayoutStyle и количеству окон.
+//   - Split-ratio хранится в dataset.splitR на каждом ребёнке. flex-basis
+//     считается напрямую, БЕЗ CSS-переменных — чтобы избежать конфликта
+//     одноимённых переменных между вложенными split'ами.
+//   - _dedupRootLeafIds чинит конфликты leaf.id и подсвечивает конфликты
+//     windowData.id.
+//   - setIdFloor синхронизирует счётчик leaf.id с загруженным проектом.
 
 (function() {
     'use strict';
 
-    console.log('[LayoutManager] Loading v6.1.2 (empty-workspace fix)...');
+    // ============================================================
+    // 1. КОНСТАНТЫ
+    // ============================================================
 
-    const NodeType = { LEAF: 'leaf', SPLIT: 'split' };
-    const SplitDirection = { HORIZONTAL: 'horizontal', VERTICAL: 'vertical' };
+    var NodeType = { LEAF: 'leaf', SPLIT: 'split' };
+    var SplitDirection = { HORIZONTAL: 'horizontal', VERTICAL: 'vertical' };
 
-    const LayoutStyle = {
+    var LayoutStyle = {
         TWO_HORIZONTAL: 'two-horizontal',
         TWO_VERTICAL: 'two-vertical',
         THREE_HORIZONTAL: 'three-horizontal',
@@ -34,25 +42,41 @@
         FOUR_MIXED: 'four-mixed'
     };
 
-    let _idCounter = 0;
-    function generateId() { return ++_idCounter; }
+    var DIVIDER_SIZE = 4;
+
+    var DEFAULT_STYLE_FOR_COUNT = {
+        2: LayoutStyle.TWO_HORIZONTAL,
+        3: LayoutStyle.THREE_BIG_LEFT,
+        4: LayoutStyle.FOUR_GRID_2X2
+    };
 
     // ============================================================
-    // 1. УЗЕЛ ДЕРЕВА
+    // 2. ГЛОБАЛЬНЫЕ СЧЁТЧИКИ
+    // ============================================================
+
+    var _idCounter = 0;
+    function generateId() { return ++_idCounter; }
+    function setIdFloor(v) {
+        if (typeof v === 'number' && v >= _idCounter) _idCounter = v + 1;
+    }
+
+    // ============================================================
+    // 3. УЗЕЛ ДЕРЕВА
     // ============================================================
 
     class LayoutNode {
-        constructor({ type, id, direction, ratio, children, windowData } = {}) {
-            this.id = id || generateId();
-            this.type = type || NodeType.LEAF;
-            this.direction = direction || null;
-            this.ratio = ratio || 0.5;
-            this.children = children || [];
-            this.windowData = windowData || null;
+        constructor(opts) {
+            opts = opts || {};
+            this.id = opts.id || generateId();
+            this.type = opts.type || NodeType.LEAF;
+            this.direction = opts.direction || null;
+            this.ratio = opts.ratio || 0.5;
+            this.children = opts.children || [];
+            this.windowData = opts.windowData || null;
             this.parent = null;
         }
 
-        isLeaf() { return this.type === NodeType.LEAF; }
+        isLeaf()  { return this.type === NodeType.LEAF; }
         isSplit() { return this.type === NodeType.SPLIT; }
 
         addChild(child) {
@@ -62,43 +86,50 @@
         }
 
         removeChild(child) {
-            const index = this.children.indexOf(child);
-            if (index !== -1) {
-                this.children.splice(index, 1);
-                child.parent = null;
-                return true;
-            }
-            return false;
+            const i = this.children.indexOf(child);
+            if (i === -1) return false;
+            this.children.splice(i, 1);
+            child.parent = null;
+            return true;
         }
 
         getLeafCount() {
             if (this.isLeaf()) return 1;
-            return this.children.reduce((sum, child) => sum + child.getLeafCount(), 0);
+            let sum = 0;
+            for (let i = 0; i < this.children.length; i++) {
+                sum += this.children[i].getLeafCount();
+            }
+            return sum;
         }
 
         getLeaves() {
             if (this.isLeaf()) return [this];
-            return this.children.flatMap(child => child.getLeaves());
+            const out = [];
+            for (let i = 0; i < this.children.length; i++) {
+                const sub = this.children[i].getLeaves();
+                for (let j = 0; j < sub.length; j++) out.push(sub[j]);
+            }
+            return out;
         }
 
         findLeafByWindowId(id) {
             const target = String(id);
-            if (this.isLeaf() && this.windowData && String(this.windowData.id) === target) return this;
-            if (this.isSplit()) {
-                for (const child of this.children) {
-                    const found = child.findLeafByWindowId(target);
-                    if (found) return found;
-                }
+            if (this.isLeaf()) {
+                return (this.windowData && String(this.windowData.id) === target)
+                    ? this : null;
+            }
+            for (let i = 0; i < this.children.length; i++) {
+                const found = this.children[i].findLeafByWindowId(target);
+                if (found) return found;
             }
             return null;
         }
 
-        getIndexInParent() {
-            if (!this.parent) return -1;
-            return this.parent.children.indexOf(this);
-        }
-
         toJSON() {
+            const children = [];
+            for (let i = 0; i < this.children.length; i++) {
+                children.push(this.children[i].toJSON());
+            }
             return {
                 id: this.id,
                 type: this.type,
@@ -111,7 +142,7 @@
                     icon: this.windowData.icon,
                     slotId: this.windowData.slotId || null
                 } : null,
-                children: this.children.map(child => child.toJSON())
+                children: children
             };
         }
 
@@ -123,29 +154,62 @@
                 ratio: data.ratio,
                 windowData: data.windowData
             });
-            node.children = (data.children || []).map(childData => {
-                const child = LayoutNode.fromJSON(childData);
+            const children = data.children || [];
+            for (let i = 0; i < children.length; i++) {
+                const child = LayoutNode.fromJSON(children[i]);
                 child.parent = node;
-                return child;
-            });
+                node.children.push(child);
+            }
             return node;
         }
     }
 
     // ============================================================
-    // 2. ОСНОВНОЙ КЛАСС
+    // 4. ФАБРИКА LEAF'ОВ
+    // ============================================================
+
+    function leafFromWindow(w) {
+        return new LayoutNode({
+            type: NodeType.LEAF,
+            windowData: {
+                id: w.id,
+                type: w.type,
+                title: w.title,
+                icon: w.icon,
+                slotId: w.slotId || null
+            },
+            id: w.nodeId || generateId()
+        });
+    }
+
+    function cloneWindowData(w) {
+        return {
+            id: w.id,
+            type: w.type,
+            title: w.title,
+            icon: w.icon,
+            slotId: w.slotId || null
+        };
+    }
+
+    // ============================================================
+    // 5. ОСНОВНОЙ КЛАСС
     // ============================================================
 
     class LayoutManager {
-        constructor(options = {}) {
+        constructor(options) {
+            options = options || {};
+
             this.root = null;
             this.workspace = options.workspace || null;
             this.maxWindows = options.maxWindows || 4;
             this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
+
             this._windowIdCounter = 0;
             this._domMap = new Map();
             this._windowMap = new Map();
             this._windowInstances = new Map();
+
             this._registry = options.registry || null;
             this._focusedWindowId = null;
             this._dataBus = options.dataBus || null;
@@ -160,23 +224,19 @@
 
             this._contentRenderers = new Map();
 
-            // ✅ FIX (v6.1.1): активный drag split-divider
             this._activeDividerDrag = null;
-
-            console.log('[LayoutManager] Created v6.1.2');
         }
 
         // ============================================================
-        // 3. РЕГИСТРАЦИЯ
+        // 5.1. РЕГИСТРАЦИЯ
         // ============================================================
 
         registerContentRenderer(typeId, renderer) {
             this._contentRenderers.set(typeId, renderer);
-            console.log(`[LayoutManager] Registered content renderer: "${typeId}"`);
         }
 
         // ============================================================
-        // 4. ИНИЦИАЛИЗАЦИЯ
+        // 5.2. ИНИЦИАЛИЗАЦИЯ / DESTROY
         // ============================================================
 
         init() {
@@ -187,42 +247,38 @@
 
             this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
             this._setupProjectListeners();
-
-            // ✅ FIX (v6.1.2): сразу показываем заглушку, если окон нет
             this.render();
-
-            console.log('[LayoutManager] Initialized');
             return true;
         }
 
         _setupProjectListeners() {
-            document.addEventListener('project-get-layout', (e) => {
+            var self = this;
+
+            document.addEventListener('project-get-layout', function(e) {
                 if (e.detail && typeof e.detail.respond === 'function') {
-                    e.detail.respond(this.getProjectData());
+                    e.detail.respond(self.getProjectData());
                 }
             });
 
-            document.addEventListener('project-get-layout-style', (e) => {
+            document.addEventListener('project-get-layout-style', function(e) {
                 if (e.detail && typeof e.detail.respond === 'function') {
-                    e.detail.respond(this.getCurrentStyle());
+                    e.detail.respond(self.getCurrentStyle());
                 }
             });
 
-            document.addEventListener('project-restore-layout', (e) => {
+            document.addEventListener('project-restore-layout', function(e) {
                 if (!e.detail) return;
-                const { layoutData, layoutStyle } = e.detail;
+                var layoutData = e.detail.layoutData;
+                var layoutStyle = e.detail.layoutStyle;
 
-                if (layoutStyle) {
-                    this.currentLayoutStyle = layoutStyle;
-                }
+                if (layoutStyle) self.currentLayoutStyle = layoutStyle;
 
                 if (layoutData) {
-                    this.loadProjectData(layoutData);
-                    this.render();
-                    this._scheduleResize();
+                    self.loadProjectData(layoutData);
+                    self.render();
+                    self._scheduleResize();
                 } else {
-                    // ✅ FIX: нет данных — рендерим пустое состояние
-                    this.render();
+                    self.render();
                 }
             });
         }
@@ -240,7 +296,7 @@
                 this._resizeRAF = null;
             }
 
-            this._windowInstances.forEach((instance) => {
+            this._windowInstances.forEach(function(instance) {
                 if (instance && typeof instance.destroy === 'function') {
                     try { instance.destroy(); } catch (e) {}
                 }
@@ -250,24 +306,21 @@
             this._windowMap.clear();
             this._minimizedWindowsData.clear();
             this.root = null;
-            console.log('[LayoutManager] Destroyed');
         }
 
         // ============================================================
-        // 4.1. ✅ FIX: активный drag split-divider
+        // 5.3. DIVIDER DRAG — ОТМЕНА
         // ============================================================
 
         _cancelActiveDividerDrag() {
             if (!this._activeDividerDrag) return;
 
-            const { onMove, onUp, cleanup } = this._activeDividerDrag;
+            var d = this._activeDividerDrag;
 
-            try { document.removeEventListener('mousemove', onMove); } catch (e) {}
-            try { document.removeEventListener('mouseup', onUp); } catch (e) {}
-            try { document.removeEventListener('pointercancel', onUp); } catch (e) {}
-            try { window.removeEventListener('blur', onUp); } catch (e) {}
-
-            try { if (typeof cleanup === 'function') cleanup(); } catch (e) {}
+            try { document.removeEventListener('mousemove', d.onMove); } catch (e) {}
+            try { document.removeEventListener('mouseup', d.onUp); } catch (e) {}
+            try { document.removeEventListener('pointercancel', d.onUp); } catch (e) {}
+            try { window.removeEventListener('blur', d.onUp); } catch (e) {}
 
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
@@ -276,28 +329,37 @@
         }
 
         // ============================================================
-        // 5. РАБОТА С ОКНАМИ
+        // 6. ПУБЛИЧНЫЕ ГЕТТЕРЫ
         // ============================================================
 
         getWindows() {
-            const result = [];
+            var result = [];
 
             if (this.root) {
-                this.root.getLeaves()
-                    .filter(node => node.windowData !== null)
-                    .forEach(node => {
-                        result.push({
-                            ...node.windowData,
-                            nodeId: node.id,
-                            node: node,
-                            minimized: false
-                        });
+                var leaves = this.root.getLeaves();
+                for (var i = 0; i < leaves.length; i++) {
+                    var node = leaves[i];
+                    if (!node.windowData) continue;
+                    result.push({
+                        id: node.windowData.id,
+                        type: node.windowData.type,
+                        title: node.windowData.title,
+                        icon: node.windowData.icon,
+                        slotId: node.windowData.slotId || null,
+                        nodeId: node.id,
+                        node: node,
+                        minimized: false
                     });
+                }
             }
 
-            this._minimizedWindowsData.forEach((windowData, id) => {
+            this._minimizedWindowsData.forEach(function(data, id) {
                 result.push({
-                    ...windowData,
+                    id: data.id,
+                    type: data.type,
+                    title: data.title,
+                    icon: data.icon,
+                    slotId: data.slotId || null,
                     nodeId: null,
                     node: null,
                     minimized: true
@@ -309,21 +371,34 @@
 
         getVisibleWindows() {
             if (!this.root) return [];
-            return this.root.getLeaves()
-                .filter(node => node.windowData !== null)
-                .map(node => ({
-                    ...node.windowData,
+            var result = [];
+            var leaves = this.root.getLeaves();
+            for (var i = 0; i < leaves.length; i++) {
+                var node = leaves[i];
+                if (!node.windowData) continue;
+                result.push({
+                    id: node.windowData.id,
+                    type: node.windowData.type,
+                    title: node.windowData.title,
+                    icon: node.windowData.icon,
+                    slotId: node.windowData.slotId || null,
                     nodeId: node.id,
                     node: node,
                     minimized: false
-                }));
+                });
+            }
+            return result;
         }
 
         getMinimizedWindows() {
-            const result = [];
-            this._minimizedWindowsData.forEach((windowData, id) => {
+            var result = [];
+            this._minimizedWindowsData.forEach(function(data, id) {
                 result.push({
-                    ...windowData,
+                    id: data.id,
+                    type: data.type,
+                    title: data.title,
+                    icon: data.icon,
+                    slotId: data.slotId || null,
                     nodeId: null,
                     node: null,
                     minimized: true
@@ -334,12 +409,12 @@
 
         getVisibleWindowsByType(typeId) {
             if (!typeId) return [];
-            return this.getVisibleWindows().filter(w => w.type === typeId);
+            return this.getVisibleWindows().filter(function(w) { return w.type === typeId; });
         }
 
         getMinimizedWindowsByType(typeId) {
             if (!typeId) return [];
-            return this.getMinimizedWindows().filter(w => w.type === typeId);
+            return this.getMinimizedWindows().filter(function(w) { return w.type === typeId; });
         }
 
         getWindowCount() {
@@ -360,18 +435,18 @@
         }
 
         getWindowsByType(typeId) {
-            return this.getWindows().filter(w => w.type === typeId);
+            return this.getWindows().filter(function(w) { return w.type === typeId; });
         }
 
         // ============================================================
-        // 5.1. ФОКУС
+        // 7. ФОКУС
         // ============================================================
 
         setFocusedWindow(windowId) {
-            const wid = windowId != null ? String(windowId) : null;
+            var wid = windowId != null ? String(windowId) : null;
             if (wid === this._focusedWindowId) return;
 
-            const prev = this._focusedWindowId;
+            var prev = this._focusedWindowId;
             this._focusedWindowId = wid;
 
             if (window.hotkeyRegistry) {
@@ -379,23 +454,20 @@
             }
 
             if (prev) {
-                const prevBw = this._windowInstances.get(prev);
+                var prevBw = this._windowInstances.get(prev);
                 if (prevBw && typeof prevBw._onBlur === 'function') {
                     try { prevBw._onBlur(); } catch (e) {}
                 }
             }
 
             if (wid) {
-                const bw = this._windowInstances.get(wid);
+                var bw = this._windowInstances.get(wid);
                 if (bw && typeof bw._onFocus === 'function') {
                     try { bw._onFocus(); } catch (e) {}
                 }
             }
 
-            this._emitLayoutAction('focus', {
-                prevId: prev,
-                focusedId: wid
-            });
+            this._emitLayoutAction('focus', { prevId: prev, focusedId: wid });
         }
 
         getFocusedWindow() {
@@ -403,15 +475,14 @@
         }
 
         // ============================================================
-        // 5.2. MINIMIZE
+        // 8. MINIMIZE / RESTORE
         // ============================================================
 
         minimizeWindow(windowId) {
-            const sid = String(windowId);
-
+            var sid = String(windowId);
             if (this._minimizedWindowsData.has(sid)) return true;
 
-            const node = this.getNodeByWindowId(sid);
+            var node = this.getNodeByWindowId(sid);
             if (!node || !node.windowData) {
                 console.warn('[LayoutManager] minimizeWindow: node not found:', sid);
                 return false;
@@ -421,55 +492,67 @@
                 this.exitFullscreen(true);
             }
 
-            this._minimizedWindowsData.set(sid, { ...node.windowData });
+            var data = cloneWindowData(node.windowData);
+            this._minimizedWindowsData.set(sid, data);
 
-            const container = this._domMap.get(node.id);
-            const ANIM_MS = 220;
+            var container = this._domMap.get(node.id);
+            var self = this;
+            var ANIM_MS = 220;
 
-            const finishMinimize = () => {
-                this._rebuildFromVisible(this.getVisibleWindows().filter(w => String(w.id) !== sid));
+            var finish = function() {
+                var remaining = self.getVisibleWindows()
+                    .filter(function(w) { return String(w.id) !== sid; })
+                    .map(function(w) {
+                        return {
+                            id: w.id,
+                            type: w.type,
+                            title: w.title,
+                            icon: w.icon,
+                            slotId: w.slotId,
+                            nodeId: w.nodeId
+                        };
+                    });
 
-                if (this._focusedWindowId === sid) {
-                    const visible = this.getVisibleWindows();
-                    const nextId = visible.length > 0 ? visible[0].id : null;
-                    this.setFocusedWindow(nextId);
+                self._rebuildFromVisible(remaining);
+
+                if (self._focusedWindowId === sid) {
+                    var vis = self.getVisibleWindows();
+                    var next = vis.length > 0 ? vis[0].id : null;
+                    self.setFocusedWindow(next);
                 }
 
-                this.render();
-                this._notifyChange();
+                self.render();
+                self._notifyChange();
 
-                this._emitLayoutAction('minimize', {
+                self._emitLayoutAction('minimize', {
                     id: sid,
-                    type: node.windowData?.type || 'unknown',
-                    slotId: node.windowData?.slotId || null
+                    type: data.type,
+                    slotId: data.slotId
                 });
-
-                this._emitVisibilityChanged(sid, false);
-
-                console.log('[LayoutManager] Window minimized:', sid);
+                self._emitVisibilityChanged(sid, false);
             };
 
             if (container) {
                 container.classList.add('ls-minimizing');
 
-                let done = false;
-                const onEnd = () => {
+                var done = false;
+                var onEnd = function() {
                     if (done) return;
                     done = true;
                     container.removeEventListener('animationend', onEnd);
-                    finishMinimize();
+                    finish();
                 };
                 container.addEventListener('animationend', onEnd);
                 setTimeout(onEnd, ANIM_MS + 80);
             } else {
-                finishMinimize();
+                finish();
             }
 
             return true;
         }
 
         restoreWindow(windowId) {
-            const sid = String(windowId);
+            var sid = String(windowId);
 
             if (!this._minimizedWindowsData.has(sid)) return false;
 
@@ -478,11 +561,17 @@
                 return false;
             }
 
-            const windowData = this._minimizedWindowsData.get(sid);
+            var data = this._minimizedWindowsData.get(sid);
             this._minimizedWindowsData.delete(sid);
 
-            const visible = this.getVisibleWindows().map(w => ({ ...w }));
-            visible.push({ ...windowData });
+            var visible = this._collectVisibleAsPlain();
+            visible.push({
+                id: data.id,
+                type: data.type,
+                title: data.title,
+                icon: data.icon,
+                slotId: data.slotId
+            });
 
             this._rebuildFromVisible(visible);
 
@@ -491,15 +580,12 @@
 
             this._emitLayoutAction('restore', {
                 id: sid,
-                type: windowData?.type || 'unknown',
-                slotId: windowData?.slotId || null
+                type: data.type,
+                slotId: data.slotId
             });
-
             this._emitVisibilityChanged(sid, true);
 
             this.setFocusedWindow(sid);
-
-            console.log('[LayoutManager] Window restored:', sid);
             return true;
         }
 
@@ -508,18 +594,18 @@
         }
 
         // ============================================================
-        // 5.3. FULLSCREEN
+        // 9. FULLSCREEN
         // ============================================================
 
         setFullscreen(windowId) {
-            const sid = String(windowId);
+            var sid = String(windowId);
 
             if (this.isMinimized(sid)) {
-                console.warn('[LayoutManager] setFullscreen: window is minimized, restore first');
+                console.warn('[LayoutManager] setFullscreen: window is minimized');
                 return false;
             }
 
-            const node = this.getNodeByWindowId(sid);
+            var node = this.getNodeByWindowId(sid);
             if (!node) {
                 console.warn('[LayoutManager] setFullscreen: node not found:', sid);
                 return false;
@@ -533,19 +619,19 @@
 
             this._fullscreenWindowId = sid;
 
-            const bw = this._windowInstances.get(sid);
-            const rootEl = bw?.getRenderWindow?.()?.getRoot?.();
-            const container = this._domMap.get(node.id);
+            var bw = this._windowInstances.get(sid);
+            var rootEl = bw && bw.getRenderWindow && bw.getRenderWindow()
+                ? bw.getRenderWindow().getRoot()
+                : null;
+            var container = this._domMap.get(node.id);
 
-            let flipScaleX = 1;
-            let flipScaleY = 1;
-
+            var flipX = 1, flipY = 1;
             if (rootEl) {
-                const before = rootEl.getBoundingClientRect();
-                const winW = window.innerWidth || 1920;
-                const winH = window.innerHeight || 1080;
-                flipScaleX = winW / Math.max(1, before.width);
-                flipScaleY = winH / Math.max(1, before.height);
+                var before = rootEl.getBoundingClientRect();
+                var winW = window.innerWidth || 1920;
+                var winH = window.innerHeight || 1080;
+                flipX = winW / Math.max(1, before.width);
+                flipY = winH / Math.max(1, before.height);
             }
 
             if (container) container.classList.add('ls-fullscreen-target');
@@ -553,7 +639,7 @@
             document.documentElement.classList.add('ls-fullscreen-root');
 
             if (rootEl && rootEl.requestFullscreen) {
-                rootEl.requestFullscreen().catch((err) => {
+                rootEl.requestFullscreen().catch(function(err) {
                     console.warn('[LayoutManager] Fullscreen API error:', err);
                 });
             }
@@ -562,12 +648,12 @@
                 rootEl.classList.remove('ls-flip-out');
                 rootEl.style.setProperty(
                     '--ls-flip-from',
-                    `scale(${(1 / flipScaleX).toFixed(4)}, ${(1 / flipScaleY).toFixed(4)})`
+                    'scale(' + (1 / flipX).toFixed(4) + ', ' + (1 / flipY).toFixed(4) + ')'
                 );
                 void rootEl.offsetWidth;
                 rootEl.classList.add('ls-flip-in');
 
-                setTimeout(() => {
+                setTimeout(function() {
                     try { rootEl.classList.remove('ls-flip-in'); } catch (e) {}
                     rootEl.style.removeProperty('--ls-flip-from');
                 }, 360);
@@ -576,56 +662,53 @@
             this._notifyChange();
             this._emitLayoutAction('fullscreen', {
                 id: sid,
-                type: node.windowData?.type || 'unknown'
+                type: node.windowData ? node.windowData.type : 'unknown'
             });
-
-            console.log('[LayoutManager] Window fullscreen:', sid);
             return true;
         }
 
-        exitFullscreen(silent = false) {
+        exitFullscreen(silent) {
             if (!this._fullscreenWindowId) return false;
 
-            const prevId = this._fullscreenWindowId;
+            var prevId = this._fullscreenWindowId;
             this._fullscreenWindowId = null;
 
-            const node = this.getNodeByWindowId(prevId);
-            const bw = node ? this._windowInstances.get(prevId) : null;
-            const rootEl = bw?.getRenderWindow?.()?.getRoot?.();
-            const container = node ? this._domMap.get(node.id) : null;
+            var node = this.getNodeByWindowId(prevId);
+            var bw = node ? this._windowInstances.get(prevId) : null;
+            var rootEl = bw && bw.getRenderWindow && bw.getRenderWindow()
+                ? bw.getRenderWindow().getRoot()
+                : null;
+            var container = node ? this._domMap.get(node.id) : null;
 
-            let flipScaleX = 1;
-            let flipScaleY = 1;
-
+            var flipX = 1, flipY = 1;
             if (rootEl) {
-                const before = rootEl.getBoundingClientRect();
-                const winW = window.innerWidth || 1920;
-                const winH = window.innerHeight || 1080;
-                flipScaleX = winW / Math.max(1, before.width);
-                flipScaleY = winH / Math.max(1, before.height);
+                var before = rootEl.getBoundingClientRect();
+                var winW = window.innerWidth || 1920;
+                var winH = window.innerHeight || 1080;
+                flipX = winW / Math.max(1, before.width);
+                flipY = winH / Math.max(1, before.height);
             }
 
             if (document.fullscreenElement && document.exitFullscreen) {
-                document.exitFullscreen().catch((err) => {
+                document.exitFullscreen().catch(function(err) {
                     console.warn('[LayoutManager] exitFullscreen error:', err);
                 });
             }
 
             document.body.classList.remove('ls-fullscreen');
             document.documentElement.classList.remove('ls-fullscreen-root');
-
             if (container) container.classList.remove('ls-fullscreen-target');
 
             if (rootEl) {
                 rootEl.classList.remove('ls-flip-in');
                 rootEl.style.setProperty(
                     '--ls-flip-to',
-                    `scale(${flipScaleX.toFixed(4)}, ${flipScaleY.toFixed(4)})`
+                    'scale(' + flipX.toFixed(4) + ', ' + flipY.toFixed(4) + ')'
                 );
                 void rootEl.offsetWidth;
                 rootEl.classList.add('ls-flip-out');
 
-                setTimeout(() => {
+                setTimeout(function() {
                     try { rootEl.classList.remove('ls-flip-out'); } catch (e) {}
                     rootEl.style.removeProperty('--ls-flip-to');
                 }, 320);
@@ -636,36 +719,32 @@
             if (!silent) {
                 this._emitLayoutAction('fullscreen-exit', {
                     id: prevId,
-                    type: node?.windowData?.type || 'unknown'
+                    type: node && node.windowData ? node.windowData.type : 'unknown'
                 });
             }
-
-            console.log('[LayoutManager] Fullscreen exited' + (silent ? ' (silent)' : ''));
             return true;
         }
 
-        getFullscreenWindow() {
-            return this._fullscreenWindowId;
-        }
+        getFullscreenWindow() { return this._fullscreenWindowId; }
 
-        isFullscreen(windowId = null) {
+        isFullscreen(windowId) {
             if (windowId == null) return !!this._fullscreenWindowId;
             return this._fullscreenWindowId === String(windowId);
         }
 
         // ============================================================
-        // 6. РЕЗОЛВ СЛОТА
+        // 10. SLOTS
         // ============================================================
 
         _resolveSlotForType(typeId) {
             if (!this._dataBus) return null;
 
-            const freeActive = this._dataBus.getFreeActiveSlotsByType(typeId);
+            var freeActive = this._dataBus.getFreeActiveSlotsByType(typeId);
             if (freeActive.length > 0) return freeActive[0];
 
-            const archived = this._dataBus.getArchivedSlotsByType(typeId);
+            var archived = this._dataBus.getArchivedSlotsByType(typeId);
             if (archived.length > 0) {
-                const sid = archived[0];
+                var sid = archived[0];
                 this._dataBus.unarchiveSlot(sid);
                 return sid;
             }
@@ -674,14 +753,12 @@
         }
 
         // ============================================================
-        // 7. ДОБАВЛЕНИЕ ОКНА
+        // 11. ДОБАВЛЕНИЕ ОКНА
         // ============================================================
 
         addWindow(type, title, icon) {
-            console.log(`[LayoutManager] Adding window: ${type}`);
-
             if (this.getVisibleWindowCount() >= this.maxWindows) {
-                console.warn(`[LayoutManager] Max ${this.maxWindows} visible windows`);
+                console.warn('[LayoutManager] Max visible windows reached');
                 return null;
             }
 
@@ -689,18 +766,16 @@
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
             }
 
-            const windowId = ++this._windowIdCounter;
+            var windowId = ++this._windowIdCounter;
+            var typeConfig = this._registry ? this._registry.getType(type) : null;
 
-            let typeConfig = null;
-            if (this._registry) typeConfig = this._registry.getType(type);
-
-            const slotId = this._resolveSlotForType(type);
+            var slotId = this._resolveSlotForType(type);
             if (!slotId) {
-                console.error('[LayoutManager] Failed to resolve slot for type:', type);
+                console.error('[LayoutManager] addWindow: failed to resolve slot');
                 return null;
             }
 
-            const windowData = {
+            var data = {
                 id: windowId,
                 type: type,
                 title: title || (typeConfig ? typeConfig.name : type),
@@ -708,61 +783,39 @@
                 slotId: slotId
             };
 
-            const visibleWindows = this.getVisibleWindows().map(w => ({ ...w }));
-            visibleWindows.push(windowData);
+            var visible = this._collectVisibleAsPlain();
+            visible.push(data);
 
-            const count = visibleWindows.length;
-            let defaultStyle = this.currentLayoutStyle;
-
-            const availableStyles = this._getAvailableStylesForCount(count);
-            const styleExists = availableStyles.some(s => s.id === defaultStyle);
-
-            if (!styleExists) {
-                if (count === 2) defaultStyle = LayoutStyle.TWO_HORIZONTAL;
-                else if (count === 3) defaultStyle = LayoutStyle.THREE_BIG_LEFT;
-                else if (count === 4) defaultStyle = LayoutStyle.FOUR_GRID_2X2;
-                this.currentLayoutStyle = defaultStyle;
-            }
-
-            this._rebuildFromVisible(visibleWindows);
+            this._rebuildFromVisible(visible);
             this.render();
             this._notifyChange();
-            this._emitLayoutAction('add', windowData);
-
+            this._emitLayoutAction('add', data);
             this._emitVisibilityChanged(windowId, true);
 
-            return windowData;
+            return data;
         }
 
-        // ============================================================
-        // 8. createWindowPair
-        // ============================================================
-
-        createWindowPair(typeId, count = 2) {
-            console.log(`[LayoutManager] createWindowPair: ${typeId} × ${count}`);
+        createWindowPair(typeId, count) {
+            count = count || 2;
 
             if (!typeId) {
                 console.error('[LayoutManager] createWindowPair: typeId required');
                 return [];
             }
-
             if (!this._registry || !this._registry.getType(typeId)) {
                 console.error('[LayoutManager] createWindowPair: type not found:', typeId);
                 return [];
             }
 
-            const typeConfig = this._registry.getType(typeId);
-            const freeSlots = Math.max(0, this.maxWindows - this.getVisibleWindowCount());
-            const actualCount = Math.min(count, freeSlots);
+            var typeConfig = this._registry.getType(typeId);
+            var freeSlots = Math.max(0, this.maxWindows - this.getVisibleWindowCount());
+            var actual = Math.min(count, freeSlots);
+            if (actual === 0) return [];
 
-            if (actualCount === 0) return [];
-
-            const created = [];
-
-            for (let i = 0; i < actualCount; i++) {
-                const windowId = ++this._windowIdCounter;
-
-                const slotId = this._resolveSlotForType(typeId);
+            var created = [];
+            for (var i = 0; i < actual; i++) {
+                var windowId = ++this._windowIdCounter;
+                var slotId = this._resolveSlotForType(typeId);
                 if (!slotId) break;
 
                 created.push({
@@ -776,50 +829,40 @@
 
             if (created.length === 0) return [];
 
-            const visibleWindows = this.getVisibleWindows().map(w => ({ ...w }));
-            visibleWindows.push(...created);
+            var visible = this._collectVisibleAsPlain();
+            for (var k = 0; k < created.length; k++) visible.push(created[k]);
 
-            const newCount = visibleWindows.length;
-            const availableStyles = this._getAvailableStylesForCount(newCount);
-            const styleExists = availableStyles.some(s => s.id === this.currentLayoutStyle);
-
-            if (!styleExists) {
-                if (newCount === 2) this.currentLayoutStyle = LayoutStyle.TWO_HORIZONTAL;
-                else if (newCount === 3) this.currentLayoutStyle = LayoutStyle.THREE_BIG_LEFT;
-                else if (newCount === 4) this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
-            }
-
-            this._rebuildFromVisible(visibleWindows);
+            this._rebuildFromVisible(visible);
             this.render();
             this._notifyChange();
 
-            for (const wd of created) {
-                this._emitLayoutAction('add', wd);
-                this._emitVisibilityChanged(wd.id, true);
+            for (var m = 0; m < created.length; m++) {
+                this._emitLayoutAction('add', created[m]);
+                this._emitVisibilityChanged(created[m].id, true);
             }
 
             return created;
         }
 
         // ============================================================
-        // 9. ЗАКРЫТИЕ ОКНА
+        // 12. ЗАКРЫТИЕ
         // ============================================================
 
         closeWindow(id) {
-            const sid = String(id);
-            console.log(`[LayoutManager] Closing window: ${sid}`);
+            var sid = String(id);
+            var node = this.getNodeByWindowId(sid);
+            var minData = this._minimizedWindowsData.get(sid);
 
-            const node = this.getNodeByWindowId(sid);
-            const minimizedData = this._minimizedWindowsData.get(sid);
-
-            if (!node && !minimizedData) {
+            if (!node && !minData) {
                 console.warn('[LayoutManager] closeWindow: not found:', sid);
                 return false;
             }
 
-            const wasVisible = !!node;
-            const winType = node?.windowData?.type || minimizedData?.type || 'unknown';
-            const winSlotId = node?.windowData?.slotId || minimizedData?.slotId || null;
+            var wasVisible = !!node;
+            var winType = node && node.windowData ? node.windowData.type
+                : (minData ? minData.type : 'unknown');
+            var winSlotId = node && node.windowData ? node.windowData.slotId
+                : (minData ? minData.slotId : null);
 
             if (this._fullscreenWindowId === sid) {
                 this.exitFullscreen(true);
@@ -827,7 +870,7 @@
 
             this._minimizedWindowsData.delete(sid);
 
-            const instance = this._windowInstances.get(sid);
+            var instance = this._windowInstances.get(sid);
             if (instance && typeof instance.destroy === 'function') {
                 try { instance.destroy(); } catch (e) {}
             }
@@ -839,21 +882,30 @@
 
             if (this._dataBus && winSlotId) {
                 this._dataBus.detachWindowFromSlot(winSlotId, sid);
-                const slot = this._dataBus.getSlot(winSlotId);
-                if (slot && slot.attachedWindows.length === 0) {
+                var slot = this._dataBus.getSlot(winSlotId);
+                if (slot && slot.attachedWindows.size === 0) {
                     this._dataBus.archiveSlot(winSlotId);
                 }
             }
 
-            const remainingVisible = this.getVisibleWindows()
-                .filter(w => String(w.id) !== sid)
-                .map(w => ({ ...w }));
+            var remaining = this.getVisibleWindows()
+                .filter(function(w) { return String(w.id) !== sid; })
+                .map(function(w) {
+                    return {
+                        id: w.id,
+                        type: w.type,
+                        title: w.title,
+                        icon: w.icon,
+                        slotId: w.slotId,
+                        nodeId: w.nodeId
+                    };
+                });
 
-            if (remainingVisible.length === 0) {
+            if (remaining.length === 0) {
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
                 this._windowIdCounter = 0;
             } else {
-                this._rebuildFromVisible(remainingVisible);
+                this._rebuildFromVisible(remaining);
             }
 
             this.render();
@@ -865,28 +917,23 @@
                 slotId: winSlotId
             });
 
-            if (wasVisible) {
-                this._emitVisibilityChanged(sid, false);
-            }
+            if (wasVisible) this._emitVisibilityChanged(sid, false);
 
             if (this._focusedWindowId === sid) {
-                const remaining = this.getVisibleWindows();
-                const nextId = remaining.length > 0 ? remaining[0].id : null;
-                this.setFocusedWindow(nextId);
+                var vis = this.getVisibleWindows();
+                var next = vis.length > 0 ? vis[0].id : null;
+                this.setFocusedWindow(next);
             }
-
             return true;
         }
 
         closeAll() {
-            // ✅ FIX (v6.1.1): отменяем активный drag
             this._cancelActiveDividerDrag();
-
             this.exitFullscreen(true);
 
-            const visibleIds = this.getVisibleWindows().map(w => String(w.id));
+            var visibleIds = this.getVisibleWindows().map(function(w) { return String(w.id); });
 
-            this._windowInstances.forEach((instance) => {
+            this._windowInstances.forEach(function(instance) {
                 if (instance && typeof instance.destroy === 'function') {
                     try { instance.destroy(); } catch (e) {}
                 }
@@ -894,67 +941,61 @@
             this._windowInstances.clear();
 
             if (this._dataBus) {
-                const windows = this.getWindows();
-                for (const w of windows) {
-                    if (w.slotId) {
-                        this._dataBus.detachWindowFromSlot(w.slotId, w.id);
-                        const slot = this._dataBus.getSlot(w.slotId);
-                        if (slot && slot.attachedWindows.length === 0) {
-                            this._dataBus.archiveSlot(w.slotId);
-                        }
+                var windows = this.getWindows();
+                for (var i = 0; i < windows.length; i++) {
+                    var w = windows[i];
+                    if (!w.slotId) continue;
+                    this._dataBus.detachWindowFromSlot(w.slotId, w.id);
+                    var slot = this._dataBus.getSlot(w.slotId);
+                    if (slot && slot.attachedWindows.size === 0) {
+                        this._dataBus.archiveSlot(w.slotId);
                     }
                 }
             }
 
             this._minimizedWindowsData.clear();
             this._fullscreenWindowId = null;
-
             this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
             this._windowIdCounter = 0;
             this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
 
             this.setFocusedWindow(null);
-
             this.render();
             this._notifyChange();
 
-            for (const wid of visibleIds) {
-                this._emitVisibilityChanged(wid, false);
+            for (var j = 0; j < visibleIds.length; j++) {
+                this._emitVisibilityChanged(visibleIds[j], false);
             }
-
             return true;
         }
 
         // ============================================================
-        // 10. SWAP
+        // 13. SWAP
         // ============================================================
 
         swapWindows(windowId1, windowId2) {
-            const s1 = String(windowId1);
-            const s2 = String(windowId2);
-            console.log(`[LayoutManager] Swapping windows: ${s1} <-> ${s2}`);
-
+            var s1 = String(windowId1);
+            var s2 = String(windowId2);
             if (s1 === s2) return true;
 
             if (this.isMinimized(s1) || this.isMinimized(s2)) {
-                console.warn('[LayoutManager] swapWindows: cannot swap minimized windows');
+                console.warn('[LayoutManager] swapWindows: cannot swap minimized');
                 return false;
             }
 
-            const node1 = this.getNodeByWindowId(s1);
-            const node2 = this.getNodeByWindowId(s2);
-
+            var node1 = this.getNodeByWindowId(s1);
+            var node2 = this.getNodeByWindowId(s2);
             if (!node1 || !node2) {
-                console.error('[LayoutManager] One or both windows not found');
+                console.error('[LayoutManager] swapWindows: one or both nodes not found');
                 return false;
             }
 
-            const tempData = node1.windowData;
+            var tmp = node1.windowData;
             node1.windowData = node2.windowData;
-            node2.windowData = tempData;
+            node2.windowData = tmp;
 
-            const inst1 = this._windowInstances.get(s1);
-            const inst2 = this._windowInstances.get(s2);
+            var inst1 = this._windowInstances.get(s1);
+            var inst2 = this._windowInstances.get(s2);
 
             if (inst1) {
                 this._windowInstances.delete(s1);
@@ -980,7 +1021,7 @@
         }
 
         // ============================================================
-        // 11. УПРАВЛЕНИЕ СТИЛЕМ
+        // 14. СТИЛИ
         // ============================================================
 
         getAvailableStyles() {
@@ -991,148 +1032,270 @@
             if (count === 2) {
                 return [
                     { id: LayoutStyle.TWO_HORIZONTAL, label: '2 Columns', icon: '⬌' },
-                    { id: LayoutStyle.TWO_VERTICAL, label: '2 Rows', icon: '⬍' }
+                    { id: LayoutStyle.TWO_VERTICAL,   label: '2 Rows',    icon: '⬍' }
                 ];
             }
             if (count === 3) {
                 return [
-                    { id: LayoutStyle.THREE_HORIZONTAL, label: '3 Columns', icon: '⬌' },
-                    { id: LayoutStyle.THREE_VERTICAL, label: '3 Rows', icon: '⬍' },
-                    { id: LayoutStyle.THREE_BIG_LEFT, label: 'Big Left + 2 Right', icon: '▣' },
-                    { id: LayoutStyle.THREE_BIG_RIGHT, label: 'Big Right + 2 Left', icon: '▣' },
-                    { id: LayoutStyle.THREE_BIG_TOP, label: 'Big Top + 2 Bottom', icon: '▣' },
-                    { id: LayoutStyle.THREE_BIG_BOTTOM, label: 'Big Bottom + 2 Top', icon: '▣' }
+                    { id: LayoutStyle.THREE_HORIZONTAL,  label: '3 Columns', icon: '⬌' },
+                    { id: LayoutStyle.THREE_VERTICAL,    label: '3 Rows',    icon: '⬍' },
+                    { id: LayoutStyle.THREE_BIG_LEFT,    label: 'Big Left + 2 Right',  icon: '▣' },
+                    { id: LayoutStyle.THREE_BIG_RIGHT,   label: 'Big Right + 2 Left',  icon: '▣' },
+                    { id: LayoutStyle.THREE_BIG_TOP,     label: 'Big Top + 2 Bottom',  icon: '▣' },
+                    { id: LayoutStyle.THREE_BIG_BOTTOM,  label: 'Big Bottom + 2 Top',  icon: '▣' }
                 ];
             }
             if (count === 4) {
                 return [
-                    { id: LayoutStyle.FOUR_GRID_2X2, label: 'Grid 2x2', icon: '⊞' },
-                    { id: LayoutStyle.FOUR_HORIZONTAL, label: '4 Columns', icon: '⬌' },
-                    { id: LayoutStyle.FOUR_VERTICAL, label: '4 Rows', icon: '⬍' },
-                    { id: LayoutStyle.FOUR_BIG_LEFT, label: 'Big Left + 3 Right', icon: '▣' },
-                    { id: LayoutStyle.FOUR_BIG_RIGHT, label: 'Big Right + 3 Left', icon: '▣' },
-                    { id: LayoutStyle.FOUR_BIG_TOP, label: 'Big Top + 3 Bottom', icon: '▣' },
-                    { id: LayoutStyle.FOUR_BIG_BOTTOM, label: 'Big Bottom + 3 Top', icon: '▣' },
-                    { id: LayoutStyle.FOUR_MIXED, label: 'Mixed (2+2)', icon: '⊞' }
+                    { id: LayoutStyle.FOUR_GRID_2X2,    label: 'Grid 2x2',           icon: '⊞' },
+                    { id: LayoutStyle.FOUR_HORIZONTAL,  label: '4 Columns',          icon: '⬌' },
+                    { id: LayoutStyle.FOUR_VERTICAL,    label: '4 Rows',             icon: '⬍' },
+                    { id: LayoutStyle.FOUR_BIG_LEFT,    label: 'Big Left + 3 Right', icon: '▣' },
+                    { id: LayoutStyle.FOUR_BIG_RIGHT,   label: 'Big Right + 3 Left', icon: '▣' },
+                    { id: LayoutStyle.FOUR_BIG_TOP,     label: 'Big Top + 3 Bottom', icon: '▣' },
+                    { id: LayoutStyle.FOUR_BIG_BOTTOM,  label: 'Big Bottom + 3 Top', icon: '▣' },
+                    { id: LayoutStyle.FOUR_MIXED,       label: 'Mixed (2+2)',        icon: '⊞' }
                 ];
             }
             return [];
         }
 
         setLayoutStyle(styleId) {
-            const styles = this.getAvailableStyles();
-            const style = styles.find(s => s.id === styleId);
-            if (!style) return false;
+            var styles = this.getAvailableStyles();
+            var found = false;
+            for (var i = 0; i < styles.length; i++) {
+                if (styles[i].id === styleId) { found = true; break; }
+            }
+            if (!found) return false;
 
             this.currentLayoutStyle = styleId;
-
-            this._rebuildFromVisible(this.getVisibleWindows());
-
+            this._rebuildFromVisible(this._collectVisibleAsPlain());
             this.render();
             this._notifyChange();
-            this._emitLayoutAction('style', { styleId });
+            this._emitLayoutAction('style', { styleId: styleId });
             return true;
         }
 
         getCurrentStyle() { return this.currentLayoutStyle; }
 
-        _emitLayoutAction(action, data) {
-            const event = new CustomEvent('layout-action', {
-                detail: {
-                    action,
-                    ...data,
-                    timestamp: Date.now()
-                }
-            });
-            document.dispatchEvent(event);
+        // ============================================================
+        // 15. РАСЧЁТ ДОЛЕЙ SPLIT
+        // ============================================================
 
-            if (this._eventBus) {
-                try { this._eventBus.emit('layout-action', { action, ...data }); } catch (e) {}
+        _computeSplitRatios(node) {
+            var n = node.children.length;
+            if (n === 0) return [];
+            if (n === 1) return [1];
+            if (n === 2) {
+                var r = node.ratio;
+                if (r <= 0 || r >= 1) r = 0.5;
+                return [r, 1 - r];
             }
-        }
-
-        _emitVisibilityChanged(windowId, visible) {
-            const wid = String(windowId);
-            const detail = {
-                windowId: wid,
-                visible: !!visible,
-                timestamp: Date.now()
-            };
-
-            document.dispatchEvent(new CustomEvent('window-visibility-changed', { detail }));
-
-            if (this._eventBus) {
-                try { this._eventBus.emit('window-visibility-changed', detail); } catch (e) {}
-            }
+            var equal = 1 / n;
+            var out = [];
+            for (var i = 0; i < n; i++) out.push(equal);
+            return out;
         }
 
         // ============================================================
-        // 12. ПЕРЕСТРОЙКА
+        // 16. СБОР ВИДИМЫХ ОКОН
+        // ============================================================
+
+        _collectVisibleAsPlain() {
+            var visible = this.getVisibleWindows();
+            var out = [];
+            for (var i = 0; i < visible.length; i++) {
+                var w = visible[i];
+                out.push({
+                    id: w.id,
+                    type: w.type,
+                    title: w.title,
+                    icon: w.icon,
+                    slotId: w.slotId,
+                    nodeId: w.nodeId
+                });
+            }
+            return out;
+        }
+
+        // ============================================================
+        // 17. ДЕДУПЛИКАЦИЯ
+        // ============================================================
+
+        _dedupRootLeafIds() {
+            if (!this.root) return false;
+
+            var seenLeafIds = new Set();
+            var seenWindowIds = new Set();
+            var changed = false;
+
+            var leaves = this.root.getLeaves();
+            for (var i = 0; i < leaves.length; i++) {
+                var leaf = leaves[i];
+
+                if (seenLeafIds.has(leaf.id)) {
+                    var oldId = leaf.id;
+                    leaf.id = generateId();
+                    changed = true;
+                    console.warn(
+                        '[LayoutManager] Duplicate leaf id:', oldId,
+                        '→', leaf.id,
+                        '(window:', leaf.windowData ? leaf.windowData.id : null, ')'
+                    );
+                }
+                seenLeafIds.add(leaf.id);
+
+                if (leaf.windowData && leaf.windowData.id != null) {
+                    var wid = String(leaf.windowData.id);
+                    if (seenWindowIds.has(wid)) {
+                        console.warn(
+                            '[LayoutManager] ⚠ Duplicate windowData.id in tree:',
+                            wid, '— logical error, may produce phantom windows'
+                        );
+                    }
+                    seenWindowIds.add(wid);
+                }
+            }
+
+            return changed;
+        }
+
+        // ============================================================
+        // 18. СИНХРОНИЗАЦИЯ СТРУКТУРЫ
+        // ============================================================
+
+        _ensureRootStructureMatches(visibleWindows) {
+            var count = visibleWindows.length;
+
+            if (count === 0) {
+                if (!this.root || !this.root.isLeaf() || this.root.windowData !== null) {
+                    this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
+                }
+                return;
+            }
+
+            if (count === 1) {
+                var w = visibleWindows[0];
+                var alreadySingle = this.root
+                    && this.root.isLeaf()
+                    && this.root.windowData
+                    && String(this.root.windowData.id) === String(w.id);
+
+                if (!alreadySingle) {
+                    this.root = leafFromWindow(w);
+                }
+                return;
+            }
+
+            // Стиль подходит под количество?
+            var styles = this._getAvailableStylesForCount(count);
+            var styleOk = false;
+            for (var i = 0; i < styles.length; i++) {
+                if (styles[i].id === this.currentLayoutStyle) { styleOk = true; break; }
+            }
+            if (!styleOk) {
+                this.currentLayoutStyle = DEFAULT_STYLE_FOR_COUNT[count]
+                    || LayoutStyle.FOUR_GRID_2X2;
+            }
+
+            // Структура правильная? (split, ровно count leaf'ов, все заполнены)
+            var leaves = (this.root && this.root.isSplit()) ? this.root.getLeaves() : [];
+            var allFilled = leaves.length === count;
+            if (allFilled) {
+                for (var k = 0; k < leaves.length; k++) {
+                    if (!leaves[k].windowData) { allFilled = false; break; }
+                }
+            }
+
+            if (this.root && this.root.isSplit() && allFilled) return;
+
+            this.root = this._buildLayoutForStyle(this.currentLayoutStyle, visibleWindows);
+        }
+
+        // ============================================================
+        // 19. ПЕРЕСТРОЙКА ИЗ ВИДИМЫХ
         // ============================================================
 
         _rebuildFromVisible(visibleWindows) {
-            const count = visibleWindows.length;
+            var count = visibleWindows.length;
 
             if (count === 0) {
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
                 return;
             }
 
-            if (count === 1) {
-                const w = visibleWindows[0];
-                this.root = new LayoutNode({
-                    type: NodeType.LEAF,
-                    windowData: { ...w },
-                    id: w.nodeId || generateId()
+            var seen = new Set();
+            var cleaned = [];
+            for (var i = 0; i < visibleWindows.length; i++) {
+                var w = visibleWindows[i];
+                var nid = w.nodeId;
+                if (nid == null || seen.has(nid)) nid = generateId();
+                seen.add(nid);
+                cleaned.push({
+                    id: w.id,
+                    type: w.type,
+                    title: w.title,
+                    icon: w.icon,
+                    slotId: w.slotId,
+                    nodeId: nid
                 });
+            }
+
+            if (count === 1) {
+                this.root = leafFromWindow(cleaned[0]);
                 return;
             }
 
-            const availableStyles = this._getAvailableStylesForCount(count);
-            const styleExists = availableStyles.some(s => s.id === this.currentLayoutStyle);
-
-            if (!styleExists) {
-                if (count === 2) this.currentLayoutStyle = LayoutStyle.TWO_HORIZONTAL;
-                else if (count === 3) this.currentLayoutStyle = LayoutStyle.THREE_BIG_LEFT;
-                else if (count === 4) this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
+            var styles = this._getAvailableStylesForCount(count);
+            var styleOk = false;
+            for (var j = 0; j < styles.length; j++) {
+                if (styles[j].id === this.currentLayoutStyle) { styleOk = true; break; }
+            }
+            if (!styleOk) {
+                this.currentLayoutStyle = DEFAULT_STYLE_FOR_COUNT[count]
+                    || LayoutStyle.FOUR_GRID_2X2;
             }
 
-            const newRoot = this._buildLayoutForStyle(this.currentLayoutStyle, visibleWindows);
+            var newRoot = this._buildLayoutForStyle(this.currentLayoutStyle, cleaned);
             if (newRoot) this.root = newRoot;
         }
 
+        // ============================================================
+        // 20. ПОСТРОЕНИЕ ДЕРЕВЬЕВ
+        // ============================================================
+
         _buildLayoutForStyle(style, windows) {
-            const count = windows.length;
+            var count = windows.length;
 
             if (count === 2) {
                 switch (style) {
                     case LayoutStyle.TWO_HORIZONTAL: return this._buildTwoHorizontal(windows);
-                    case LayoutStyle.TWO_VERTICAL: return this._buildTwoVertical(windows);
-                    default: return this._buildTwoHorizontal(windows);
+                    case LayoutStyle.TWO_VERTICAL:   return this._buildTwoVertical(windows);
+                    default:                          return this._buildTwoHorizontal(windows);
                 }
             }
             if (count === 3) {
                 switch (style) {
-                    case LayoutStyle.THREE_HORIZONTAL: return this._buildThreeHorizontal(windows);
-                    case LayoutStyle.THREE_VERTICAL: return this._buildThreeVertical(windows);
-                    case LayoutStyle.THREE_BIG_LEFT: return this._buildThreeBigLeft(windows);
-                    case LayoutStyle.THREE_BIG_RIGHT: return this._buildThreeBigRight(windows);
-                    case LayoutStyle.THREE_BIG_TOP: return this._buildThreeBigTop(windows);
-                    case LayoutStyle.THREE_BIG_BOTTOM: return this._buildThreeBigBottom(windows);
-                    default: return this._buildThreeBigLeft(windows);
+                    case LayoutStyle.THREE_HORIZONTAL:  return this._buildThreeHorizontal(windows);
+                    case LayoutStyle.THREE_VERTICAL:    return this._buildThreeVertical(windows);
+                    case LayoutStyle.THREE_BIG_LEFT:    return this._buildThreeBigLeft(windows);
+                    case LayoutStyle.THREE_BIG_RIGHT:   return this._buildThreeBigRight(windows);
+                    case LayoutStyle.THREE_BIG_TOP:     return this._buildThreeBigTop(windows);
+                    case LayoutStyle.THREE_BIG_BOTTOM:  return this._buildThreeBigBottom(windows);
+                    default:                             return this._buildThreeBigLeft(windows);
                 }
             }
             if (count === 4) {
                 switch (style) {
-                    case LayoutStyle.FOUR_GRID_2X2: return this._buildFourGrid2x2(windows);
-                    case LayoutStyle.FOUR_HORIZONTAL: return this._buildFourHorizontal(windows);
-                    case LayoutStyle.FOUR_VERTICAL: return this._buildFourVertical(windows);
-                    case LayoutStyle.FOUR_BIG_LEFT: return this._buildFourBigLeft(windows);
-                    case LayoutStyle.FOUR_BIG_RIGHT: return this._buildFourBigRight(windows);
-                    case LayoutStyle.FOUR_BIG_TOP: return this._buildFourBigTop(windows);
-                    case LayoutStyle.FOUR_BIG_BOTTOM: return this._buildFourBigBottom(windows);
-                    case LayoutStyle.FOUR_MIXED: return this._buildFourMixed(windows);
-                    default: return this._buildFourGrid2x2(windows);
+                    case LayoutStyle.FOUR_GRID_2X2:    return this._buildFourGrid2x2(windows);
+                    case LayoutStyle.FOUR_HORIZONTAL:  return this._buildFourHorizontal(windows);
+                    case LayoutStyle.FOUR_VERTICAL:    return this._buildFourVertical(windows);
+                    case LayoutStyle.FOUR_BIG_LEFT:    return this._buildFourBigLeft(windows);
+                    case LayoutStyle.FOUR_BIG_RIGHT:   return this._buildFourBigRight(windows);
+                    case LayoutStyle.FOUR_BIG_TOP:     return this._buildFourBigTop(windows);
+                    case LayoutStyle.FOUR_BIG_BOTTOM:  return this._buildFourBigBottom(windows);
+                    case LayoutStyle.FOUR_MIXED:       return this._buildFourMixed(windows);
+                    default:                            return this._buildFourGrid2x2(windows);
                 }
             }
 
@@ -1140,246 +1303,223 @@
         }
 
         _buildTwoHorizontal(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            root.addChild(leafFromWindow(windows[1]));
             return root;
         }
 
         _buildTwoVertical(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            root.addChild(leafFromWindow(windows[1]));
             return root;
         }
 
         _buildThreeHorizontal(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1/3 });
-            for (const w of windows) root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...w }, id: w.nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1 / 3 });
+            for (var i = 0; i < windows.length; i++) root.addChild(leafFromWindow(windows[i]));
             return root;
         }
 
         _buildThreeVertical(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1/3 });
-            for (const w of windows) root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...w }, id: w.nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1 / 3 });
+            for (var i = 0; i < windows.length; i++) root.addChild(leafFromWindow(windows[i]));
             return root;
         }
 
         _buildThreeBigLeft(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.4 });
-            const rightSplit = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            rightSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            rightSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            root.addChild(rightSplit);
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.4 });
+            var right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            right.addChild(leafFromWindow(windows[1]));
+            right.addChild(leafFromWindow(windows[2]));
+            root.addChild(right);
             return root;
         }
 
         _buildThreeBigRight(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.6 });
-            const leftSplit = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            leftSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            leftSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            root.addChild(leftSplit);
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.6 });
+            var left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            left.addChild(leafFromWindow(windows[0]));
+            left.addChild(leafFromWindow(windows[1]));
+            root.addChild(left);
+            root.addChild(leafFromWindow(windows[2]));
             return root;
         }
 
         _buildThreeBigTop(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
-            const bottomSplit = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            bottomSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            bottomSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            root.addChild(bottomSplit);
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
+            var bottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            bottom.addChild(leafFromWindow(windows[1]));
+            bottom.addChild(leafFromWindow(windows[2]));
+            root.addChild(bottom);
             return root;
         }
 
         _buildThreeBigBottom(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
-            const topSplit = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            topSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            topSplit.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            root.addChild(topSplit);
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
+            var top = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            top.addChild(leafFromWindow(windows[0]));
+            top.addChild(leafFromWindow(windows[1]));
+            root.addChild(top);
+            root.addChild(leafFromWindow(windows[2]));
             return root;
         }
 
         _buildFourGrid2x2(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            const left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            const right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            left.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            left.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            right.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            right.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            var left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            var right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            left.addChild(leafFromWindow(windows[0]));
+            left.addChild(leafFromWindow(windows[1]));
+            right.addChild(leafFromWindow(windows[2]));
+            right.addChild(leafFromWindow(windows[3]));
             root.addChild(left);
             root.addChild(right);
             return root;
         }
 
         _buildFourHorizontal(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.25 });
-            for (const w of windows) root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...w }, id: w.nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.25 });
+            for (var i = 0; i < windows.length; i++) root.addChild(leafFromWindow(windows[i]));
             return root;
         }
 
         _buildFourVertical(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.25 });
-            for (const w of windows) root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...w }, id: w.nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.25 });
+            for (var i = 0; i < windows.length; i++) root.addChild(leafFromWindow(windows[i]));
             return root;
         }
 
         _buildFourBigLeft(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.4 });
-            const right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1/3 });
-            const splitBottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            right.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            splitBottom.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            splitBottom.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.4 });
+            var right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1 / 3 });
+            var splitBottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            right.addChild(leafFromWindow(windows[1]));
+            splitBottom.addChild(leafFromWindow(windows[2]));
+            splitBottom.addChild(leafFromWindow(windows[3]));
             right.addChild(splitBottom);
             root.addChild(right);
             return root;
         }
 
         _buildFourBigRight(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.6 });
-            const left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1/3 });
-            const splitBottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
-            left.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            splitBottom.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            splitBottom.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.6 });
+            var left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 1 / 3 });
+            var splitBottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.5 });
+            left.addChild(leafFromWindow(windows[0]));
+            splitBottom.addChild(leafFromWindow(windows[1]));
+            splitBottom.addChild(leafFromWindow(windows[2]));
             left.addChild(splitBottom);
             root.addChild(left);
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            root.addChild(leafFromWindow(windows[3]));
             return root;
         }
 
         _buildFourBigTop(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
-            const bottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1/3 });
-            const splitRight = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            bottom.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            splitRight.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            splitRight.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
+            var bottom = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1 / 3 });
+            var splitRight = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            root.addChild(leafFromWindow(windows[0]));
+            bottom.addChild(leafFromWindow(windows[1]));
+            splitRight.addChild(leafFromWindow(windows[2]));
+            splitRight.addChild(leafFromWindow(windows[3]));
             bottom.addChild(splitRight);
             root.addChild(bottom);
             return root;
         }
 
         _buildFourBigBottom(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
-            const top = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1/3 });
-            const splitRight = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            top.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            splitRight.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            splitRight.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
+            var top = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 1 / 3 });
+            var splitRight = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            top.addChild(leafFromWindow(windows[0]));
+            splitRight.addChild(leafFromWindow(windows[1]));
+            splitRight.addChild(leafFromWindow(windows[2]));
             top.addChild(splitRight);
             root.addChild(top);
-            root.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            root.addChild(leafFromWindow(windows[3]));
             return root;
         }
 
         _buildFourMixed(windows) {
-            const root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
-            const left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
-            const right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
-            left.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[0] }, id: windows[0].nodeId || generateId() }));
-            left.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[1] }, id: windows[1].nodeId || generateId() }));
-            right.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[2] }, id: windows[2].nodeId || generateId() }));
-            right.addChild(new LayoutNode({ type: NodeType.LEAF, windowData: { ...windows[3] }, id: windows[3].nodeId || generateId() }));
+            var root = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.HORIZONTAL, ratio: 0.5 });
+            var left = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.6 });
+            var right = new LayoutNode({ type: NodeType.SPLIT, direction: SplitDirection.VERTICAL, ratio: 0.4 });
+            left.addChild(leafFromWindow(windows[0]));
+            left.addChild(leafFromWindow(windows[1]));
+            right.addChild(leafFromWindow(windows[2]));
+            right.addChild(leafFromWindow(windows[3]));
             root.addChild(left);
             root.addChild(right);
             return root;
         }
 
         // ============================================================
-        // 13. РЕНДЕРИНГ
+        // 21. РЕНДЕРИНГ
         // ============================================================
 
         render() {
-            // ✅ FIX (v6.1.1): перед полной перерисовкой отменяем активный drag
             this._cancelActiveDividerDrag();
-
             if (!this.workspace) return;
 
             if (!this.root) {
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
             }
 
+            this._dedupRootLeafIds();
+
+            var visible = this.getVisibleWindows();
+            this._ensureRootStructureMatches(visible);
+            this._dedupRootLeafIds();
+
             this.workspace.innerHTML = '';
             this._domMap.clear();
 
-            const visibleWindows = this.getVisibleWindows();
-
-            if (visibleWindows.length === 0) {
-                // ✅ FIX (v6.1.2): нормализуем дерево, чтобы root и getVisibleWindows() не разъезжались
+            if (this.getVisibleWindowCount() === 0) {
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
-
                 this._renderEmptyWorkspace();
                 this._updateWindowMap();
                 this._scheduleResize();
-                console.log('[LayoutManager] Render complete (empty/placeholder)');
                 return;
             }
 
-            let renderRoot;
-
-            if (visibleWindows.length === 1) {
-                const w = visibleWindows[0];
-                renderRoot = new LayoutNode({
-                    type: NodeType.LEAF,
-                    windowData: { ...w },
-                    id: w.nodeId || generateId()
-                });
-            } else {
-                const styles = this._getAvailableStylesForCount(visibleWindows.length);
-                const styleExists = styles.some(s => s.id === this.currentLayoutStyle);
-                const style = styleExists ? this.currentLayoutStyle : styles[0]?.id;
-                renderRoot = this._buildLayoutForStyle(style, visibleWindows);
-            }
-
-            if (!renderRoot) return;
-
-            const element = this._buildDOM(renderRoot);
+            var element = this._buildDOM(this.root);
             if (element) this.workspace.appendChild(element);
 
             this._updateWindowMap();
             this._scheduleResize();
-
-            console.log('[LayoutManager] Render complete, visible:',
-                visibleWindows.length, ', minimized:',
-                this._minimizedWindowsData.size);
         }
 
         _renderEmptyWorkspace() {
-            const existing = this.workspace.querySelector('.workspace-empty');
+            var existing = this.workspace.querySelector('.workspace-empty');
             if (existing) existing.remove();
 
-            const placeholder = document.createElement('div');
+            var placeholder = document.createElement('div');
             placeholder.className = 'workspace-empty';
-            placeholder.style.cssText = `
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                height: 100%;
-                width: 100%;
-                color: var(--text-muted, rgba(200,184,154,0.35));
-                font-size: 14px;
-                flex-direction: column;
-                gap: 8px;
-            `;
-            placeholder.innerHTML = `
-                <div style="font-size:48px;opacity:0.7;">
-                    <svg class="icon-folder" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                </div>
-                <div>Нет активных окон</div>
-                <div style="font-size:11px;opacity:0.5;">Используйте меню «Window»</div>
-            `;
+            placeholder.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'height:100%',
+                'width:100%',
+                'color:var(--text-muted, rgba(200,184,154,0.35))',
+                'font-size:14px',
+                'flex-direction:column',
+                'gap:8px'
+            ].join(';');
+            placeholder.innerHTML = [
+                '<div style="font-size:48px;opacity:0.7;">',
+                '    <svg class="icon-folder" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">',
+                '        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+                '    </svg>',
+                '</div>',
+                '<div>Нет активных окон</div>',
+                '<div style="font-size:11px;opacity:0.5;">Используйте меню «Window»</div>'
+            ].join('');
             this.workspace.appendChild(placeholder);
         }
 
@@ -1393,19 +1533,20 @@
                 this._resizeTimer = null;
             }
 
-            this._resizeRAF = requestAnimationFrame(() => {
-                this._resizeRAF = null;
-                this._doResizeAll();
+            var self = this;
+            this._resizeRAF = requestAnimationFrame(function() {
+                self._resizeRAF = null;
+                self._doResizeAll();
 
-                this._resizeTimer = setTimeout(() => {
-                    this._resizeTimer = null;
-                    this._doResizeAll();
+                self._resizeTimer = setTimeout(function() {
+                    self._resizeTimer = null;
+                    self._doResizeAll();
                 }, 200);
             });
         }
 
         _doResizeAll() {
-            this._windowInstances.forEach((instance) => {
+            this._windowInstances.forEach(function(instance) {
                 if (instance && typeof instance.resize === 'function') {
                     try { instance.resize(); } catch (e) {}
                 }
@@ -1416,6 +1557,10 @@
             this._doResizeAll();
         }
 
+        // ============================================================
+        // 22. ПОСТРОЕНИЕ DOM
+        // ============================================================
+
         _buildDOM(node) {
             if (node.isLeaf()) return this._buildLeafDOM(node);
             if (node.isSplit()) return this._buildSplitDOM(node);
@@ -1423,83 +1568,84 @@
         }
 
         _buildLeafDOM(node) {
-            const container = document.createElement('div');
+            if (!node.windowData) {
+                var empty = document.createElement('div');
+                empty.style.cssText = 'flex:1 1 auto;min-width:0;min-height:0;background:transparent;';
+                return empty;
+            }
+
+            var container = document.createElement('div');
             container.className = 'window-container';
             container.dataset.nodeId = node.id;
-            container.dataset.windowId = node.windowData?.id || '';
-            container.dataset.slotId = node.windowData?.slotId || '';
+            container.dataset.windowId = node.windowData.id;
+            container.dataset.slotId = node.windowData.slotId || '';
 
-            Object.assign(container.style, {
-                flex: '1 1 auto',
-                minWidth: '0',
-                minHeight: '0',
-                maxWidth: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                position: 'relative',
-                overflow: 'hidden',
-                background: 'var(--bg-panel, #1a1a1a)',
-                border: '1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                borderRadius: 'var(--radius, 6px)',
-                margin: '0',
-                padding: '0',
-                height: '100%',
-                width: '100%',
-                boxSizing: 'border-box',
-                transition: 'border-color 0.2s ease, box-shadow 0.2s ease'
-            });
+            container.style.cssText = [
+                'flex:1 1 auto',
+                'min-width:0',
+                'min-height:0',
+                'max-width:100%',
+                'display:flex',
+                'flex-direction:column',
+                'position:relative',
+                'overflow:hidden',
+                'background:var(--bg-panel, #1a1a1a)',
+                'border:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:var(--radius, 6px)',
+                'margin:0',
+                'padding:0',
+                'height:100%',
+                'width:100%',
+                'box-sizing:border-box',
+                'transition:border-color 0.2s ease, box-shadow 0.2s ease'
+            ].join(';');
 
             this._domMap.set(node.id, container);
 
-            if (!node.windowData) return container;
-
-            const focusWindowId = node.windowData.id;
-            container.addEventListener('mousedown', () => {
-                this.setFocusedWindow(focusWindowId);
+            var focusId = node.windowData.id;
+            var self = this;
+            container.addEventListener('mousedown', function() {
+                self.setFocusedWindow(focusId);
             }, true);
 
-            const BaseWindow = window.BaseWindow;
+            var BaseWindow = window.BaseWindow;
             if (!BaseWindow) {
                 console.error('[LayoutManager] BaseWindow not found');
                 return container;
             }
 
-            const windowId = node.windowData.id;
-            const sid = String(windowId);
-            const slotId = node.windowData.slotId;
+            var windowId = node.windowData.id;
+            var sid = String(windowId);
+            var slotId = node.windowData.slotId;
 
-            const existingBaseWindow = this._windowInstances.get(sid);
+            var existing = this._windowInstances.get(sid);
 
-            if (existingBaseWindow && !existingBaseWindow.isDestroyed()) {
-                if (existingBaseWindow.type === node.windowData.type) {
-                    const rw = existingBaseWindow.getRenderWindow();
+            if (existing && !existing.isDestroyed()) {
+                if (existing.type === node.windowData.type) {
+                    var rw = existing.getRenderWindow();
                     if (rw && rw._root) {
-                        existingBaseWindow.container = container;
+                        existing.container = container;
                         rw.container = container;
                         container.appendChild(rw._root);
 
-                        if (slotId && existingBaseWindow.getSlotId() !== slotId) {
-                            existingBaseWindow.attachTo(slotId);
+                        if (slotId && existing.getSlotId() !== slotId) {
+                            existing.attachTo(slotId);
                         }
-
-                        console.log('[LayoutManager] Reused BaseWindow:', sid, '(slot:', slotId + ')');
                         return container;
                     }
                 }
-
-                try { existingBaseWindow.destroy(); } catch (e) {}
+                try { existing.destroy(); } catch (e) {}
                 this._windowInstances.delete(sid);
             }
 
-            if (existingBaseWindow && existingBaseWindow.isDestroyed()) {
+            if (existing && existing.isDestroyed()) {
                 this._windowInstances.delete(sid);
             }
 
-            const typeId = node.windowData.type;
-            const typeConfig = this._registry ? this._registry.getType(typeId) : null;
+            var typeId = node.windowData.type;
+            var typeConfig = this._registry ? this._registry.getType(typeId) : null;
 
-            let realInstance = null;
-
+            var realInstance = null;
             if (typeConfig && typeof typeConfig.create === 'function') {
                 try {
                     realInstance = typeConfig.create(
@@ -1526,7 +1672,7 @@
             }
 
             try {
-                const baseWindow = new BaseWindow({
+                var baseWindow = new BaseWindow({
                     id: windowId,
                     type: typeId,
                     container: container,
@@ -1562,15 +1708,15 @@
             } catch (error) {
                 console.error('[LayoutManager] Error creating BaseWindow:', error);
 
-                const placeholder = document.createElement('div');
-                placeholder.style.cssText = `
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100%;
-                    color: var(--text-muted);
-                    font-size: 14px;
-                `;
+                var placeholder = document.createElement('div');
+                placeholder.style.cssText = [
+                    'display:flex',
+                    'align-items:center',
+                    'justify-content:center',
+                    'height:100%',
+                    'color:var(--text-muted)',
+                    'font-size:14px'
+                ].join(';');
                 placeholder.textContent = node.windowData.title + ' (Error)';
                 container.appendChild(placeholder);
             }
@@ -1579,222 +1725,232 @@
         }
 
         _buildSplitDOM(node) {
-            const container = document.createElement('div');
+            var container = document.createElement('div');
             container.className = 'split-container';
             container.dataset.nodeId = node.id;
 
-            const isHorizontal = node.direction === SplitDirection.HORIZONTAL;
+            var isHorizontal = node.direction === SplitDirection.HORIZONTAL;
+            var childCount = node.children.length;
+            var dividerTotalPx = DIVIDER_SIZE * (childCount - 1);
 
-            Object.assign(container.style, {
-                display: 'flex',
-                flex: '1 1 auto',
-                minWidth: '0',
-                minHeight: '0',
-                position: 'relative',
-                flexDirection: isHorizontal ? 'row' : 'column',
-                height: '100%',
-                width: '100%',
-                overflow: 'hidden',
-                boxSizing: 'border-box'
-            });
+            container.style.cssText = [
+                'display:flex',
+                'flex:1 1 auto',
+                'min-width:0',
+                'min-height:0',
+                'position:relative',
+                'flex-direction:' + (isHorizontal ? 'row' : 'column'),
+                'height:100%',
+                'width:100%',
+                'overflow:hidden',
+                'box-sizing:border-box'
+            ].join(';');
+
+            container.dataset.splitDividerTotal = String(dividerTotalPx);
 
             this._domMap.set(node.id, container);
 
-            const children = node.children;
-            const childCount = children.length;
-            const ratio = node.ratio;
+            var ratios = this._computeSplitRatios(node);
+            var childElements = [];
 
-            const childElements = [];
-            const DIVIDER_SIZE = 4;
+            for (var i = 0; i < childCount; i++) {
+                var child = node.children[i];
+                var el = this._buildDOM(child);
+                if (!el) continue;
 
-            children.forEach((child, index) => {
-                const childElement = this._buildDOM(child);
-                if (!childElement) return;
+                var percent = (ratios[i] * 100).toFixed(6);
+                el.style.flex = '0 0 calc((100% - ' + dividerTotalPx + 'px) * ' + percent + ' / 100)';
+                el.dataset.splitR = String(ratios[i]);
 
-                let flexBasis;
-                if (childCount === 2) {
-                    const percent = index === 0 ? ratio : 1 - ratio;
-                    flexBasis = `calc(${(percent * 100).toFixed(4)}% - ${DIVIDER_SIZE / 2}px)`;
-                } else {
-                    const totalDivider = DIVIDER_SIZE * (childCount - 1);
-                    const perChild = `((100% - ${totalDivider}px) / ${childCount})`;
-                    flexBasis = `calc(${perChild})`;
-                }
+                el.style.minWidth = '0';
+                el.style.minHeight = '0';
+                el.style.overflow = 'hidden';
+                el.style.position = 'relative';
+                el.style.boxSizing = 'border-box';
 
-                childElement.style.flex = `0 0 ${flexBasis}`;
-                childElement.style.minWidth = '0';
-                childElement.style.minHeight = '0';
-                childElement.style.overflow = 'hidden';
-                childElement.style.position = 'relative';
-                childElement.style.boxSizing = 'border-box';
+                container.appendChild(el);
+                childElements.push(el);
+            }
 
-                container.appendChild(childElement);
-                childElements.push(childElement);
-            });
+            if (childElements.length < 2) return container;
 
-            if (childElements.length >= 2) {
-                for (let i = childElements.length - 1; i > 0; i--) {
-                    const divider = document.createElement('div');
-                    divider.className = 'split-divider';
-                    divider.dataset.nodeId = node.id;
-
-                    Object.assign(divider.style, {
-                        flex: `0 0 ${DIVIDER_SIZE}px`,
-                        width: isHorizontal ? `${DIVIDER_SIZE}px` : '100%',
-                        minWidth: isHorizontal ? `${DIVIDER_SIZE}px` : '0',
-                        height: isHorizontal ? '100%' : `${DIVIDER_SIZE}px`,
-                        minHeight: isHorizontal ? '0' : `${DIVIDER_SIZE}px`,
-                        cursor: isHorizontal ? 'col-resize' : 'row-resize',
-                        backgroundColor: 'rgba(200, 184, 154, 0.15)',
-                        position: 'relative',
-                        zIndex: '10',
-                        flexShrink: '0',
-                        flexGrow: '0',
-                        transition: 'background-color 0.15s ease',
-                        boxSizing: 'border-box',
-                        alignSelf: 'stretch',
-                        userSelect: 'none'
-                    });
-
-                    divider.addEventListener('mouseenter', function() {
-                        this.style.backgroundColor = 'rgba(200, 184, 154, 0.4)';
-                    });
-                    divider.addEventListener('mouseleave', function() {
-                        this.style.backgroundColor = 'rgba(200, 184, 154, 0.15)';
-                    });
-
-                    const dividerIndex = i;
-
-                    divider.addEventListener('mousedown', (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-
-                        // ✅ FIX (v6.1.1): если уже есть активный drag — отменяем
-                        this._cancelActiveDividerDrag();
-
-                        divider.style.backgroundColor = 'rgba(204, 34, 51, 0.5)';
-                        document.body.style.cursor = isHorizontal ? 'col-resize' : 'row-resize';
-                        document.body.style.userSelect = 'none';
-
-                        const startPos = isHorizontal ? e.clientX : e.clientY;
-
-                        const leftElement = childElements[dividerIndex - 1];
-                        const rightElement = childElements[dividerIndex];
-
-                        const leftRect = leftElement.getBoundingClientRect();
-                        const rightRect = rightElement.getBoundingClientRect();
-
-                        const adjacentSize = (isHorizontal ? leftRect.width : leftRect.height) +
-                                            (isHorizontal ? rightRect.width : rightRect.height);
-
-                        const leftSize = isHorizontal ? leftRect.width : leftRect.height;
-                        const currentLeftRatio = adjacentSize > 0 ? leftSize / adjacentSize : 0.5;
-
-                        const onMouseMove = (ev) => {
-                            const currentPos = isHorizontal ? ev.clientX : ev.clientY;
-                            const deltaPixels = currentPos - startPos;
-                            const deltaRatio = adjacentSize > 0 ? deltaPixels / adjacentSize : 0;
-
-                            const newLeftRatio = Math.max(0.05, Math.min(0.95, currentLeftRatio + deltaRatio));
-
-                            if (childCount === 2) {
-                                node.ratio = newLeftRatio;
-                                const p0 = (newLeftRatio * 100).toFixed(4);
-                                const p1 = ((1 - newLeftRatio) * 100).toFixed(4);
-                                childElements[0].style.flex = `0 0 calc(${p0}% - ${DIVIDER_SIZE / 2}px)`;
-                                childElements[1].style.flex = `0 0 calc(${p1}% - ${DIVIDER_SIZE / 2}px)`;
-                            } else {
-                                const total = childElements.length;
-                                const newLeftFlex = Math.max(0.05, Math.min(0.95, newLeftRatio));
-                                const newRightFlex = 1 - newLeftFlex;
-                                const totalDivider = DIVIDER_SIZE * (total - 1);
-
-                                const pl = `calc(((100% - ${totalDivider}px) / ${total}) * ${newLeftFlex.toFixed(4)} * ${total})`;
-                                const pr = `calc(((100% - ${totalDivider}px) / ${total}) * ${newRightFlex.toFixed(4)} * ${total})`;
-
-                                leftElement.style.flex = `0 0 ${pl}`;
-                                rightElement.style.flex = `0 0 ${pr}`;
-                            }
-                        };
-
-                        const onMouseUp = () => {
-                            // ✅ FIX (v6.1.1): снимаем все слушатели + сбрасываем состояние
-                            try { document.removeEventListener('mousemove', onMouseMove); } catch (err) {}
-                            try { document.removeEventListener('mouseup', onMouseUp); } catch (err) {}
-                            try { document.removeEventListener('pointercancel', onMouseUp); } catch (err) {}
-                            try { window.removeEventListener('blur', onMouseUp); } catch (err) {}
-
-                            divider.style.backgroundColor = 'rgba(200, 184, 154, 0.15)';
-                            document.body.style.cursor = '';
-                            document.body.style.userSelect = '';
-
-                            this._activeDividerDrag = null;
-                            this._notifyChange();
-                        };
-
-                        // ✅ FIX (v6.1.1): сохраняем активный drag — чтобы render()/destroy() могли отменить
-                        this._activeDividerDrag = {
-                            onMove: onMouseMove,
-                            onUp: onMouseUp
-                        };
-
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                        document.addEventListener('pointercancel', onMouseUp);
-                        window.addEventListener('blur', onMouseUp);
-                    });
-
-                    container.insertBefore(divider, childElements[i]);
-                }
+            for (var d = childElements.length - 1; d > 0; d--) {
+                var divider = this._createDivider(node, container, d, isHorizontal, childElements);
+                container.insertBefore(divider, childElements[d]);
             }
 
             return container;
         }
 
+        _createDivider(node, container, dividerIndex, isHorizontal, childElements) {
+            var divider = document.createElement('div');
+            divider.className = 'split-divider';
+            divider.dataset.nodeId = node.id;
+
+            divider.style.cssText = [
+                'flex:0 0 ' + DIVIDER_SIZE + 'px',
+                'width:' + (isHorizontal ? DIVIDER_SIZE + 'px' : '100%'),
+                'min-width:' + (isHorizontal ? DIVIDER_SIZE + 'px' : '0'),
+                'height:' + (isHorizontal ? '100%' : DIVIDER_SIZE + 'px'),
+                'min-height:' + (isHorizontal ? '0' : DIVIDER_SIZE + 'px'),
+                'cursor:' + (isHorizontal ? 'col-resize' : 'row-resize'),
+                'background-color:rgba(200, 184, 154, 0.15)',
+                'position:relative',
+                'z-index:10',
+                'flex-shrink:0',
+                'flex-grow:0',
+                'transition:background-color 0.15s ease',
+                'box-sizing:border-box',
+                'align-self:stretch',
+                'user-select:none'
+            ].join(';');
+
+            divider.addEventListener('mouseenter', function() {
+                this.style.backgroundColor = 'rgba(200, 184, 154, 0.4)';
+            });
+            divider.addEventListener('mouseleave', function() {
+                this.style.backgroundColor = 'rgba(200, 184, 154, 0.15)';
+            });
+
+            var self = this;
+
+            divider.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                self._cancelActiveDividerDrag();
+                divider.style.backgroundColor = 'rgba(204, 34, 51, 0.5)';
+                document.body.style.cursor = isHorizontal ? 'col-resize' : 'row-resize';
+                document.body.style.userSelect = 'none';
+
+                var startPos = isHorizontal ? e.clientX : e.clientY;
+
+                var total = childElements.length;
+                var containerRect = container.getBoundingClientRect();
+                var totalSize = isHorizontal ? containerRect.width : containerRect.height;
+                var adjacentSize = totalSize - DIVIDER_SIZE * (total - 1);
+                if (adjacentSize <= 0) adjacentSize = totalSize;
+
+                var leftEl = childElements[dividerIndex - 1];
+                var rightEl = childElements[dividerIndex];
+
+                var rLeft = parseFloat(leftEl.dataset.splitR) || 0;
+                var rRight = parseFloat(rightEl.dataset.splitR) || 0;
+                var sumStart = rLeft + rRight;
+                if (sumStart <= 0) sumStart = 2 / total;
+
+                var divPx = parseInt(container.dataset.splitDividerTotal, 10) || 0;
+
+                var onMouseMove = function(ev) {
+                    var currentPos = isHorizontal ? ev.clientX : ev.clientY;
+                    var deltaPx = currentPos - startPos;
+                    var deltaRatio = adjacentSize > 0 ? deltaPx / adjacentSize : 0;
+
+                    var newLeft = rLeft + deltaRatio * sumStart;
+                    var newRight = rRight - deltaRatio * sumStart;
+
+                    var minRatio = 0.05 * sumStart;
+                    if (newLeft < minRatio) { newLeft = minRatio; newRight = sumStart - minRatio; }
+                    if (newRight < minRatio) { newRight = minRatio; newLeft = sumStart - minRatio; }
+
+                    if (total === 2 && sumStart > 0) {
+                        node.ratio = newLeft / sumStart;
+                    }
+
+                    leftEl.dataset.splitR = String(newLeft);
+                    rightEl.dataset.splitR = String(newRight);
+
+                    var lPercent = (newLeft * 100).toFixed(6);
+                    var rPercent = (newRight * 100).toFixed(6);
+
+                    leftEl.style.flex  = '0 0 calc((100% - ' + divPx + 'px) * ' + lPercent + ' / 100)';
+                    rightEl.style.flex = '0 0 calc((100% - ' + divPx + 'px) * ' + rPercent + ' / 100)';
+                };
+
+                var onMouseUp = function() {
+                    try { document.removeEventListener('mousemove', onMouseMove); } catch (err) {}
+                    try { document.removeEventListener('mouseup', onMouseUp); } catch (err) {}
+                    try { document.removeEventListener('pointercancel', onMouseUp); } catch (err) {}
+                    try { window.removeEventListener('blur', onMouseUp); } catch (err) {}
+
+                    divider.style.backgroundColor = 'rgba(200, 184, 154, 0.15)';
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+
+                    self._activeDividerDrag = null;
+                    self._notifyChange();
+                };
+
+                self._activeDividerDrag = { onMove: onMouseMove, onUp: onMouseUp };
+
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+                document.addEventListener('pointercancel', onMouseUp);
+                window.addEventListener('blur', onMouseUp);
+            });
+
+            return divider;
+        }
+
         // ============================================================
-        // 14. ОБНОВЛЕНИЕ MAP
+        // 23. WINDOW MAP
         // ============================================================
 
         _updateWindowMap() {
             this._windowMap.clear();
-            const windows = this.getVisibleWindows();
-            windows.forEach(w => {
-                const element = this._domMap.get(w.nodeId);
-                if (element) {
-                    this._windowMap.set(w.id, { node: w.node, element });
-                }
-            });
-        }
-
-        // ============================================================
-        // 15. НОТИФИКАЦИЯ
-        // ============================================================
-
-        _notifyChange() {
-            const event = new CustomEvent('layout-changed', {
-                detail: {
-                    windows: this.getWindows(),
-                    visibleWindows: this.getVisibleWindows(),
-                    minimizedWindows: Array.from(this._minimizedWindowsData.keys()),
-                    fullscreenWindowId: this._fullscreenWindowId,
-                    style: this.currentLayoutStyle
-                }
-            });
-            document.dispatchEvent(event);
-
-            if (this._eventBus) {
-                this._eventBus.emit('layout-changed', {
-                    windows: this.getWindows(),
-                    visibleWindows: this.getVisibleWindows(),
-                    minimizedWindows: Array.from(this._minimizedWindowsData.keys()),
-                    fullscreenWindowId: this._fullscreenWindowId,
-                    style: this.currentLayoutStyle
-                });
+            var windows = this.getVisibleWindows();
+            for (var i = 0; i < windows.length; i++) {
+                var w = windows[i];
+                var el = this._domMap.get(w.nodeId);
+                if (el) this._windowMap.set(w.id, { node: w.node, element: el });
             }
         }
 
         // ============================================================
-        // 16. ЗАГРУЗКА ПО УМОЛЧАНИЮ
+        // 24. НОТИФИКАЦИИ
+        // ============================================================
+
+        _notifyChange() {
+            var detail = {
+                windows: this.getWindows(),
+                visibleWindows: this.getVisibleWindows(),
+                minimizedWindows: Array.from(this._minimizedWindowsData.keys()),
+                fullscreenWindowId: this._fullscreenWindowId,
+                style: this.currentLayoutStyle
+            };
+
+            document.dispatchEvent(new CustomEvent('layout-changed', { detail: detail }));
+            if (this._eventBus) this._eventBus.emit('layout-changed', detail);
+        }
+
+        _emitLayoutAction(action, data) {
+            var detail = { action: action };
+            for (var k in data) {
+                if (Object.prototype.hasOwnProperty.call(data, k)) detail[k] = data[k];
+            }
+            detail.timestamp = Date.now();
+
+            document.dispatchEvent(new CustomEvent('layout-action', { detail: detail }));
+            if (this._eventBus) {
+                try { this._eventBus.emit('layout-action', detail); } catch (e) {}
+            }
+        }
+
+        _emitVisibilityChanged(windowId, visible) {
+            var detail = {
+                windowId: String(windowId),
+                visible: !!visible,
+                timestamp: Date.now()
+            };
+
+            document.dispatchEvent(new CustomEvent('window-visibility-changed', { detail: detail }));
+            if (this._eventBus) {
+                try { this._eventBus.emit('window-visibility-changed', detail); } catch (e) {}
+            }
+        }
+
+        // ============================================================
+        // 25. СОСТОЯНИЕ ПО УМОЛЧАНИЮ
         // ============================================================
 
         loadDefaultState() {
@@ -1809,39 +1965,41 @@
         }
 
         // ============================================================
-        // 17. СЕРИАЛИЗАЦИЯ
+        // 26. СЕРИАЛИЗАЦИЯ
         // ============================================================
 
         getProjectData() {
             if (!this.root) return null;
-            return {
-                version: '1.2.0',
-                layout: this.root.toJSON(),
-                windowCounter: this._windowIdCounter,
-                layoutStyle: this.currentLayoutStyle,
-                minimizedWindows: Array.from(this._minimizedWindowsData.values()).map(w => ({
+
+            var minimized = [];
+            this._minimizedWindowsData.forEach(function(w) {
+                minimized.push({
                     id: w.id,
                     type: w.type,
                     title: w.title,
                     icon: w.icon,
                     slotId: w.slotId
-                })),
+                });
+            });
+
+            return {
+                version: '1.3.0',
+                layout: this.root.toJSON(),
+                windowCounter: this._windowIdCounter,
+                layoutStyle: this.currentLayoutStyle,
+                minimizedWindows: minimized,
                 fullscreenWindowId: this._fullscreenWindowId
             };
         }
 
         loadProjectData(data) {
-            // ✅ FIX (v6.1.2): если данных нет — принудительно пустое состояние + render (заглушка)
             if (!data || !data.layout) {
                 this._clearInstances();
-
                 this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
                 this._windowIdCounter = 0;
                 this.currentLayoutStyle = LayoutStyle.FOUR_GRID_2X2;
-
                 this._minimizedWindowsData.clear();
                 this._fullscreenWindowId = null;
-
                 this.render();
                 this._notifyChange();
                 return false;
@@ -1850,14 +2008,24 @@
             this._clearInstances();
 
             this.root = LayoutNode.fromJSON(data.layout);
+            this._dedupRootLeafIds();
+
+            var maxLeafId = 0;
+            var leaves = this.root.getLeaves();
+            for (var i = 0; i < leaves.length; i++) {
+                if (leaves[i].id > maxLeafId) maxLeafId = leaves[i].id;
+            }
+            setIdFloor(maxLeafId);
+
             this._windowIdCounter = data.windowCounter || 0;
             this.currentLayoutStyle = data.layoutStyle || LayoutStyle.FOUR_GRID_2X2;
 
             this._minimizedWindowsData.clear();
             if (Array.isArray(data.minimizedWindows)) {
-                for (const w of data.minimizedWindows) {
+                for (var j = 0; j < data.minimizedWindows.length; j++) {
+                    var w = data.minimizedWindows[j];
                     if (!w || w.id == null) continue;
-                    const sid = String(w.id);
+                    var sid = String(w.id);
                     this._minimizedWindowsData.set(sid, {
                         id: w.id,
                         type: w.type || 'unknown',
@@ -1881,21 +2049,16 @@
         }
 
         renderLayout() { this.render(); }
-
         getLayoutData() { return this.getProjectData(); }
-
         loadLayoutData(data) { return this.loadProjectData(data); }
 
         _clearInstances() {
-            // ✅ FIX (v6.1.1): отменяем активный drag перед сносом инстансов
             this._cancelActiveDividerDrag();
-
             if (!this._windowInstances) {
                 this._windowInstances = new Map();
                 return;
             }
-
-            this._windowInstances.forEach((instance) => {
+            this._windowInstances.forEach(function(instance) {
                 if (instance && typeof instance.destroy === 'function') {
                     try { instance.destroy(); } catch (e) {}
                 }
@@ -1905,16 +2068,16 @@
     }
 
     // ============================================================
-    // 18. ЭКСПОРТ
+    // ЭКСПОРТ
     // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
-            LayoutManager,
-            LayoutNode,
-            NodeType,
-            SplitDirection,
-            LayoutStyle
+            LayoutManager: LayoutManager,
+            LayoutNode: LayoutNode,
+            NodeType: NodeType,
+            SplitDirection: SplitDirection,
+            LayoutStyle: LayoutStyle
         };
     }
 
@@ -1924,7 +2087,6 @@
         window.NodeType = NodeType;
         window.SplitDirection = SplitDirection;
         window.LayoutStyle = LayoutStyle;
-        console.log('[LayoutManager] Registered globally v6.1.2');
     }
 
 })();

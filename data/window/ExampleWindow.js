@@ -1,83 +1,108 @@
 // data/window/ExampleWindow.js
-// Версия 1.1.0 — демонстрационное окно LSYSTEM
 //
-// Это учебный пример, показывающий все основные фишки ядра.
-// Файл обновлён под актуальное ядро v2.3.0 / RenderWindow v7.0.1 /
-// PluginSystem v5.9.1 / UserAPI v2.1.0.
+// ═══════════════════════════════════════════════════════════════════════════
+//  LSYSTEM · УЧЕБНОЕ ПОСОБИЕ: как написать окно
+// ═══════════════════════════════════════════════════════════════════════════
 //
-// ═══════════════════════════════════════════════════════════════════
-// ⚠️ ВАЖНО: RACE-УСЛОВИЕ В headerItems.render()
-// ═══════════════════════════════════════════════════════════════════
+//  Это не «демонстрационное окно», а живой шаблон. Читайте его сверху вниз —
+//  каждая секция объясняет одну грань контракта между окном и ядром.
+//  Код в этом файле — рабочий: скопируйте его в свой файл, переименуйте
+//  класс, поменяйте `meta.id` — и получите своё окно.
 //
-// RenderWindow._buildHeader() вызывает render() для каждого headerItem
-// ДО того, как instance._ensureFields() успеет выполниться.
+//  ─────────────────────────────────────────────────────────────────────────
+//  ГЛАВНАЯ ИДЕЯ
+//  ─────────────────────────────────────────────────────────────────────────
 //
-// Порядок:
-//   1. LayoutManager._buildLeafDOM() создаёт BaseWindow
-//   2. BaseWindow._init() создаёт RenderWindow
-//   3. RenderWindow._init() → _buildDOM() → _buildHeader() → _renderHeaderItems()
-//   4. RenderWindow вызывает render() для каждого headerItem
-//   5. И только ПОТОМ LayoutManager вызывает typeConfig.create() → new ExampleWindow()
-//   6. super() → buildContent() → _ensureFields()
+//  Окно — это класс, унаследованный от `window.BaseWindowInstance`.
+//  Он описывает себя декларативно (static геттеры) и реализует хуки,
+//  которые вызывает ядро. Окно НЕ знает:
 //
-// Что это значит:
-//   Если ваш render() использует this._fieldsReady / this._counter /
-//   this.data / this._log — проверьте их на undefined и верните заглушку.
+//    • как его загрузили (через PluginLoader, <script>, eval);
+//    • кто такой WindowRegistry, LayoutManager, DataBus, MessageBus;
+//    • в каком порядке грузятся другие окна и ядро.
 //
-// Безопасный паттерн:
+//  Всё, что окну нужно от ядра, — уже лежит на `this.*`.
 //
-//   render: (ctx) => {
-//       const inst = ctx.baseWindow?.getRealInstance?.();
-//       if (!inst || !inst._fieldsReady) {
-//           return document.createComment('not-ready');
-//       }
-//       return inst._buildMyWidget();
-//   }
+//  ─────────────────────────────────────────────────────────────────────────
+//  МИНИМАЛЬНЫЙ РАБОЧИЙ ПЛАГИН — ТРИ СТРОКИ
+//  ─────────────────────────────────────────────────────────────────────────
 //
-// ═══════════════════════════════════════════════════════════════════
-// ⚠️ ВАЖНО: _baseWindow присваивается ПОСЛЕ конструктора
-// ═══════════════════════════════════════════════════════════════════
+//      class MyWindow extends window.BaseWindowInstance {
+//          static get meta() { return { id: 'my-window', name: 'My Window' }; }
+//          buildContent(el) { el.textContent = 'Привет!'; }
+//      }
+//      module.exports = { MyWindow };
 //
-// В buildContent() нельзя обращаться к this._baseWindow.*.
-// Используйте публичные геттеры/прокси:
-//   this.getId() / getType() / getTitle() / getIcon() / getSlotId()
-//   this.getBaseWindow() / hasBaseWindow()
-//   this.createEmptySlot() / attachTo() / minimize() / ...
+//  Готово. Ядро найдёт класс в `module.exports`, зарегистрирует его
+//  в WindowRegistry, и окно появится в меню «Window». Системные кнопки
+//  (data / changeType / layout / minimize / fullscreen / close) добавятся
+//  автоматически — окну не нужно ничего для этого писать.
 //
-// ═══════════════════════════════════════════════════════════════════
+//  ─────────────────────────────────────────────────────────────────────────
+//  ЧТО МОЖНО ЭКСПОРТИРОВАТЬ
+//  ─────────────────────────────────────────────────────────────────────────
+//
+//  Любую функцию с `static get meta() { return { id: '...' } }` ядро
+//  воспринимает как отдельный тип окна. Из одного файла можно отдать
+//  несколько:
+//
+//      module.exports = { MyWindow, MyPanel, MyDialog };
+//
+//  Функции без `meta.id` (хелперы, константы, фабрики) — игнорируются.
+//
+// ═══════════════════════════════════════════════════════════════════════════
 
-(function() {
+
+(function () {
     'use strict';
 
+    // ───────────────────────────────────────────────────────────────────────
+    // 0. СТРАХОВКА: ЯДРО ДОЛЖНО БЫТЬ ЗАГРУЖЕНО
+    // ───────────────────────────────────────────────────────────────────────
+
     if (!window.BaseWindowInstance) {
-        console.error('[ExampleWindow] BaseWindowInstance not found — ядро не загружено');
+        console.error('[MyWindow] BaseWindowInstance not found — ядро не загружено');
         return;
     }
 
-    console.log('[ExampleWindow] Loading v1.1.0...');
 
-    // ============================================================
-    // 1. КАСТОМНЫЙ ТИП headerItems: badge
-    // ============================================================
+    // ═══════════════════════════════════════════════════════════════════════
+    // 1. ГЛОБАЛЬНАЯ РЕГИСТРАЦИЯ КАСТОМНОГО ТИПА headerItem
+    // ═══════════════════════════════════════════════════════════════════════
     //
-    // Регистрируем через RenderWindow.registerHeaderItemType('badge', builder).
+    //  HeaderController умеет рисовать три встроенных типа:
     //
-    // Билдер получает (desc, ctx):
-    //   desc — исходный дескриптор из menu.headerItems
-    //   ctx  — { renderWindow, baseWindow, layoutManager, index, desc }
+    //      'button'    — обычная кнопка
+    //      'dropdown'  — выпадающее меню
+    //      'separator' — вертикальная черта
     //
-    // Возвращает DOM-элемент (nodeType === 1).
+    //  Плюс шесть системных типов, зарегистрированных в UserAPI.js:
     //
-    // Внутри клика эмитим 'menu-action' — попадёт в
-    // BaseWindow._onRenderMenuAction → onHeaderItemClick → realInstance[action].
+    //      'sys-close', 'sys-minimize', 'sys-fullscreen',
+    //      'sys-data', 'sys-changeType', 'sys-layout'
+    //
+    //  Если нужно своё — регистрируем новый тип глобально:
+    //
+    //      HeaderController.registerHeaderItemType(name, builder)
+    //
+    //  builder(desc, ctx) должен вернуть DOM-элемент (nodeType === 1).
+    //  ctx = { header, chrome, baseWindow, layoutManager, registry, index, desc }.
+    //
+    //  Регистрация идемпотентна. Если builder возвращает DOM-элемент
+    //  с полем `el.__lsDestroy = function() {...}`, ядро вызовет его
+    //  при удалении элемента (например, при смене типа окна или
+    //  при destroy() самого окна). Это место для снятия глобальных
+    //  слушателей и таймеров.
+    //
+    //  Здесь регистрируем тип `badge` — маленький цветной ярлык.
 
-    if (window.RenderWindow
-        && typeof window.RenderWindow.registerHeaderItemType === 'function'
-        && !window.RenderWindow.getHeaderItemTypes().includes('badge')
+    if (window.HeaderController
+        && typeof window.HeaderController.registerHeaderItemType === 'function'
+        && window.HeaderController.getHeaderItemTypes().indexOf('badge') === -1
     ) {
-        window.RenderWindow.registerHeaderItemType('badge', (desc, ctx) => {
-            const el = document.createElement('span');
-            el.className = 'example-badge';
+        window.HeaderController.registerHeaderItemType('badge', function (desc, ctx) {
+            var el = document.createElement('span');
+            el.className = 'mywindow-badge';
             el.dataset.badgeId = desc.id || '';
             el.textContent = desc.text || '•';
 
@@ -99,88 +124,121 @@
                 whiteSpace: 'nowrap'
             });
 
-            el.addEventListener('click', (e) => {
+            el.addEventListener('click', function (e) {
                 e.stopPropagation();
-                const rw = ctx.renderWindow;
-                const item = { ...desc, type: 'badge', action: desc.action || 'badge-click' };
-                rw._emit('menu-action', {
-                    windowId: rw.id,
-                    action: item.action,
+                ctx.header._emit('menu-action', {
+                    windowId: ctx.header._id,
+                    action: desc.action || 'badge-click',
                     value: desc.value || '',
                     payload: desc.payload !== undefined ? desc.payload : null,
-                    item: item
+                    item: Object.assign({}, desc, { type: 'badge' })
                 });
             });
 
             return el;
         });
-        console.log('[ExampleWindow] headerItemType "badge" registered');
+
+        console.log('[MyWindow] headerItemType "badge" registered');
     }
 
-    // ============================================================
+
+    // ═══════════════════════════════════════════════════════════════════════
     // 2. КЛАСС ОКНА
-    // ============================================================
+    // ═══════════════════════════════════════════════════════════════════════
 
     class ExampleWindow extends window.BaseWindowInstance {
 
-        // --------------------------------------------------------
-        // 2.1. meta — обязательное поле
-        // --------------------------------------------------------
+        // ───────────────────────────────────────────────────────────────────
+        // 2.1. static meta — ПАСПОРТ ОКНА
+        // ───────────────────────────────────────────────────────────────────
         //
-        // id             — уникальный type-id (обязательно)
-        // name           — человекочитаемое имя
-        // icon           — 'icon-xxx' из svg-спрайта
-        // description    — подпись для tooltip
-        // group          — группа в меню Windows
-        // category       — для фильтрации
-        // priority       — сортировка (меньше — выше)
-        // defaultSize    — стартовый размер
-        // minSize        — минимальный размер
-        // maxWindows     — одновременно открытых окон
-        // metadata       — произвольные данные
-        // allowOverride  — если true, registerFromClass разрешит перезапись
-        //                  типа (по умолчанию strict: reload не уничтожает окна)
+        //  Единственное ОБЯЗАТЕЛЬНОЕ поле класса. Ядро решает, что перед
+        //  ним плагин, ровно по наличию `static meta.id`. Функция без
+        //  meta.id — это утилита, а не окно.
+        //
+        //  Поля:
+        //      id           — уникальный строковый id типа (обязательно)
+        //      name         — человекочитаемое имя (в меню «Window»)
+        //      icon         — 'icon-xxx' из svg-спрайта или emoji
+        //      description  — подпись для tooltip
+        //      group        — группа в меню (по умолчанию 'Other')
+        //      category     — для фильтрации и сортировки
+        //      priority     — сортировка внутри группы (меньше — выше)
+        //      defaultSize  — { width, height } — стартовый размер
+        //      minSize      — { width, height } — минимальный размер
+        //      maxWindows   — сколько таких окон можно открыть одновременно
+        //      metadata     — произвольные данные (version, author и т.п.)
 
         static get meta() {
             return {
                 id: 'example',
                 name: 'Example Window',
                 icon: 'icon-example',
-                description: 'Демонстрация всех фишек ядра LSYSTEM',
+                description: 'Учебный шаблон окна LSYSTEM',
                 group: 'Примеры',
                 category: 'example',
                 priority: 100,
                 defaultSize: { width: 640, height: 480 },
                 minSize: { width: 280, height: 200 },
                 maxWindows: 4,
-                metadata: { version: '1.1.0', author: 'LSYSTEM' }
+                metadata: { version: '1.0.0', author: 'LSYSTEM' }
             };
         }
 
-        // --------------------------------------------------------
-        // 2.2. menu.headerItems
-        // --------------------------------------------------------
+
+        // ───────────────────────────────────────────────────────────────────
+        // 2.2. static menu — КНОПКИ И ДРОПДАУНЫ В ШАПКЕ ОКНА
+        // ───────────────────────────────────────────────────────────────────
         //
-        // Формы дескриптора:
+        //  Это шапка самого окна, которую рисует HeaderController.
+        //  Сюда попадают кнопки, уникальные для этого типа.
         //
-        //   type: 'button' | 'dropdown' | 'separator'
-        //     — встроенный или зарегистрированный через registerHeaderItemType
+        //  ВАЖНО: если окно определяет свой static menu, дефолтный
+        //  системный набор НЕ добавляется. Нужно явно перечислить
+        //  нужные sys-* items или не задавать static menu вовсе.
         //
-        //   render(ctx) — приоритет над type
+        //  Каждый дескриптор должен иметь id — для динамических
+        //  операций addHeaderItem / removeHeaderItem во время работы.
         //
-        //   hidden — boolean или function(baseWindow, renderWindow)
+        //  Форматы:
         //
-        //   destroy(el, baseWindow) — cleanup при пересборке шапки
+        //      { id, type: 'button',   icon, label, title, action, payload }
+        //      { id, type: 'dropdown', icon, label, title, items, hidden }
+        //      { id, type: 'separator' }
+        //      { id, render(ctx) { return Element }, destroy(el), refresh(el, ctx) }
+        //      { id, type: 'sys-close' }     // системные, из UserAPI
+        //      { id, type: 'sys-minimize' }
+        //      { id, type: 'sys-fullscreen' }
+        //      { id, type: 'sys-data' }
+        //      { id, type: 'sys-changeType' }
+        //      { id, type: 'sys-layout' }
         //
-        //   для dropdown:
-        //     items — Array или function(realInstance, baseWindow, layoutManager)
+        //  items дропдауна может быть:
+        //      • массивом пунктов;
+        //      • функцией (realInstance, baseWindow, layoutManager) => [...]
         //
-        // Каждый дескриптор должен иметь id — для add/removeHeaderItem.
+        //  hidden может быть boolean или функцией (baseWindow, header) => bool.
+        //
+        //  Если у пункта задан `action`, ядро вызовет метод экземпляра
+        //  с этим именем: myAction(value, payload, item).
+        //
+        //  Если задан `render(ctx)`, вы возвращаете DOM-узел сами. Помните:
+        //  render() вызывается ДО того, как instance готов. Поэтому внутри
+        //  render() нельзя обращаться к this — только к ctx.baseWindow.
+        //
+        //  Элемент, возвращённый render(), может иметь:
+        //      el.__lsDestroy = function() {...}
+        //  Ядро вызовет его при удалении элемента.
+        //
+        //  Элемент, возвращённый для dropdown-дескриптора, может иметь:
+        //      el._refreshItems = function() {...}
+        //  Ядро вызовет его при refreshDropdowns().
 
         static get menu() {
             return {
                 headerItems: [
-                    // --- button (простой) ---
+
+                    // ─── Простая кнопка ───
                     {
                         id: 'btn-hello',
                         type: 'button',
@@ -191,13 +249,10 @@
                         payload: { from: 'btn-hello' }
                     },
 
-                    // --- separator ---
-                    {
-                        id: 'sep-1',
-                        type: 'separator'
-                    },
+                    // ─── Разделитель ───
+                    { id: 'sep-1', type: 'separator' },
 
-                    // --- badge (кастомный тип) ---
+                    // ─── Кастомный badge (зарегистрирован выше) ───
                     {
                         id: 'badge-mode',
                         type: 'badge',
@@ -208,7 +263,7 @@
                         border: '1px solid rgba(204, 34, 51, 0.3)'
                     },
 
-                    // --- dropdown с динамическими items и hidden ---
+                    // ─── Дропдаун с динамическими items и hidden ───
                     {
                         id: 'dd-tools',
                         type: 'dropdown',
@@ -216,66 +271,37 @@
                         label: 'Tools',
                         title: 'Инструменты демо',
 
-                        hidden: (baseWindow) => {
-                            const lm = baseWindow && baseWindow._layoutManager;
+                        hidden: function (baseWindow) {
+                            var lm = baseWindow && baseWindow._layoutManager;
                             if (!lm) return false;
                             return lm.getVisibleWindowCount() > 3;
                         },
 
-                        items: (realInstance, baseWindow, layoutManager) => {
-                            const items = [
+                        items: function (realInstance, baseWindow, layoutManager) {
+                            var items = [
                                 { header: 'Демо-действия' },
-                                {
-                                    icon: 'icon-play',
-                                    label: 'Выполнить демо',
-                                    action: 'run-demo',
-                                    shortcut: 'F5'
-                                },
-                                {
-                                    icon: 'icon-refresh',
-                                    label: 'Сбросить счётчик',
-                                    action: 'reset-counter'
-                                },
+                                { icon: 'icon-play',    label: 'Выполнить демо',  action: 'run-demo',      shortcut: 'F5' },
+                                { icon: 'icon-refresh', label: 'Сбросить счётчик', action: 'reset-counter' },
                                 { divider: true },
                                 { header: 'headerItems' },
-                                {
-                                    icon: 'icon-plus',
-                                    label: 'Добавить badge',
-                                    action: 'add-badge'
-                                },
-                                {
-                                    icon: 'icon-trash',
-                                    label: 'Удалить badge',
-                                    action: 'remove-badge'
-                                },
-                                {
-                                    icon: 'icon-eye-off',
-                                    label: 'Toggle clock (hidden)',
-                                    action: 'toggle-clock'
-                                },
-                                {
-                                    icon: 'icon-trash',
-                                    label: 'Сбросить headerItems',
-                                    action: 'reset-header-items',
-                                    danger: true
-                                },
+                                { icon: 'icon-plus',     label: 'Добавить badge',      action: 'add-badge' },
+                                { icon: 'icon-trash',    label: 'Удалить badge',       action: 'remove-badge' },
+                                { icon: 'icon-eye-off',  label: 'Toggle clock (hidden)', action: 'toggle-clock' },
+                                { icon: 'icon-trash',    label: 'Сбросить headerItems', action: 'reset-header-items', danger: true },
                                 { divider: true },
                                 { header: 'История' },
-                                {
-                                    icon: 'icon-history',
-                                    label: 'Записать в историю',
-                                    action: 'snapshot'
-                                }
+                                { icon: 'icon-history',  label: 'Записать в историю', action: 'snapshot' }
                             ];
 
                             if (layoutManager) {
-                                const others = layoutManager.getVisibleWindows()
-                                    .filter(w => String(w.id) !== String(realInstance && realInstance.id));
-
+                                var others = layoutManager.getVisibleWindows().filter(function (w) {
+                                    return String(w.id) !== String(realInstance && realInstance.id);
+                                });
                                 if (others.length > 0) {
                                     items.push({ divider: true });
                                     items.push({ header: 'Другие окна' });
-                                    for (const w of others.slice(0, 5)) {
+                                    for (var i = 0; i < Math.min(others.length, 5); i++) {
+                                        var w = others[i];
                                         items.push({
                                             icon: w.icon || 'icon-window-type',
                                             label: 'Фокус → ' + (w.title || ('#' + w.id)),
@@ -285,25 +311,29 @@
                                     }
                                 }
                             }
-
                             return items;
                         }
                     },
 
-                    // --- кастомный render() с cleanup через desc.destroy() ---
+                    // ─── Полностью кастомный headerItem ───
+                    //
+                    //  Здесь рисуем живые часы. render() не имеет доступа
+                    //  к this — только к ctx. Поэтому все нужные данные
+                    //  хранятся на instance, к которому можно добраться
+                    //  через ctx.baseWindow.getRealInstance().
+                    //
+                    //  __lsDestroy вызывается ядром при удалении элемента —
+                    //  чистим таймер, чтобы не утекал.
                     {
                         id: 'custom-clock',
-                        hidden: (baseWindow) => {
+                        hidden: function (baseWindow) {
                             if (!baseWindow) return false;
-                            const inst = baseWindow.getRealInstance?.();
+                            var inst = baseWindow.getRealInstance && baseWindow.getRealInstance();
                             return !!(inst && inst._clockHidden);
                         },
-                        render: (ctx) => {
-                            // ⚠️ RACE-SAFE: render может вызваться до _ensureFields.
-                            // Здесь мы НЕ обращаемся к this экземпляра —
-                            // только к ctx.baseWindow (BaseWindow).
-                            const el = document.createElement('span');
-                            el.className = 'example-clock';
+                        render: function (ctx) {
+                            var el = document.createElement('span');
+                            el.className = 'mywindow-clock';
                             el.style.cssText = [
                                 'font-family: "Courier New", monospace',
                                 'font-size: 10px',
@@ -314,58 +344,83 @@
                                 'letter-spacing: 0.3px'
                             ].join(';');
 
-                            const tick = () => {
-                                const d = new Date();
-                                el.textContent = d.toTimeString().slice(0, 8);
+                            var tick = function () {
+                                el.textContent = new Date().toTimeString().slice(0, 8);
                             };
                             tick();
 
-                            const timer = setInterval(tick, 1000);
-                            el.__clockTimer = timer;
+                            var timer = setInterval(tick, 1000);
+
+                            el.__lsDestroy = function () {
+                                clearInterval(timer);
+                                timer = null;
+                            };
 
                             return el;
-                        },
-                        destroy: (el, baseWindow) => {
-                            if (el && el.__clockTimer) {
-                                clearInterval(el.__clockTimer);
-                                el.__clockTimer = null;
-                            }
                         }
-                    }
+                    },
+
+                    // ─── Разделитель ───
+                    { id: 'sep-2', type: 'separator' },
+
+                    // ─── Системные контролы из UserAPI ───
+                    //  Поскольку мы задали свой static menu, дефолтный
+                    //  набор не подставится. Перечисляем sys-* явно.
+                    { id: 'sys-data',       type: 'sys-data' },
+                    { id: 'sys-changeType', type: 'sys-changeType' },
+                    { id: 'sys-layout',     type: 'sys-layout' },
+                    { id: 'sys-minimize',   type: 'sys-minimize' },
+                    { id: 'sys-fullscreen', type: 'sys-fullscreen' },
+                    { id: 'sys-close',      type: 'sys-close' }
                 ]
             };
         }
 
-        // --------------------------------------------------------
-        // 2.3. hotkeys
-        // --------------------------------------------------------
+
+        // ───────────────────────────────────────────────────────────────────
+        // 2.3. static hotkeys — ГОРЯЧИЕ КЛАВИШИ ОКНА
+        // ───────────────────────────────────────────────────────────────────
         //
-        // Карта combo → { action, label }.
-        // action — имя метода экземпляра.
-        // Регистрируется через BaseWindow._registerHotkeys().
+        //  Активны только когда окно в фокусе. Регистрируются ядром
+        //  автоматически через HotkeyRegistry.
+        //
+        //      { '<Combo>': { action: 'имяМетода', label: 'подпись' } }
+        //
+        //  Ядро вызывает метод экземпляра без аргументов.
 
         static get hotkeys() {
             return {
-                'Ctrl+Shift+D': { action: 'onHotkeyDemo', label: 'Демо' },
+                'Ctrl+Shift+D': { action: 'onHotkeyDemo',  label: 'Демо' },
                 'Ctrl+Shift+R': { action: 'onHotkeyReset', label: 'Сброс счётчика' },
-                'F5': { action: 'onHotkeyDemo', label: 'Демо (F5)' }
+                'F5':           { action: 'onHotkeyDemo',  label: 'Демо (F5)' }
             };
         }
 
-        // --------------------------------------------------------
-        // 2.4. channels — MessageBus
-        // --------------------------------------------------------
+
+        // ───────────────────────────────────────────────────────────────────
+        // 2.4. static channels — ПОДПИСКИ MESSAGEBUS
+        // ───────────────────────────────────────────────────────────────────
         //
-        // BaseWindowInstance._setupChannels() подпишется.
-        // При получении → onMessage(senderId, channel, data).
+        //  BaseWindowInstance подпишется на эти каналы автоматически
+        //  в конструкторе. При получении сообщения вызовется onMessage.
 
         static get channels() {
             return ['demo-ping', 'demo-broadcast', 'demo-rpc'];
         }
 
-        // --------------------------------------------------------
-        // 2.5. dropTarget — drag&drop файлов
-        // --------------------------------------------------------
+
+        // ───────────────────────────────────────────────────────────────────
+        // 2.5. static dropTarget — ПРИЁМ ФАЙЛОВ
+        // ───────────────────────────────────────────────────────────────────
+        //
+        //  Если задан — окно принимает drag&drop файлов из ОС или из
+        //  другого окна. Результат прилетит в onDrop(files, meta).
+        //
+        //      accept           — массив MIME-типов или расширений ('.json')
+        //      acceptExtensions — строка через запятую ('.json,.txt,.lsp')
+        //      multiple         — принимать ли несколько файлов за раз
+        //
+        //  Если onDrop возвращает false — ядро покажет «окно отклонило».
 
         static get dropTarget() {
             return {
@@ -375,40 +430,45 @@
             };
         }
 
-        // ============================================================
-        // 3. КОНСТРУКТОР
-        // ============================================================
-        //
-        // super() вызовет buildContent() ДО того, как эти строки выполнятся.
-        // Все поля — в _ensureFields(), внутри buildContent().
 
-        constructor(container, windowData, options = {}) {
+        // ───────────────────────────────────────────────────────────────────
+        // 2.6. constructor — ТОЧКА ВХОДА
+        // ───────────────────────────────────────────────────────────────────
+        //
+        //  ВАЖНО: super() вызывает buildContent() ДО того, как эта строка
+        //  выполнится. Поэтому любая инициализация полей экземпляра —
+        //  в _ensureFields(), а не здесь.
+        //
+        //  Так же важно: this._baseWindow присваивается ПОСЛЕ конструктора.
+        //  Значит, в buildContent() его ещё нет. Всё, что требует _baseWindow,
+        //  делайте в onReady().
+
+        constructor(container, windowData, options) {
             super(container, windowData, options);
-            console.log('[ExampleWindow] Constructor:', this.id);
+            console.log('[MyWindow] Constructor:', this.id);
         }
 
-        // ============================================================
-        // 3.1. ЛЕНИВАЯ ИНИЦИАЛИЗАЦИЯ
-        // ============================================================
+
+        // ───────────────────────────────────────────────────────────────────
+        // 2.7. _ensureFields — ЛЕНИВАЯ ИНИЦИАЛИЗАЦИЯ
+        // ───────────────────────────────────────────────────────────────────
         //
-        // Идемпотентно. Вызывается первой строкой buildContent().
+        //  Идемпотентно. Вызывается первой строкой buildContent().
+        //  Здесь создаются все поля экземпляра и DOM-ссылки, чтобы
+        //  не засорять конструктор.
 
         _ensureFields() {
             if (this._fieldsReady) return;
 
-            // --- логика ---
             this._counter = 0;
             this._log = [];
             this._dropCount = 0;
             this._messageCount = 0;
             this._clockHidden = false;
 
-            // --- подписки ---
             this._rpcUnsub = null;
             this._dragUnsubs = [];
 
-            // --- DOM-ссылки ---
-            this._headerEl = null;
             this._counterEl = null;
             this._dragBtn = null;
             this._infoBlock = null;
@@ -418,21 +478,31 @@
             this._fieldsReady = true;
         }
 
-        // ============================================================
-        // 4. КОНТЕНТ
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 3. buildContent — ПОСТРОЕНИЕ DOM
+        // ═══════════════════════════════════════════════════════════════════
         //
-        // buildContent(el) вызывается из конструктора.
-        // el — this._content, уже в DOM.
+        //  el — это this._content, уже вставленный в DOM. Сюда добавляйте
+        //  свою разметку.
         //
-        // Доступно:
-        //   this.getId() / getType() / getSlotId() / getTitle() / getIcon()
+        //  Доступно:
+        //      this.ui.*       — ui.button, ui.input, ui.block, ui.text,
+        //                        ui.icon, ui.contextMenu, ui.modal,
+        //                        ui.confirm, ui.inlineEditor,
+        //                        ui.categoryPanel, ui.listPanel
+        //      this.utils.*    — utils.dom, utils.canvas, utils.file,
+        //                        utils.graph2d
+        //
+        //  НЕ доступно:
+        //      this._baseWindow   (присваивается после конструктора)
+        //      this.getSlotId()   (работает, но данные слота ещё не читались)
 
         buildContent(el) {
             this._ensureFields();
 
-            const ui = this.ui;
-            const dom = this.utils.dom;
+            var ui = this.ui;
+            var dom = this.utils.dom;
 
             el.style.cssText = [
                 'padding: 14px',
@@ -443,52 +513,27 @@
                 'box-sizing: border-box'
             ].join(';');
 
-            // --- Заголовок ---
-            this._headerEl = ui.text({
-                text: t.t('welcome', { name: 'Demo' }),
+            // ─── Заголовок ───
+            el.appendChild(ui.text({
+                text: 'Учебное окно. Откройте консоль — здесь много полезного.',
                 variant: 'heading'
-            });
-            el.appendChild(this._headerEl);
+            }));
 
-            // --- Счётчик ---
-            this._counterEl = ui.text({
-                text: 'Счётчик: 0',
-                variant: 'mono'
-            });
+            // ─── Счётчик ───
+            this._counterEl = ui.text({ text: 'Счётчик: 0', variant: 'mono' });
             el.appendChild(this._counterEl);
 
-            // --- Кнопки счётчика ---
-            const btnRow = dom.el('div', {
+            // ─── Кнопки счётчика ───
+            el.appendChild(dom.el('div', {
                 style: { display: 'flex', gap: '6px', flexWrap: 'wrap' }
             }, [
-                ui.button({
-                    label: '+1',
-                    icon: 'icon-plus',
-                    onClick: () => this.increment(1)
-                }),
-                ui.button({
-                    label: '+10',
-                    icon: 'icon-plus-circle',
-                    variant: 'primary',
-                    onClick: () => this.increment(10)
-                }),
-                ui.button({
-                    label: 'Сброс',
-                    icon: 'icon-refresh',
-                    variant: 'ghost',
-                    onClick: () => this.resetCounter()
-                }),
-                ui.button({
-                    label: 'Сообщение',
-                    icon: 'icon-mail',
-                    variant: 'ghost',
-                    onClick: () => this.broadcastPing()
-                })
-            ]);
-            el.appendChild(btnRow);
+                ui.button({ label: '+1',  icon: 'icon-plus',        onClick: () => this.increment(1) }),
+                ui.button({ label: '+10', icon: 'icon-plus-circle', variant: 'primary', onClick: () => this.increment(10) }),
+                ui.button({ label: 'Сброс', icon: 'icon-refresh',   variant: 'ghost',   onClick: () => this.resetCounter() }),
+                ui.button({ label: 'Сообщение', icon: 'icon-mail',  variant: 'ghost',   onClick: () => this.broadcastPing() })
+            ]));
 
-            // --- drag-source кнопка ---
-            // Иконка: icon-more (есть в svg.html). icon-drag — нет.
+            // ─── Drag-source ───
             this._dragBtn = ui.button({
                 label: 'Перетащи меня на другое окно',
                 icon: 'icon-more',
@@ -497,33 +542,20 @@
             });
             el.appendChild(this._dragBtn);
 
-            // --- RPC ---
-            const rpcRow = dom.el('div', {
+            // ─── RPC ───
+            el.appendChild(dom.el('div', {
                 style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }
             }, [
-                ui.button({
-                    label: 'RPC → self',
-                    icon: 'icon-link',
-                    variant: 'ghost',
-                    onClick: () => this.demoRpcSelf()
-                }),
-                ui.button({
-                    label: 'RPC → other',
-                    icon: 'icon-link',
-                    variant: 'ghost',
-                    onClick: () => this.demoRpcOther()
-                })
-            ]);
-            el.appendChild(rpcRow);
+                ui.button({ label: 'RPC → self',  icon: 'icon-link', variant: 'ghost', onClick: () => this.demoRpcSelf() }),
+                ui.button({ label: 'RPC → other', icon: 'icon-link', variant: 'ghost', onClick: () => this.demoRpcOther() })
+            ]));
 
-            // --- Слоты ---
-            const slotRow = dom.el('div', {
+            // ─── Слоты ───
+            el.appendChild(dom.el('div', {
                 style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }
             }, [
                 ui.button({
-                    label: 'Новый слот',
-                    icon: 'icon-plus',
-                    variant: 'ghost',
+                    label: 'Новый слот', icon: 'icon-plus', variant: 'ghost',
                     onClick: () => {
                         this.createEmptySlot();
                         this.notify('Слот', 'Создан новый слот', 'success');
@@ -531,68 +563,50 @@
                     }
                 }),
                 ui.button({
-                    label: 'Найти другое',
-                    icon: 'icon-search',
-                    variant: 'ghost',
+                    label: 'Найти другое', icon: 'icon-search', variant: 'ghost',
                     onClick: () => this.demoFindWindow()
                 })
-            ]);
-            el.appendChild(slotRow);
+            ]));
 
-            // --- Capture keyboard ---
-            const kbRow = dom.el('div', {
+            // ─── Клавиатура ───
+            el.appendChild(dom.el('div', {
                 style: { display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }
             }, [
                 ui.button({
-                    label: 'Capture keyboard',
-                    icon: 'icon-lock',
-                    variant: 'ghost',
+                    label: 'Capture keyboard', icon: 'icon-lock', variant: 'ghost',
                     onClick: () => {
-                        const ok = this.captureKeyboard();
+                        var ok = this.captureKeyboard();
                         this.notify('Keyboard', ok ? 'Захвачено' : 'Не удалось', ok ? 'success' : 'error');
                     }
                 }),
                 ui.button({
-                    label: 'Release keyboard',
-                    icon: 'icon-unlock',
-                    variant: 'ghost',
+                    label: 'Release keyboard', icon: 'icon-unlock', variant: 'ghost',
                     onClick: () => {
-                        const ok = this.releaseKeyboard();
+                        var ok = this.releaseKeyboard();
                         this.notify('Keyboard', ok ? 'Отпущено' : 'Не было захвата', ok ? 'success' : 'info');
                     }
                 })
-            ]);
-            el.appendChild(kbRow);
+            ]));
 
-            // --- Блок info ---
-            this._infoBlock = ui.block({
-                title: 'Состояние',
-                children: []
-            });
+            // ─── Блоки информации и лога ───
+            this._infoBlock = ui.block({ title: 'Состояние', children: [] });
             el.appendChild(this._infoBlock);
 
-            // --- Блок лог ---
-            this._logBlock = ui.block({
-                title: 'Лог',
-                children: []
-            });
+            this._logBlock = ui.block({ title: 'Лог', children: [] });
             el.appendChild(this._logBlock);
 
-            // --- Поле ввода ---
+            // ─── Поле ввода ───
             this._inputEl = ui.input({
                 placeholder: 'Введите сообщение...',
-                onChange: (e) => {
-                    this.setState({ draft: e.target.value });
-                }
+                onChange: (e) => this.setState({ draft: e.target.value })
             });
             el.appendChild(this._inputEl);
 
             this._renderInfo();
             this._renderLog();
 
-            // --- drag-source на кнопке ---
-            // makeDraggable откладывает регистрацию до onBaseWindowAttached.
-            const unsub = this.makeDraggable(this._dragBtn, {
+            // ─── Регистрация drag-source ───
+            this._dragUnsubs.push(this.makeDraggable(this._dragBtn, {
                 type: 'demo-payload',
                 ghostHTML: '<b>📦 Example payload</b>',
                 getPayload: () => ({
@@ -600,24 +614,26 @@
                     counter: this._counter,
                     slotId: this.getSlotId()
                 })
-            });
-            this._dragUnsubs.push(unsub);
+            }));
         }
 
-        // ============================================================
-        // 5. ЖИЗНЕННЫЙ ЦИКЛ
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 4. onReady — ОКНО ГОТОВО
+        // ═══════════════════════════════════════════════════════════════════
+        //
+        //  Вызывается один раз, когда BaseWindow завершил инициализацию
+        //  и присвоил this._baseWindow. Здесь можно безопасно работать
+        //  со слотом, RPC, headerItems, других окон.
 
         onReady() {
-            console.log('[ExampleWindow] onReady:', this.id, 'slot:', this.getSlotId());
-            this.notify('Example', 'Окно готово', 'success');
+            console.log('[MyWindow] onReady:', this.id, 'slot:', this.getSlotId());
 
-            const draft = this.uiState && this.uiState.draft;
-            if (draft && this._inputEl) {
-                this._inputEl.value = draft;
-            }
+            // Восстанавливаем введённый текст из uiState.
+            var draft = this.uiState && this.uiState.draft;
+            if (draft && this._inputEl) this._inputEl.value = draft;
 
-            // RPC-обработчик
+            // RPC-обработчик. Возвращаемое значение уйдёт вызывающему.
             this._rpcUnsub = this.onRequest('demo-rpc', async (data, meta) => {
                 this._pushLog('RPC ← ' + meta.fromSenderId + ': ' + JSON.stringify(data));
                 this._messageCount++;
@@ -630,7 +646,8 @@
                 };
             });
 
-            // Runtime-badge
+            // Добавляем runtime-badge в шапку. Это не часть static menu,
+            // а динамическая кнопка — добавлена во время работы окна.
             this.addHeaderItem({
                 id: 'badge-runtime',
                 type: 'badge',
@@ -639,8 +656,16 @@
                 bg: 'rgba(68, 204, 136, 0.16)',
                 color: 'var(--success-color, #44cc88)',
                 border: '1px solid rgba(68, 204, 136, 0.3)'
-            });
+            }, 0);
         }
+
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 5. ДАННЫЕ СЛОТА
+        // ═══════════════════════════════════════════════════════════════════
+        //
+        //  onData       — пришли данные из слота (первичная загрузка, sync).
+        //  onDataUpdate — то же, но вызывается при каждом обновлении.
 
         onData(data) {
             if (data && data.data && typeof data.data.counter === 'number') {
@@ -659,6 +684,11 @@
                 this._updateCounterEl();
             }
         }
+
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 6. ХУКИ ЖИЗНЕННОГО ЦИКЛА
+        // ═══════════════════════════════════════════════════════════════════
 
         onFocus() {
             this._pushLog('Фокус получен');
@@ -681,7 +711,7 @@
         }
 
         onResize(w, h) {
-            // Слишком часто — не логируем.
+            // Вызывается часто — не логируем.
         }
 
         onSlotChange(slotId) {
@@ -695,51 +725,48 @@
                 try { this._rpcUnsub(); } catch (e) {}
                 this._rpcUnsub = null;
             }
-            for (const u of this._dragUnsubs || []) {
-                try { u(); } catch (e) {}
+            for (var i = 0; i < (this._dragUnsubs || []).length; i++) {
+                try { this._dragUnsubs[i](); } catch (e) {}
             }
             this._dragUnsubs = [];
-            console.log('[ExampleWindow] onBeforeDestroy:', this.id);
         }
 
-        // ============================================================
-        // 6. headerItems-ХУК
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 7. onHeaderItemClick — КЛИК ПО КНОПКЕ ШАПКИ
+        // ═══════════════════════════════════════════════════════════════════
         //
-        // Порядок в BaseWindow._onRenderMenuAction:
-        //   1) realInstance.onHeaderItemClick(desc, payload) → true стоп
-        //   2) realInstance[action](value, payload, item)
-        //   3) emit 'window-menu-action'
+        //  Ядро вызывает этот метод РАНЬШЕ, чем пытается вызвать метод
+        //  с именем action. Верните true — вы поглотили клик.
+        //  Верните false — ядро вызовет this[action](value, payload, item).
 
         onHeaderItemClick(desc, payload) {
-            this._pushLog('headerItem: ' + (payload.action || '?')
-                + ' [' + payload.source + ']');
+            this._pushLog('headerItem: ' + (payload.action || '?') + ' [' + payload.source + ']');
             this._renderLog();
 
             if (payload.action === 'badge-mode') {
                 this.notify('Badge', 'Клик по badge "DEMO"', 'info');
                 return true;
             }
-
             if (payload.action === 'badge-runtime-click') {
                 this.notify('Badge', 'Клик по runtime-badge "RT"', 'info');
                 return true;
             }
-
             return false;
         }
 
-        // ============================================================
-        // 7. ОБРАБОТЧИКИ headerItems
-        // ============================================================
 
-        greet(value, payload, item) {
-            this.notify('Hello', 'Привет из ExampleWindow! payload=' + JSON.stringify(payload || {}), 'success');
+        // ═══════════════════════════════════════════════════════════════════
+        // 8. ОБРАБОТЧИКИ headerItems
+        // ═══════════════════════════════════════════════════════════════════
+
+        greet(value, payload) {
+            this.notify('Hello', 'Привет! payload=' + JSON.stringify(payload || {}), 'success');
             this._pushLog('greet: ' + JSON.stringify(payload || {}));
             this._renderLog();
         }
 
-        'run-demo'(value, payload, item) {
+        'run-demo'() {
             this._counter += 100;
             this._updateCounterEl();
             this.recordHistory('Demo +100');
@@ -748,20 +775,22 @@
             this._renderLog();
         }
 
-        'reset-counter'(value, payload, item) {
+        'reset-counter'() {
             this._counter = 0;
             this._updateCounterEl();
             this.recordHistory('Сброс счётчика');
             this.notify('Demo', 'Счётчик сброшен', 'info');
         }
 
-        'snapshot'(value, payload, item) {
+        'snapshot'() {
             this.recordHistory('Ручной снапшот');
             this.notify('История', 'Записано в историю', 'success');
         }
 
-        'add-badge'(value, payload, item) {
-            const n = this.getHeaderItems().filter(x => x && x.type === 'badge').length + 1;
+        'add-badge'() {
+            var n = this.getHeaderItems().filter(function (x) {
+                return x && x.type === 'badge';
+            }).length + 1;
             this.addHeaderItem({
                 id: 'badge-dyn-' + Date.now(),
                 type: 'badge',
@@ -774,9 +803,11 @@
             this.notify('headerItems', 'Добавлен badge B' + n, 'success');
         }
 
-        'remove-badge'(value, payload, item) {
-            const badges = this.getHeaderItems().filter(x => x && x.type === 'badge');
-            const last = badges[badges.length - 1];
+        'remove-badge'() {
+            var badges = this.getHeaderItems().filter(function (x) {
+                return x && x.type === 'badge';
+            });
+            var last = badges[badges.length - 1];
             if (!last) {
                 this.notify('headerItems', 'Нет badge для удаления', 'warning');
                 return;
@@ -785,13 +816,13 @@
             this.notify('headerItems', 'Удалён ' + last.id, 'info');
         }
 
-        'toggle-clock'(value, payload, item) {
+        'toggle-clock'() {
             this._clockHidden = !this._clockHidden;
             this.refreshHeaderItems();
             this.notify('Clock', this._clockHidden ? 'Скрыт' : 'Показан', 'info');
         }
 
-        'reset-header-items'(value, payload, item) {
+        'reset-header-items'() {
             this.setHeaderItems(null);
             this.notify('headerItems', 'Сброшено к дефолту', 'info');
         }
@@ -800,16 +831,17 @@
             this.notify('Badge', 'Клик по ' + (item && item.id), 'info');
         }
 
-        'focus-window'(value, payload, item) {
-            const targetId = payload && payload.targetId;
+        'focus-window'(value, payload) {
+            var targetId = payload && payload.targetId;
             if (!targetId || !this._layoutManager) return;
             this._layoutManager.setFocusedWindow(targetId);
             this.notify('Focus', 'Фокус → ' + targetId, 'info');
         }
 
-        // ============================================================
-        // 8. ХОТКЕИ
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 9. ХОТКЕИ
+        // ═══════════════════════════════════════════════════════════════════
 
         onHotkeyDemo() {
             this.notify('Hotkey', 'Ctrl+Shift+D / F5 — демо', 'info');
@@ -820,9 +852,10 @@
             this.resetCounter();
         }
 
-        // ============================================================
-        // 9. MESSAGEBUS
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 10. MESSAGEBUS
+        // ═══════════════════════════════════════════════════════════════════
 
         onMessage(senderId, channel, data) {
             this._messageCount++;
@@ -836,21 +869,18 @@
         }
 
         broadcastPing() {
-            const ok = this.sendMessage('demo-ping', {
+            var ok = this.sendMessage('demo-ping', {
                 from: this.id,
                 slotId: this.getSlotId(),
                 ts: Date.now()
             }, null);
+
             this.notify('MessageBus', ok ? 'Ping разослан' : 'Не удалось', ok ? 'success' : 'warning');
         }
 
-        // ============================================================
-        // 10. RPC
-        // ============================================================
-
         async demoRpcSelf() {
             try {
-                const res = await this.request(
+                var res = await this.request(
                     'demo-rpc',
                     { hello: 'self', counter: this._counter },
                     this.id,
@@ -865,13 +895,13 @@
         }
 
         async demoRpcOther() {
-            const other = this.findWindowByType(this.type);
+            var other = this.findWindowByType(this.type);
             if (!other) {
                 this.notify('RPC other', 'Нет других окон типа "' + this.type + '"', 'warning');
                 return;
             }
             try {
-                const res = await this.request(
+                var res = await this.request(
                     'demo-rpc',
                     { hello: 'other', targetId: other.id },
                     other.id,
@@ -885,9 +915,10 @@
             }
         }
 
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
         // 11. DRAG & DROP
-        // ============================================================
+        // ═══════════════════════════════════════════════════════════════════
 
         onDragEnter(meta) {
             this._pushLog('dragEnter: ' + meta.source);
@@ -910,30 +941,19 @@
                 return true;
             }
 
-            const names = files.map(f => f.name).join(', ');
+            var names = files.map(function (f) { return f.name; }).join(', ');
             this.notify('Drop', 'Файлов: ' + files.length + ' → ' + names, 'success');
             this._pushLog('drop files: ' + names);
-
-            const first = files[0];
-            if (first && (first.type === 'application/json' || /\.(json|txt|lsp)$/i.test(first.name))) {
-                try {
-                    const text = await first.text();
-                    this._pushLog('file[0] content (' + text.length + 'b): '
-                        + text.slice(0, 80).replace(/\s+/g, ' '));
-                } catch (e) {
-                    this._pushLog('file read error: ' + e.message);
-                }
-            }
-
             this._renderLog();
             this._renderInfo();
             this.recordHistory('Импорт ' + files.length + ' файл(ов)');
             return true;
         }
 
-        // ============================================================
-        // 12. ЛОГИКА
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
+        // 12. ЛОГИКА ОКНА
+        // ═══════════════════════════════════════════════════════════════════
 
         increment(n) {
             this._counter += n;
@@ -952,7 +972,7 @@
         }
 
         demoFindWindow() {
-            const other = this.findWindowByType(this.type);
+            var other = this.findWindowByType(this.type);
             if (other) {
                 this.notify('Find', 'Найдено: #' + other.id + ' (' + other.title + ')', 'info');
             } else {
@@ -960,9 +980,10 @@
             }
         }
 
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
         // 13. UI-ХЕЛПЕРЫ
-        // ============================================================
+        // ═══════════════════════════════════════════════════════════════════
 
         _updateCounterEl() {
             if (this._counterEl) {
@@ -972,48 +993,48 @@
 
         _pushLog(line) {
             if (!this._log) this._log = [];
-            const ts = new Date().toTimeString().slice(0, 8);
+            var ts = new Date().toTimeString().slice(0, 8);
             this._log.push('[' + ts + '] ' + line);
             if (this._log.length > 50) this._log.shift();
         }
 
         _renderLog() {
             if (!this._logBlock) return;
-            const body = this.ui.block.getBody(this._logBlock);
+            var body = this.ui.block.getBody(this._logBlock);
             if (!body) return;
             while (body.firstChild) body.removeChild(body.firstChild);
 
-            const log = this._log || [];
-            const slice = log.slice(-12);
+            var slice = (this._log || []).slice(-12);
             if (slice.length === 0) {
                 body.appendChild(this.ui.text({ text: '— пусто —', variant: 'muted' }));
                 return;
             }
-            for (const line of slice) {
-                body.appendChild(this.ui.text({ text: line, variant: 'mono' }));
+            for (var i = 0; i < slice.length; i++) {
+                body.appendChild(this.ui.text({ text: slice[i], variant: 'mono' }));
             }
         }
 
         _renderInfo() {
             if (!this._infoBlock) return;
-            const body = this.ui.block.getBody(this._infoBlock);
+            var body = this.ui.block.getBody(this._infoBlock);
             if (!body) return;
             while (body.firstChild) body.removeChild(body.firstChild);
 
-            const rows = [
-                ['id', this.getId()],
-                ['type', this.getType()],
-                ['slotId', this.getSlotId() || '—'],
-                ['counter', String(this._counter)],
-                ['drops', String(this._dropCount)],
-                ['messages', String(this._messageCount)],
+            var rows = [
+                ['id',          this.getId()],
+                ['type',        this.getType()],
+                ['slotId',      this.getSlotId() || '—'],
+                ['counter',     String(this._counter)],
+                ['drops',       String(this._dropCount)],
+                ['messages',    String(this._messageCount)],
                 ['headerItems', String(this.getHeaderItems().length)],
                 ['clockHidden', String(this._clockHidden)],
-                ['visible', String(this.isVisible())]
+                ['visible',     String(this.isVisible())]
             ];
 
-            for (const [k, v] of rows) {
-                const row = this.utils.dom.el('div', {
+            for (var i = 0; i < rows.length; i++) {
+                var k = rows[i][0], v = rows[i][1];
+                body.appendChild(this.utils.dom.el('div', {
                     style: {
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -1024,22 +1045,14 @@
                 }, [
                     this.ui.text({ text: k, variant: 'muted' }),
                     this.ui.text({ text: v })
-                ]);
-                body.appendChild(row);
-            }
-
-            const others = this.findWindowsByType(this.type);
-            if (others.length > 0) {
-                body.appendChild(this.ui.text({
-                    text: 'siblings: ' + others.map(w => '#' + w.id).join(', '),
-                    variant: 'muted'
-                }));
+                ]));
             }
         }
 
-        // ============================================================
+
+        // ═══════════════════════════════════════════════════════════════════
         // 14. ДАННЫЕ
-        // ============================================================
+        // ═══════════════════════════════════════════════════════════════════
 
         getAllData() {
             return {
@@ -1078,17 +1091,22 @@
         }
     }
 
-    // ============================================================
-    // 15. РЕГИСТРАЦИЯ
-    // ============================================================
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 15. ЭКСПОРТ КЛАССА
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    //  Единственное, что плагин делает «наружу» — отдаёт класс через
+    //  module.exports. PluginLoader найдёт его по static meta.id и
+    //  зарегистрирует в WindowRegistry.
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = { ExampleWindow: ExampleWindow };
+    }
 
     if (typeof window !== 'undefined') {
         window.ExampleWindow = ExampleWindow;
-        console.log('[ExampleWindow] Registered class globally: ExampleWindow');
-    }
-
-    if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { ExampleWindow };
+        console.log('[MyWindow] Registered class globally: ExampleWindow');
     }
 
 })();

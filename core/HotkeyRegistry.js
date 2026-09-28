@@ -1,20 +1,11 @@
 // core/HotkeyRegistry.js
-// Версия 2.3.0 - Fix: авто-release capture при потере фокуса + Escape-исключение
-// - setFocusedWindow: авто-release, если окно потеряло фокус
-// - handle: capture не съедает Escape (fallback на глобальные)
-// - handle: capture не съедает, если окно потеряло фокус
-// - _autoReleaseCapture — внутренний
-// - unregisterWindow: авто-release (без изменений)
-// - destroy: сброс _capturedWindowId (без изменений)
+// Версия 3.0.0
+// - handle(): при активном внешнем drag (DragController.isDragging()) не гасим окно.
+//   Escape и прочие клавиши уходят в DragController, а не в окно.
+// - Остальная логика без изменений.
 
 (function() {
     'use strict';
-
-    console.log('[HotkeyRegistry] Loading v2.3.0...');
-
-    // ============================================================
-    // НОРМАЛИЗАЦИЯ
-    // ============================================================
 
     function normalizeCombo(combo) {
         if (!combo || typeof combo !== 'string') return '';
@@ -94,10 +85,6 @@
         return out.join('+');
     }
 
-    // ============================================================
-    // ОПРЕДЕЛЕНИЕ ФОКУСА
-    // ============================================================
-
     function isInputFocused() {
         let el = document.activeElement;
         if (!el) return false;
@@ -129,9 +116,9 @@
         return false;
     }
 
-    // ============================================================
-    // КЛАСС
-    // ============================================================
+    function isExternalDrag() {
+        return !!(window.dragController && window.dragController.isDragging());
+    }
 
     class HotkeyRegistry {
         constructor(options = {}) {
@@ -143,8 +130,6 @@
             this._debug = options.debug || false;
 
             this._capturedWindowId = null;
-
-            console.log('[HotkeyRegistry] Initialized v2.3.0');
         }
 
         // ============================================================
@@ -178,10 +163,8 @@
             }
             const map = this._windowBindings.get(wid);
 
-            if (map.has(key)) {
-                if (this._debug) {
-                    console.warn('[HotkeyRegistry] Window combo override:', wid, key);
-                }
+            if (map.has(key) && this._debug) {
+                console.warn('[HotkeyRegistry] Window combo override:', wid, key);
             }
             map.set(key, { callback, meta });
 
@@ -214,9 +197,6 @@
 
             if (this._capturedWindowId === wid) {
                 this._capturedWindowId = null;
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] Auto-released capture for unregistered window:', wid);
-                }
             }
 
             this._windowBindings.delete(wid);
@@ -252,7 +232,6 @@
             this._globalBindings.delete(oldKey);
             this._globalBindings.set(newKey, binding);
 
-            if (this._debug) console.log('[HotkeyRegistry] rebindGlobal:', oldKey, '→', newKey);
             return true;
         }
 
@@ -280,7 +259,6 @@
             map.delete(oldKey);
             map.set(newKey, binding);
 
-            if (this._debug) console.log('[HotkeyRegistry] rebindWindow:', wid, oldKey, '→', newKey);
             return true;
         }
 
@@ -288,31 +266,14 @@
         // 3. ФОКУС
         // ============================================================
 
-        /**
-         * ✅ FIX v2.3.0:
-         * При смене фокуса — авто-release capture, если окно потеряло фокус.
-         * Если focusedWindowId === null — тоже release.
-         * Если focusedWindowId !== capturedWindowId — release.
-         */
         setFocusedWindow(windowId) {
             const nextId = windowId != null ? String(windowId) : null;
-            const prevId = this._focusedWindowId;
-
             this._focusedWindowId = nextId;
 
-            // ✅ Авто-release capture, если окно потеряло фокус
             if (this._capturedWindowId) {
                 if (nextId === null || nextId !== this._capturedWindowId) {
-                    if (this._debug) {
-                        console.log('[HotkeyRegistry] Capture auto-released (focus moved):',
-                            this._capturedWindowId, '→', nextId);
-                    }
                     this._capturedWindowId = null;
                 }
-            }
-
-            if (this._debug && prevId !== nextId) {
-                console.log('[HotkeyRegistry] Focus:', prevId, '→', nextId);
             }
         }
 
@@ -321,7 +282,7 @@
         }
 
         // ============================================================
-        // 3.1. ЗАХВАТ КЛАВИАТУРЫ
+        // 4. ЗАХВАТ КЛАВИАТУРЫ
         // ============================================================
 
         captureKeyboard(windowId) {
@@ -330,12 +291,7 @@
                 return false;
             }
 
-            const wid = String(windowId);
-            this._capturedWindowId = wid;
-
-            if (this._debug) {
-                console.log('[HotkeyRegistry] 🎮 Keyboard captured by:', wid);
-            }
+            this._capturedWindowId = String(windowId);
             return true;
         }
 
@@ -343,25 +299,13 @@
             if (!this._capturedWindowId) return false;
 
             if (windowId == null) {
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] 🎮 Keyboard released (any):', this._capturedWindowId);
-                }
                 this._capturedWindowId = null;
                 return true;
             }
 
             const wid = String(windowId);
-            if (this._capturedWindowId !== wid) {
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] releaseKeyboard: mismatch (captured:',
-                        this._capturedWindowId, ', requested:', wid, ')');
-                }
-                return false;
-            }
+            if (this._capturedWindowId !== wid) return false;
 
-            if (this._debug) {
-                console.log('[HotkeyRegistry] 🎮 Keyboard released by:', wid);
-            }
             this._capturedWindowId = null;
             return true;
         }
@@ -375,28 +319,23 @@
         }
 
         // ============================================================
-        // 4. ОБРАБОТКА
+        // 5. ОБРАБОТКА
         // ============================================================
 
         handle(event) {
             if (!event) return false;
             const combo = eventToCombo(event);
 
-            // ==================================================
-            // ✅ ПРИОРИТЕТ 1: capture
-            // ==================================================
+            // Приоритет 0: внешний drag — окна не трогаем.
+            if (isExternalDrag()) {
+                return false;
+            }
+
+            // Приоритет 1: capture
             if (this._capturedWindowId) {
-                // ✅ FIX: если окно потеряло фокус — release и не съедаем
                 if (this._focusedWindowId !== this._capturedWindowId) {
-                    if (this._debug) {
-                        console.log('[HotkeyRegistry] Capture dropped (window lost focus):',
-                            this._capturedWindowId);
-                    }
                     this._capturedWindowId = null;
-                    // продолжаем к обычной логике ниже
                 } else {
-                    // ✅ FIX: Escape всегда пропускаем (глобальные + escape-обработчики)
-                    // даже при активном capture — чтобы можно было выйти из «залипшего» состояния.
                     if (combo !== 'Escape') {
                         const map = this._windowBindings.get(this._capturedWindowId);
                         if (map && map.has(combo)) {
@@ -405,39 +344,23 @@
                             } catch (e) {
                                 console.error('[HotkeyRegistry] Captured window callback error:', e);
                             }
-                        } else if (this._debug) {
-                            console.log('[HotkeyRegistry] Captured (no binding):', combo,
-                                '→', this._capturedWindowId);
                         }
-                        // Съедаем — глобальные и другие окна не увидят
                         return true;
                     }
-                    // Escape — проваливаемся к обычной логике
                 }
             }
 
-            // ==================================================
-            // ✅ ПРИОРИТЕТ 2: [data-capture-keyboard]
-            // ==================================================
+            // Приоритет 2: [data-capture-keyboard]
             if (isKeyboardCaptureElementFocused()) {
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] Skipped (data-capture-keyboard):', combo);
-                }
                 return false;
             }
 
-            // ==================================================
-            // ПРИОРИТЕТ 3: обычная логика
-            // ==================================================
+            // Приоритет 3: обычная логика
 
             if (isInputFocused() && combo !== 'Escape') {
-                if (this._debug) {
-                    console.log('[HotkeyRegistry] ignored (input focused):', combo);
-                }
                 return false;
             }
 
-            // Активное окно
             if (this._focusedWindowId) {
                 const map = this._windowBindings.get(this._focusedWindowId);
                 if (map && map.has(combo)) {
@@ -450,7 +373,6 @@
                 }
             }
 
-            // Глобальные
             if (this._globalBindings.has(combo)) {
                 try {
                     this._globalBindings.get(combo).callback(event, null);
@@ -464,7 +386,7 @@
         }
 
         // ============================================================
-        // 5. ATTACH / DETACH
+        // 6. ATTACH / DETACH
         // ============================================================
 
         attach(target = document) {
@@ -490,7 +412,7 @@
         }
 
         // ============================================================
-        // 6. GETTERS
+        // 7. GETTERS
         // ============================================================
 
         getGlobalBindings() {
@@ -523,7 +445,7 @@
         }
 
         // ============================================================
-        // 7. УНИЧТОЖЕНИЕ
+        // 8. УНИЧТОЖЕНИЕ
         // ============================================================
 
         destroy() {
@@ -532,7 +454,6 @@
             this._windowBindings.clear();
             this._focusedWindowId = null;
             this._capturedWindowId = null;
-            console.log('[HotkeyRegistry] Destroyed');
         }
     }
 
@@ -556,7 +477,6 @@
         window.HotkeyRegistry.eventToCombo = eventToCombo;
         window.HotkeyRegistry.isInputFocused = isInputFocused;
         window.HotkeyRegistry.isKeyboardCaptureElementFocused = isKeyboardCaptureElementFocused;
-        console.log('[HotkeyRegistry] Registered globally v2.3.0');
     }
 
 })();

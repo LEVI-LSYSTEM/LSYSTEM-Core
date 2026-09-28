@@ -1,0 +1,11 @@
+{
+    "version": "1.0",
+    "name": "my",
+    "author": "LEVI",
+
+    "files": [
+        { "path": "window/ExampleWindow.js", "priority": 100 },
+        { "path": "lib/2DCanvas.js", "priority": 9 },
+        { "path": "window/NodeGraphWindow.js", "priority": 101 }
+    ]
+}

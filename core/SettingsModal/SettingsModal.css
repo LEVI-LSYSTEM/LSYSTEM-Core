@@ -1,13 +1,5 @@
-/* core/SettingsModal/SettingsModal.css */
-/* Версия 8.1.0 — Fix: light theme contrast + focus ring + plugin row buttons */
-/* - theme-switch is-active: light text on beige thumb (light theme) */
-/* - plugin-key-panel: overflow hidden на __inner (focus ring не обрезается) */
-/* - plugin-row__btn: усилена граница в light theme */
-/* - eula-modal__body:focus — видимый outline */
-
-/* ================================================================ */
-/* ============ ДИЗАЙН-ТОКЕНЫ ===================================== */
-/* ================================================================ */
+/* core/settingsModal/SettingsModal.css */
+/* Версия 12.0.0 — состояние is-overridden для строк хоткеев */
 
 :root {
     --sm-radius-card:   8px;
@@ -16,19 +8,20 @@
     --sm-radius-modal:  10px;
     --sm-radius-sm:     4px;
 
-    /* Акцент для утилитарных кнопок (бинды, плагины, обновить) */
     --sm-accent:        rgba(200, 184, 154, 0.25);
     --sm-accent-hover:  rgba(200, 184, 154, 0.55);
     --sm-accent-bg:     rgba(200, 184, 154, 0.08);
     --sm-accent-bg-hover: rgba(200, 184, 154, 0.14);
 
-    /* Danger — только для удаления / EULA-ошибок */
     --sm-danger:        #cc2233;
     --sm-danger-hover:  #ee3344;
     --sm-danger-bg:     rgba(204, 34, 51, 0.1);
     --sm-danger-border: rgba(204, 34, 51, 0.35);
 
-    /* Анимация */
+    --sm-overridden:      rgba(255, 170, 51, 0.65);
+    --sm-overridden-bg:   rgba(255, 170, 51, 0.08);
+    --sm-overridden-hover: rgba(255, 170, 51, 0.85);
+
     --sm-spring:        cubic-bezier(0.22, 1.4, 0.36, 1);
     --sm-ease:          cubic-bezier(0.22, 1, 0.36, 1);
     --sm-duration:      0.35s;
@@ -315,10 +308,16 @@
     display: flex;
     gap: 8px;
     justify-content: flex-end;
+    align-items: center;
     margin-top: 12px;
     padding-top: 12px;
     border-top: 1px dashed var(--border-color, rgba(200, 184, 154, 0.1));
     transition: border-color 0.5s ease;
+    flex-wrap: wrap;
+}
+
+.settings-group__actions .settings-btn {
+    flex: 0 0 auto;
 }
 
 /* ================================================================ */
@@ -374,6 +373,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    flex-wrap: wrap;
 }
 
 .settings-row__control .settings-input {
@@ -436,7 +436,32 @@
 }
 
 /* ================================================================ */
-/* ============ EULA BLOCK (в профиле) ============================ */
+/* ============ PATH ============================================== */
+/* ================================================================ */
+
+.settings-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 6px 10px;
+    border-radius: var(--sm-radius-input);
+    border: 1px dashed var(--border-color, rgba(200, 184, 154, 0.18));
+    background: var(--bg-input, #2a2a2a);
+    color: var(--text-secondary, #a09888);
+    font-family: 'Courier New', monospace;
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: default;
+    box-sizing: border-box;
+}
+
+[data-theme="light"] .settings-path {
+    background: rgba(255, 255, 255, 0.5);
+}
+
+/* ================================================================ */
+/* ============ EULA BLOCK ======================================== */
 /* ================================================================ */
 
 .settings-nda {
@@ -481,10 +506,6 @@
     margin-bottom: 8px;
 }
 
-/* ================================================================ */
-/* ============ EULA ACTION BUTTONS =============================== */
-/* ================================================================ */
-
 .settings-actions-row {
     display: flex;
     gap: 6px;
@@ -502,27 +523,6 @@
     width: 11px;
     height: 11px;
     margin-right: 4px;
-}
-
-/* ================================================================ */
-/* ============ EULA ERROR ======================================== */
-/* ================================================================ */
-
-@keyframes eulaShake {
-    0%, 100% { transform: translateX(0); }
-    15%      { transform: translateX(-5px); }
-    30%      { transform: translateX(4px); }
-    45%      { transform: translateX(-3px); }
-    60%      { transform: translateX(2px); }
-    75%      { transform: translateX(-1px); }
-    90%      { transform: translateX(1px); }
-}
-
-.settings-nda.eula-error {
-    border-color: var(--sm-danger) !important;
-    background: var(--sm-danger-bg) !important;
-    box-shadow: 0 0 0 3px rgba(204, 34, 51, 0.12) !important;
-    animation: eulaShake 0.5s ease;
 }
 
 /* ================================================================ */
@@ -609,7 +609,6 @@
 .theme-switch__opt:hover .icon-svg { transform: rotate(-10deg) scale(1.15); }
 .theme-switch__opt:active { transform: scale(0.95); }
 
-/* ✅ Пункт 14.1: is-active — светлый текст на бежевом thumb */
 .theme-switch__opt.is-active {
     color: #1a1a1a;
     text-shadow: none;
@@ -625,7 +624,6 @@
     100% { transform: scale(1) rotate(0deg); }
 }
 
-/* ✅ Light theme: thumb темнее, текст — БЕЛЫЙ (читаемо) */
 [data-theme="light"] .theme-switch__thumb {
     background: linear-gradient(
         135deg,
@@ -759,7 +757,6 @@
         left 0.45s var(--sm-ease),
         width 0.45s var(--sm-ease),
         background 0.5s ease;
-    /* ✅ Пункт 13.6: JS может задать backgroundImage для wrap-around */
 }
 
 .theme-auto__ticks {
@@ -822,6 +819,7 @@
 }
 
 .hotkey-row {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -838,10 +836,37 @@
         box-shadow 0.3s var(--sm-ease);
 }
 
+.hotkey-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: var(--sm-radius-btn) 0 0 var(--sm-radius-btn);
+    background: transparent;
+    transition: background 0.25s var(--sm-ease);
+    pointer-events: none;
+}
+
+.hotkey-row.is-overridden::before {
+    background: var(--sm-overridden);
+}
+
+.hotkey-row.is-overridden {
+    background: var(--sm-overridden-bg);
+    border-color: rgba(255, 170, 51, 0.22);
+}
+
 .hotkey-row:hover {
     border-color: rgba(200, 184, 154, 0.2);
     transform: translateX(2px);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+
+.hotkey-row.is-overridden:hover {
+    border-color: var(--sm-overridden);
+    box-shadow: 0 2px 12px rgba(255, 170, 51, 0.15);
 }
 
 [data-theme="light"] .hotkey-row:hover {
@@ -879,8 +904,6 @@
     transform: scale(1.05);
 }
 
-/* ===== КНОПКА БИНДА ===== */
-
 .hotkey-row__combo {
     display: inline-flex;
     align-items: center;
@@ -915,6 +938,16 @@
 
 .hotkey-row__combo:active {
     transform: translateY(0) scale(0.98);
+}
+
+.hotkey-row.is-overridden .hotkey-row__combo {
+    border-color: var(--sm-overridden);
+    color: var(--sm-overridden-hover);
+}
+
+.hotkey-row.is-overridden .hotkey-row__combo:hover {
+    background: var(--sm-overridden-bg);
+    border-color: var(--sm-overridden-hover);
 }
 
 .hotkey-row__combo.is-capturing {
@@ -1113,7 +1146,7 @@
 }
 
 /* ================================================================ */
-/* ============ ПЛАГИНЫ — TOOLBAR ================================= */
+/* ============ ПЛАГИНЫ — TOOLBAR / TABS / LIST =================== */
 /* ================================================================ */
 
 .plugins-toolbar {
@@ -1121,6 +1154,7 @@
     gap: 6px;
     align-items: stretch;
     margin-bottom: 10px;
+    margin-top: 10px;
 }
 
 .plugins-search {
@@ -1182,72 +1216,82 @@
     box-shadow: 0 0 0 3px rgba(200, 184, 154, 0.1);
 }
 
-/* ================================================================ */
-/* ============ КНОПКА "СКРЫТЫХ" ================================== */
-/* ================================================================ */
-
-.plugins-show-hidden-btn {
-    display: none;
-    align-items: center;
-    gap: 5px;
-    margin-left: auto;
-    padding: 3px 9px;
-    border: 1px solid var(--sm-accent);
-    border-radius: var(--sm-radius-btn);
-    background: transparent;
-    color: var(--text-secondary, #a09888);
-    font-size: 10px;
-    font-weight: 500;
-    font-family: inherit;
-    text-transform: none;
-    letter-spacing: 0;
-    cursor: pointer;
-    transition:
-        background 0.2s var(--sm-ease),
-        border-color 0.2s var(--sm-ease),
-        color 0.2s var(--sm-ease),
-        transform 0.25s var(--sm-spring);
-    white-space: nowrap;
-    line-height: 1;
+.plugins-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    border-radius: var(--sm-radius-card);
+    background: var(--bg-input, #2a2a2a);
+    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.1));
+    margin-bottom: 10px;
+    margin-top: 10px;
 }
 
-.plugins-show-hidden-btn .icon-svg {
-    width: 11px;
-    height: 11px;
-    margin: 0;
-    flex-shrink: 0;
+[data-theme="light"] .plugins-tabs {
+    background: rgba(74, 63, 53, 0.06);
 }
 
-.plugins-show-hidden-btn__label {
+.plugins-tab {
+    flex: 1;
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border: none;
+    border-radius: calc(var(--sm-radius-card) - 2px);
+    background: transparent;
+    color: var(--text-secondary, #a09888);
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: inherit;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
 }
 
-.plugins-show-hidden-btn:hover {
-    background: var(--sm-accent-bg);
-    border-color: var(--sm-accent-hover);
+.plugins-tab:hover {
     color: var(--text-primary, #e0d8cc);
+    background: rgba(200, 184, 154, 0.06);
 }
 
-.plugins-show-hidden-btn:active {
-    transform: scale(0.97);
+.plugins-tab.is-active {
+    background: linear-gradient(
+        135deg,
+        var(--beige, #c8b89a) 0%,
+        var(--beige-dark, #a89070) 100%
+    );
+    color: #1a1a1a;
+    box-shadow: 0 4px 12px rgba(200, 184, 154, 0.25);
 }
 
-.plugins-show-hidden-btn.is-active {
-    background: var(--sm-danger-bg);
-    border-color: var(--sm-danger-border);
-    color: var(--accent-red, #cc2233);
+.plugins-tab.is-active .plugins-tab__count {
+    background: rgba(0, 0, 0, 0.15);
+    color: #1a1a1a;
 }
 
-.plugins-show-hidden-btn.is-active:hover {
-    background: rgba(204, 34, 51, 0.16);
-    border-color: rgba(204, 34, 51, 0.5);
+[data-theme="light"] .plugins-tab.is-active {
+    background: linear-gradient(135deg, #6a5a4a 0%, #4a3f35 100%);
+    color: #fff;
 }
 
-/* ================================================================ */
-/* ============ СПИСОК ПЛАГИНОВ =================================== */
-/* ================================================================ */
+[data-theme="light"] .plugins-tab.is-active .plugins-tab__count {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+
+.plugins-tab__count {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 7px;
+    border-radius: 8px;
+    background: rgba(200, 184, 154, 0.1);
+    color: var(--text-muted, rgba(200, 184, 154, 0.6));
+    min-width: 18px;
+    text-align: center;
+    transition: background 0.2s ease, color 0.2s ease;
+}
 
 .plugins-list {
     display: flex;
@@ -1282,10 +1326,6 @@
     line-height: 1.6;
 }
 
-/* ================================================================ */
-/* ============ СТРОКА ПЛАГИНА ==================================== */
-/* ================================================================ */
-
 .plugin-row {
     position: relative;
     display: flex;
@@ -1308,7 +1348,6 @@
     border-color: rgba(200, 184, 154, 0.18);
 }
 
-/* ===== Главная строка ===== */
 .plugin-row__main {
     display: flex;
     align-items: center;
@@ -1318,7 +1357,6 @@
     box-sizing: border-box;
 }
 
-/* Иконка */
 .plugin-row__icon {
     width: 20px;
     height: 20px;
@@ -1345,7 +1383,6 @@
     fill: currentColor;
 }
 
-/* Инфо */
 .plugin-row__info {
     flex: 1 1 auto;
     min-width: 0;
@@ -1375,40 +1412,25 @@
     line-height: 1.3;
 }
 
-/* Поле группы */
-.plugin-row__group {
-    flex: 0 0 auto;
-    width: 100px;
+.plugin-row__badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(200, 184, 154, 0.08);
+    color: var(--text-muted, rgba(200, 184, 154, 0.55));
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    flex-shrink: 0;
+    font-family: monospace;
 }
 
-.plugin-row__group-input {
-    width: 100%;
-    height: 24px;
-    padding: 2px 8px;
-    border-radius: var(--sm-radius-sm);
-    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-    background: var(--bg-input, #2a2a2a);
-    color: var(--text-primary, #e0d8cc);
-    font-size: 11px;
-    font-family: inherit;
-    outline: none;
-    box-sizing: border-box;
-    transition:
-        border-color 0.2s var(--sm-ease),
-        background 0.15s ease,
-        box-shadow 0.2s var(--sm-ease);
+[data-theme="light"] .plugin-row__badge {
+    background: rgba(74, 63, 53, 0.08);
+    color: rgba(74, 63, 53, 0.7);
 }
-
-.plugin-row__group-input:hover {
-    border-color: rgba(200, 184, 154, 0.35);
-}
-
-.plugin-row__group-input:focus {
-    border-color: rgba(200, 184, 154, 0.6);
-    box-shadow: 0 0 0 2px rgba(200, 184, 154, 0.1);
-}
-
-/* ===== Кнопки в строке плагина ===== */
 
 .plugin-row__btn {
     flex: 0 0 26px;
@@ -1449,109 +1471,32 @@
     transform: scale(0.94);
 }
 
+.plugin-row__btn--toggle.is-on {
+    border-color: rgba(120, 200, 140, 0.5);
+    color: rgba(120, 200, 140, 0.9);
+}
+
+.plugin-row__btn--toggle.is-on:hover {
+    background: rgba(120, 200, 140, 0.12);
+    border-color: rgba(120, 200, 140, 0.8);
+    color: rgba(120, 200, 140, 1);
+}
+
+[data-theme="light"] .plugin-row__btn--toggle.is-on {
+    border-color: rgba(40, 140, 80, 0.5);
+    color: rgba(40, 140, 80, 0.9);
+}
+
+[data-theme="light"] .plugin-row__btn--toggle.is-on:hover {
+    background: rgba(40, 140, 80, 0.1);
+    border-color: rgba(40, 140, 80, 0.8);
+    color: rgba(40, 140, 80, 1);
+}
+
 .plugin-row__btn--danger:hover {
     background: var(--sm-danger-bg);
     border-color: var(--sm-danger-border);
     color: var(--accent-red, #cc2233);
-}
-
-/* ===== ПАНЕЛЬ КЛЮЧА (раскрывающаяся) ===== */
-
-/* ✅ Пункт 14.2: overflow: hidden перенесён на __inner,
-   чтобы focus-ring input не обрезался */
-.plugin-key-panel {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition:
-        grid-template-rows 0.35s var(--sm-ease),
-        border-color 0.3s ease;
-    border-top: 1px solid transparent;
-    overflow: visible;
-}
-
-.plugin-key-panel.is-open {
-    grid-template-rows: 1fr;
-    border-top-color: var(--border-color, rgba(200, 184, 154, 0.08));
-}
-
-.plugin-key-panel__inner {
-    overflow: hidden;
-    min-height: 0;
-}
-
-.plugin-key-panel__row {
-    display: flex;
-    gap: 6px;
-    padding: 8px 10px 8px 38px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.plugin-key-panel__input {
-    flex: 1 1 200px;
-    min-width: 120px;
-    height: 28px;
-    padding: 4px 10px;
-    border-radius: var(--sm-radius-input);
-    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
-    background: var(--bg-input, #2a2a2a);
-    color: var(--text-primary, #e0d8cc);
-    font-family: monospace;
-    font-size: 11px;
-    outline: none;
-    box-sizing: border-box;
-    transition:
-        border-color 0.2s var(--sm-ease),
-        box-shadow 0.2s var(--sm-ease),
-        background 0.5s ease;
-}
-
-.plugin-key-panel__input:hover {
-    border-color: rgba(200, 184, 154, 0.35);
-}
-
-.plugin-key-panel__input:focus {
-    border-color: rgba(200, 184, 154, 0.6);
-    box-shadow: 0 0 0 2px rgba(200, 184, 154, 0.15);
-}
-
-.plugin-key-panel__input::placeholder {
-    color: var(--text-muted, rgba(200, 184, 154, 0.35));
-}
-
-.plugin-key-panel__btn {
-    flex: 0 0 auto;
-    height: 28px;
-    padding: 0 12px;
-    font-size: 10.5px;
-}
-
-.plugin-key-panel__hint {
-    padding: 0 10px 8px 38px;
-    font-size: 10px;
-    color: var(--text-muted, rgba(200, 184, 154, 0.45));
-    line-height: 1.5;
-    font-style: italic;
-}
-
-/* ===== Скрытый плагин ===== */
-
-.plugin-row.is-hidden {
-    opacity: 0.5;
-}
-
-.plugin-row.is-hidden:hover {
-    opacity: 0.75;
-}
-
-.plugin-row.is-hidden .plugin-row__name {
-    text-decoration: line-through;
-    text-decoration-color: rgba(200, 184, 154, 0.4);
-    text-decoration-thickness: 1px;
-}
-
-.plugin-row.is-hidden .plugin-row__icon {
-    opacity: 0.5;
 }
 
 /* ================================================================ */
@@ -1670,7 +1615,6 @@
     transform: rotate(90deg) scale(1.06);
 }
 
-/* ✅ Пункт 13.7: body focusable */
 .eula-modal__body {
     flex: 1 1 auto;
     overflow-y: auto;
@@ -1684,7 +1628,6 @@
     outline: none;
 }
 
-/* ✅ Видимый outline при фокусе клавиатурой (только для tabindex) */
 .eula-modal__body:focus-visible {
     box-shadow: inset 0 0 0 2px rgba(200, 184, 154, 0.35);
 }
@@ -1834,6 +1777,11 @@
     background: rgba(200, 184, 154, 0.15);
 }
 
+[data-theme="light"] .hotkey-row.is-overridden {
+    background: rgba(255, 170, 51, 0.1);
+    border-color: rgba(255, 170, 51, 0.3);
+}
+
 [data-theme="light"] .settings-btn {
     background: rgba(255, 255, 255, 0.4);
 }
@@ -1865,8 +1813,6 @@
     background: rgba(74, 63, 53, 0.08);
 }
 
-/* ===== Плагины — светлая тема ===== */
-
 [data-theme="light"] .plugin-row {
     background: rgba(255, 255, 255, 0.4);
     border-color: rgba(74, 63, 53, 0.1);
@@ -1877,13 +1823,10 @@
     border-color: rgba(74, 63, 53, 0.18);
 }
 
-[data-theme="light"] .plugin-row__group-input,
-[data-theme="light"] .plugins-search__input,
-[data-theme="light"] .plugin-key-panel__input {
+[data-theme="light"] .plugins-search__input {
     background: rgba(255, 255, 255, 0.6);
 }
 
-/* ✅ Пункт 14.4: усиливаем границы кнопок плагинов в light theme */
 [data-theme="light"] .plugin-row__btn {
     border-color: rgba(74, 63, 53, 0.2);
     color: rgba(74, 63, 53, 0.7);
@@ -1900,19 +1843,6 @@
     border-color: rgba(184, 31, 46, 0.4);
     color: #b81f2e;
 }
-
-[data-theme="light"] .plugins-show-hidden-btn {
-    border-color: rgba(74, 63, 53, 0.2);
-    color: rgba(74, 63, 53, 0.75);
-}
-
-[data-theme="light"] .plugins-show-hidden-btn:hover {
-    background: rgba(74, 63, 53, 0.06);
-    border-color: rgba(74, 63, 53, 0.35);
-    color: #4a3f35;
-}
-
-/* ===== EULA modal — светлая тема ===== */
 
 [data-theme="light"] .eula-modal-overlay {
     background: rgba(200, 190, 180, 0.7);
@@ -1983,8 +1913,15 @@
     .eula-modal__body {
         padding: 16px;
     }
-    .plugin-row__group {
-        width: 80px;
+    .plugins-toolbar {
+        flex-wrap: wrap;
+    }
+    .plugins-search {
+        flex: 1 1 100%;
+    }
+    .plugins-tab {
+        padding: 6px 10px;
+        font-size: 11px;
     }
 }
 
@@ -2080,27 +2017,9 @@
         flex: 1 1 auto;
         justify-content: center;
     }
-    .plugin-row__group {
-        display: none;
-    }
     .plugin-row__main {
         padding: 6px 8px;
         gap: 6px;
-    }
-    .plugin-key-panel__row {
-        padding: 8px 10px 8px 30px;
-        flex-wrap: wrap;
-    }
-    .plugin-key-panel__input {
-        flex: 1 1 100%;
-        min-width: 0;
-    }
-    .plugin-key-panel__btn {
-        flex: 1 1 auto;
-        justify-content: center;
-    }
-    .plugin-key-panel__hint {
-        padding: 0 10px 8px 30px;
     }
     .eula-modal__body {
         padding: 12px;
@@ -2142,10 +2061,6 @@
     }
 }
 
-/* ================================================================ */
-/* ============ TOUCH-ОПТИМИЗАЦИЯ ================================= */
-/* ================================================================ */
-
 @media (hover: none) and (pointer: coarse) {
     .settings-btn:hover {
         transform: none;
@@ -2186,11 +2101,10 @@
         min-width: 32px;
         min-height: 32px;
     }
+    .plugins-tab {
+        min-height: 38px;
+    }
 }
-
-/* ================================================================ */
-/* ============ ПЛАВНЫЙ ПЕРЕХОД МЕЖДУ ТЕМАМИ ====================== */
-/* ================================================================ */
 
 .theme-transition .settings-modal *,
 .theme-transition .settings-modal-overlay *,

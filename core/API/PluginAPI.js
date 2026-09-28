@@ -10,7 +10,7 @@
 
     console.log('[PluginAPI] Loading v1.0.1...');
 
-    var DEFAULT_PATH = 'data/UserAPI.js';
+    var DEFAULT_PATH = 'core/assets/UserAPI.js';
 
     class PluginAPI {
         constructor(options = {}) {

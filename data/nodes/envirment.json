@@ -1,0 +1,20 @@
+{
+  "envirment": {
+    "Acoustics": [
+      {
+        "folder": "Acoustics",
+        "abstract": [],
+        "concrete": ["Geometry"],
+        "icon": "icon-acoustics"
+      }
+    ],
+    "Геометрия": [
+       { 
+        "folder": "Geometry",  
+        "abstract": ["Acoustics"], 
+        "concrete": [], 
+        "icon": 
+        "icon-box" }
+     ]
+  }
+}

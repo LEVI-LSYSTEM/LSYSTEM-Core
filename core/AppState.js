@@ -1,13 +1,11 @@
 // core/AppState.js
-// Версия 5.0.0 — EULA полностью удалён.
-// - Нет eulaAccepted, нет canUseApp(), нет isAuthenticated().
-// - Аккаунт = { id, name }.
-// - Тема, хоткеи, свёрнутость групп — без изменений.
+// Версия 6.0.0
+// - Hotkey overrides: версия формата, синхронизация с дефолтами, миграция v1 → v2.
+// - Запись хранит: combo, original, label, action, overridden.
+// - Мёртвые записи (для несуществующих дефолтов) удаляются автоматически.
 
 (function() {
     'use strict';
-
-    console.log('[AppState] Loading v5.0.0...');
 
     var STORAGE_KEYS = {
         THEME_MODE: 'lsystem-theme-mode',
@@ -16,6 +14,8 @@
         HOTKEY_OVERRIDES: 'lsystem-hotkey-overrides',
         GROUP_COLLAPSED: 'lsystem-window-group-collapsed'
     };
+
+    var HOTKEY_OVERRIDES_VERSION = 2;
 
     function deepCopy(obj) {
         if (obj === null || obj === undefined) return obj;
@@ -36,6 +36,7 @@
         this._account = null;
 
         this._hotkeyOverrides = {
+            _version: HOTKEY_OVERRIDES_VERSION,
             global: {},
             windows: {}
         };
@@ -58,14 +59,6 @@
 
         this._startThemeAutoTimer();
 
-        console.log('[AppState] Initialized v5.0.0', {
-            themeMode: this._themeMode,
-            theme: this._theme,
-            hasAccount: !!this._account
-        });
-
-        // Эмитим начальное состояние асинхронно, чтобы подписчики,
-        // подписавшиеся синхронно после new AppState(), успели.
         var self = this;
         queueMicrotask(function() {
             self._notify('themeMode', self._themeMode);
@@ -96,7 +89,6 @@
         }
 
         if (this._themeMode === mode) {
-            if (this._debug) console.log('[AppState] Theme mode unchanged:', mode);
             return true;
         }
 
@@ -111,8 +103,6 @@
         }
 
         this._notify('themeMode', mode);
-
-        if (this._debug) console.log('[AppState] Theme mode:', mode, '→ theme:', next);
         return true;
     };
 
@@ -205,10 +195,6 @@
                 self._theme = next;
                 self._applyTheme();
                 self._notify('theme', next);
-
-                if (self._debug) {
-                    console.log('[AppState] Auto-theme switch:', next);
-                }
             }
         }, 60000);
     };
@@ -241,14 +227,6 @@
         this._account = normalized;
         this._saveAccount();
         this._notify('account', this.getAccount());
-
-        if (this._debug) {
-            console.log('[AppState] Account set:', {
-                id: normalized.id,
-                name: normalized.name
-            });
-        }
-
         return true;
     };
 
@@ -259,29 +237,59 @@
     };
 
     // ============================================================
-    // 3. ХОТКЕИ
+    // 3. ХОТКЕИ — ДЕФОЛТЫ
     // ============================================================
 
-    AppState.prototype.ensureHotkeyDefaults = function(typeId, defaults) {
-        if (!typeId || !defaults || typeof defaults !== 'object') return;
+    AppState.prototype.ensureGlobalHotkeyDefaults = function(defaults) {
+        if (!defaults || typeof defaults !== 'object') return;
 
-        if (!this._hotkeyOverrides.windows[typeId]) {
-            this._hotkeyOverrides.windows[typeId] = {};
-        }
-
-        var bucket = this._hotkeyOverrides.windows[typeId];
         var changed = false;
+        var bucket = this._hotkeyOverrides.global;
+        var seen = Object.create(null);
 
         for (var combo in defaults) {
             if (!Object.prototype.hasOwnProperty.call(defaults, combo)) continue;
+            seen[combo] = true;
 
-            if (!bucket[combo]) {
-                var def = defaults[combo] || {};
+            var def = defaults[combo] || {};
+            var existing = bucket[combo];
+
+            if (!existing) {
                 bucket[combo] = {
                     combo: combo,
+                    original: combo,
                     label: def.label || combo,
-                    action: def.action || null
+                    action: def.action || null,
+                    overridden: false
                 };
+                changed = true;
+            } else {
+                var nextLabel = def.label || combo;
+                var nextAction = def.action || null;
+
+                if (existing.label !== nextLabel) {
+                    existing.label = nextLabel;
+                    changed = true;
+                }
+                if (existing.action !== nextAction) {
+                    existing.action = nextAction;
+                    changed = true;
+                }
+                if (existing.original !== combo) {
+                    existing.original = combo;
+                    changed = true;
+                }
+                if (existing.overridden === undefined) {
+                    existing.overridden = existing.combo !== existing.original;
+                    changed = true;
+                }
+            }
+        }
+
+        for (var key in bucket) {
+            if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
+            if (!seen[key]) {
+                delete bucket[key];
                 changed = true;
             }
         }
@@ -292,28 +300,93 @@
         }
     };
 
-    AppState.prototype.ensureGlobalHotkeyDefaults = function(defaults) {
-        if (!defaults || typeof defaults !== 'object') return;
+    AppState.prototype.ensureHotkeyDefaults = function(typeId, defaults) {
+        if (!typeId || !defaults || typeof defaults !== 'object') return;
 
+        if (!this._hotkeyOverrides.windows[typeId]) {
+            this._hotkeyOverrides.windows[typeId] = {};
+        }
+
+        var bucket = this._hotkeyOverrides.windows[typeId];
+        var seen = Object.create(null);
         var changed = false;
+
         for (var combo in defaults) {
             if (!Object.prototype.hasOwnProperty.call(defaults, combo)) continue;
+            seen[combo] = true;
 
-            if (!this._hotkeyOverrides.global[combo]) {
-                var def = defaults[combo] || {};
-                this._hotkeyOverrides.global[combo] = {
+            var def = defaults[combo] || {};
+            var existing = bucket[combo];
+
+            if (!existing) {
+                bucket[combo] = {
                     combo: combo,
+                    original: combo,
                     label: def.label || combo,
-                    action: def.action || null
+                    action: def.action || null,
+                    overridden: false
                 };
                 changed = true;
+            } else {
+                var nextLabel = def.label || combo;
+                var nextAction = def.action || null;
+
+                if (existing.label !== nextLabel) {
+                    existing.label = nextLabel;
+                    changed = true;
+                }
+                if (existing.action !== nextAction) {
+                    existing.action = nextAction;
+                    changed = true;
+                }
+                if (existing.original !== combo) {
+                    existing.original = combo;
+                    changed = true;
+                }
+                if (existing.overridden === undefined) {
+                    existing.overridden = existing.combo !== existing.original;
+                    changed = true;
+                }
             }
+        }
+
+        for (var key in bucket) {
+            if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
+            if (!seen[key]) {
+                delete bucket[key];
+                changed = true;
+            }
+        }
+
+        if (Object.keys(bucket).length === 0) {
+            delete this._hotkeyOverrides.windows[typeId];
+            changed = true;
         }
 
         if (changed) {
             this._saveHotkeyOverrides();
             this._notify('hotkeyOverrides', this._hotkeyOverrides);
         }
+    };
+
+    // ============================================================
+    // 4. ХОТКЕИ — ЧТЕНИЕ
+    // ============================================================
+
+    AppState.prototype.getGlobalHotkeys = function() {
+        var result = {};
+        for (var key in this._hotkeyOverrides.global) {
+            if (!Object.prototype.hasOwnProperty.call(this._hotkeyOverrides.global, key)) continue;
+            var val = this._hotkeyOverrides.global[key];
+            result[key] = {
+                combo: val.combo,
+                original: val.original || key,
+                label: val.label,
+                action: val.action,
+                overridden: !!val.overridden
+            };
+        }
+        return result;
     };
 
     AppState.prototype.getWindowHotkeys = function(typeId) {
@@ -324,48 +397,95 @@
         for (var key in bucket) {
             if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
             var val = bucket[key];
-            result[key] = { combo: val.combo, label: val.label, action: val.action };
+            result[key] = {
+                combo: val.combo,
+                original: val.original || key,
+                label: val.label,
+                action: val.action,
+                overridden: !!val.overridden
+            };
         }
         return result;
     };
 
-    AppState.prototype.getGlobalHotkeys = function() {
-        var result = {};
-        for (var key in this._hotkeyOverrides.global) {
-            if (!Object.prototype.hasOwnProperty.call(this._hotkeyOverrides.global, key)) continue;
-            var val = this._hotkeyOverrides.global[key];
-            result[key] = { combo: val.combo, label: val.label, action: val.action };
-        }
-        return result;
+    AppState.prototype.getHotkeyOverrides = function() {
+        return deepCopy(this._hotkeyOverrides);
     };
 
-    AppState.prototype.setHotkeyOverride = function(scope, key, originalCombo, newCombo) {
-        if (!newCombo) return false;
+    AppState.prototype.getEffectiveCombo = function(scope, typeId, originalCombo) {
+        var record = null;
 
         if (scope === 'global') {
-            var bucketG = this._hotkeyOverrides.global;
-            if (!bucketG[originalCombo]) return false;
-            bucketG[originalCombo].combo = newCombo;
-        } else if (scope === 'window') {
-            var bucketW = this._hotkeyOverrides.windows[key];
-            if (!bucketW) return false;
-            if (!bucketW[originalCombo]) return false;
-            bucketW[originalCombo].combo = newCombo;
-        } else return false;
+            record = this._hotkeyOverrides.global[originalCombo];
+        } else if (scope === 'window' && typeId) {
+            var bucketW = this._hotkeyOverrides.windows[typeId];
+            if (bucketW) record = bucketW[originalCombo];
+        }
+
+        return record ? record.combo : originalCombo;
+    };
+
+    AppState.prototype.isHotkeyOverridden = function(scope, typeId, originalCombo) {
+        var record = null;
+
+        if (scope === 'global') {
+            record = this._hotkeyOverrides.global[originalCombo];
+        } else if (scope === 'window' && typeId) {
+            var bucketW = this._hotkeyOverrides.windows[typeId];
+            if (bucketW) record = bucketW[originalCombo];
+        }
+
+        return !!(record && record.overridden);
+    };
+
+    // ============================================================
+    // 5. ХОТКЕИ — ЗАПИСЬ
+    // ============================================================
+
+    AppState.prototype.setHotkeyOverride = function(scope, typeId, originalCombo, newCombo) {
+        if (!originalCombo || !newCombo) return false;
+        if (originalCombo === newCombo) {
+            return this.resetHotkeyOverride(scope, typeId, originalCombo);
+        }
+
+        var record = null;
+
+        if (scope === 'global') {
+            record = this._hotkeyOverrides.global[originalCombo];
+        } else if (scope === 'window' && typeId) {
+            var bucketW = this._hotkeyOverrides.windows[typeId];
+            if (bucketW) record = bucketW[originalCombo];
+        } else {
+            return false;
+        }
+
+        if (!record) return false;
+
+        record.combo = newCombo;
+        record.overridden = true;
 
         this._saveHotkeyOverrides();
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
         return true;
     };
 
-    AppState.prototype.resetHotkeyOverride = function(scope, key, originalCombo) {
+    AppState.prototype.resetHotkeyOverride = function(scope, typeId, originalCombo) {
+        var record = null;
+
         if (scope === 'global') {
-            var bucketG = this._hotkeyOverrides.global;
-            if (bucketG[originalCombo]) bucketG[originalCombo].combo = originalCombo;
-        } else if (scope === 'window') {
-            var bucketW = this._hotkeyOverrides.windows[key];
-            if (bucketW && bucketW[originalCombo]) bucketW[originalCombo].combo = originalCombo;
+            record = this._hotkeyOverrides.global[originalCombo];
+        } else if (scope === 'window' && typeId) {
+            var bucketW = this._hotkeyOverrides.windows[typeId];
+            if (bucketW) record = bucketW[originalCombo];
+        } else {
+            return false;
         }
+
+        if (!record) return false;
+
+        record.combo = record.original || originalCombo;
+        record.overridden = false;
+
         this._saveHotkeyOverrides();
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
         return true;
@@ -374,14 +494,19 @@
     AppState.prototype.resetAllHotkeyOverrides = function() {
         for (var key in this._hotkeyOverrides.global) {
             if (!Object.prototype.hasOwnProperty.call(this._hotkeyOverrides.global, key)) continue;
-            this._hotkeyOverrides.global[key].combo = key;
+            var r = this._hotkeyOverrides.global[key];
+            r.combo = r.original || key;
+            r.overridden = false;
         }
+
         for (var typeId in this._hotkeyOverrides.windows) {
             if (!Object.prototype.hasOwnProperty.call(this._hotkeyOverrides.windows, typeId)) continue;
             var bucket = this._hotkeyOverrides.windows[typeId];
             for (var k in bucket) {
                 if (!Object.prototype.hasOwnProperty.call(bucket, k)) continue;
-                bucket[k].combo = k;
+                var r2 = bucket[k];
+                r2.combo = r2.original || k;
+                r2.overridden = false;
             }
         }
 
@@ -389,16 +514,17 @@
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
 
-    AppState.prototype.getHotkeyOverrides = function() {
-        return deepCopy(this._hotkeyOverrides);
-    };
-
     AppState.prototype.setHotkeyOverrides = function(data) {
         if (!data || typeof data !== 'object') return;
 
+        var migrated = (data._version && data._version >= HOTKEY_OVERRIDES_VERSION)
+            ? data
+            : this._migrateHotkeyOverridesV1toV2(data);
+
         this._hotkeyOverrides = {
-            global: (data.global && typeof data.global === 'object') ? data.global : {},
-            windows: (data.windows && typeof data.windows === 'object') ? data.windows : {}
+            _version: HOTKEY_OVERRIDES_VERSION,
+            global: (migrated.global && typeof migrated.global === 'object') ? migrated.global : {},
+            windows: (migrated.windows && typeof migrated.windows === 'object') ? migrated.windows : {}
         };
 
         this._saveHotkeyOverrides();
@@ -406,7 +532,7 @@
     };
 
     // ============================================================
-    // 4. СВЁРНУТОСТЬ ГРУПП
+    // 6. СВЁРНУТОСТЬ ГРУПП
     // ============================================================
 
     AppState.prototype.getCollapsedGroups = function() {
@@ -443,7 +569,7 @@
     };
 
     // ============================================================
-    // 5. ПОДПИСКИ
+    // 7. ПОДПИСКИ
     // ============================================================
 
     AppState.prototype.subscribe = function(key, callback) {
@@ -487,7 +613,7 @@
     };
 
     // ============================================================
-    // 6. ПЕРСИСТЕНТНОСТЬ
+    // 8. ПЕРСИСТЕНТНОСТЬ
     // ============================================================
 
     AppState.prototype._loadFromStorage = function() {
@@ -529,7 +655,12 @@
             if (hotkeysStr) {
                 var hk = JSON.parse(hotkeysStr);
                 if (hk && typeof hk === 'object' && !Array.isArray(hk)) {
+                    if (!hk._version || hk._version < HOTKEY_OVERRIDES_VERSION) {
+                        hk = this._migrateHotkeyOverridesV1toV2(hk);
+                    }
+
                     this._hotkeyOverrides = {
+                        _version: HOTKEY_OVERRIDES_VERSION,
                         global: (hk.global && typeof hk.global === 'object' && !Array.isArray(hk.global))
                             ? hk.global
                             : {},
@@ -550,6 +681,44 @@
         } catch (e) {
             console.warn('[AppState] Storage load error:', e);
         }
+    };
+
+    AppState.prototype._migrateHotkeyOverridesV1toV2 = function(old) {
+        var result = {
+            _version: HOTKEY_OVERRIDES_VERSION,
+            global: {},
+            windows: {}
+        };
+
+        var migrateBucket = function(bucket) {
+            var out = {};
+            for (var key in bucket) {
+                if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
+                var rec = bucket[key] || {};
+                var combo = rec.combo || key;
+                out[key] = {
+                    combo: combo,
+                    original: key,
+                    label: rec.label || key,
+                    action: rec.action || null,
+                    overridden: combo !== key
+                };
+            }
+            return out;
+        };
+
+        if (old && old.global) {
+            result.global = migrateBucket(old.global);
+        }
+
+        if (old && old.windows) {
+            for (var tid in old.windows) {
+                if (!Object.prototype.hasOwnProperty.call(old.windows, tid)) continue;
+                result.windows[tid] = migrateBucket(old.windows[tid]);
+            }
+        }
+
+        return result;
     };
 
     AppState.prototype._saveThemeMode = function() {
@@ -583,6 +752,7 @@
     AppState.prototype._saveHotkeyOverrides = function() {
         if (typeof localStorage === 'undefined') return;
         try {
+            this._hotkeyOverrides._version = HOTKEY_OVERRIDES_VERSION;
             localStorage.setItem(
                 STORAGE_KEYS.HOTKEY_OVERRIDES,
                 JSON.stringify(this._hotkeyOverrides)
@@ -599,6 +769,10 @@
             );
         } catch (e) {}
     };
+
+    // ============================================================
+    // 9. JSON
+    // ============================================================
 
     AppState.prototype.toJSON = function() {
         return {
@@ -623,7 +797,7 @@
     };
 
     // ============================================================
-    // 7. УНИЧТОЖЕНИЕ
+    // 10. УНИЧТОЖЕНИЕ
     // ============================================================
 
     AppState.prototype.destroy = function() {
@@ -634,11 +808,13 @@
 
         this._listeners = {};
         this._globalListeners = [];
-        this._hotkeyOverrides = { global: {}, windows: {} };
+        this._hotkeyOverrides = {
+            _version: HOTKEY_OVERRIDES_VERSION,
+            global: {},
+            windows: {}
+        };
         this._windowGroupCollapsed = {};
         this._account = null;
-
-        console.log('[AppState] Destroyed');
     };
 
     // ============================================================
@@ -646,13 +822,17 @@
     // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { AppState: AppState, STORAGE_KEYS: STORAGE_KEYS };
+        module.exports = {
+            AppState: AppState,
+            STORAGE_KEYS: STORAGE_KEYS,
+            HOTKEY_OVERRIDES_VERSION: HOTKEY_OVERRIDES_VERSION
+        };
     }
 
     if (typeof window !== 'undefined') {
         window.AppState = AppState;
         window.AppState.STORAGE_KEYS = STORAGE_KEYS;
-        console.log('[AppState] Registered globally v5.0.0');
+        window.AppState.HOTKEY_OVERRIDES_VERSION = HOTKEY_OVERRIDES_VERSION;
     }
 
 })();

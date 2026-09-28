@@ -1683,6 +1683,55 @@
                     btn.appendChild(sh);
                 }
 
+                // === PATCH: поддержка item.actions (кнопки-иконки справа) ===
+                // Формат: actions: [{ icon, title?, danger?, onClick(item, event) }]
+                // Клик по кнопке НЕ триггерит onClick самого item.
+                if (Array.isArray(item.actions) && item.actions.length > 0) {
+                    const actionsWrap = document.createElement('span');
+                    actionsWrap.className = 'ui-catpanel__item-actions';
+
+                    for (const act of item.actions) {
+                        if (!act || typeof act !== 'object') continue;
+
+                        const ab = document.createElement('button');
+                        ab.type = 'button';
+                        ab.className = 'ui-catpanel__item-action';
+                        if (act.danger) ab.classList.add('danger');
+                        if (act.title) ab.title = act.title;
+
+                        if (act.icon) {
+                            if (typeof act.icon === 'string' && act.icon.startsWith('icon-')) {
+                                ab.appendChild(host.ui.icon.svg(act.icon, 11));
+                            } else {
+                                ab.textContent = String(act.icon);
+                            }
+                        }
+
+                        ab.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            try {
+                                if (typeof act.onClick === 'function') act.onClick(item, e);
+                            } catch (err) {
+                                console.error('[ui.categoryPanel] action click error:', err);
+                            }
+                            // По умолчанию action не закрывает панель — иначе нельзя
+                            // сделать, например, «закрыть среду, но оставить панель открытой».
+                            if (act.closePanel === true) closePanel();
+                        });
+
+                        // Клик по иконке не должен выделять строку hover’ом самого item
+                        ab.addEventListener('mousedown', (e) => {
+                            e.stopPropagation();
+                        });
+
+                        actionsWrap.appendChild(ab);
+                    }
+
+                    btn.appendChild(actionsWrap);
+                }
+                // === /PATCH ===
+
                 if (!item.disabled) {
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
@@ -2335,76 +2384,6 @@
     });
 
     // ═══════════════════════════════════════════════════════════════
-    // УТИЛИТЫ — CANVAS
-    // ═══════════════════════════════════════════════════════════════
-
-    registerComponent('utils', 'canvas', {
-        version: '1.0.0',
-
-        roundRect(ctx, x, y, w, h, r) {
-            r = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
-            ctx.beginPath();
-            ctx.moveTo(x + r, y);
-            ctx.lineTo(x + w - r, y);
-            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-            ctx.lineTo(x + w, y + h - r);
-            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-            ctx.lineTo(x + r, y + h);
-            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-            ctx.lineTo(x, y + r);
-            ctx.quadraticCurveTo(x, y, x + r, y);
-            ctx.closePath();
-        },
-
-        bezier(ctx, x1, y1, x2, y2, k = 0.5) {
-            const dx = Math.max(40, Math.abs(x2 - x1) * k);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.bezierCurveTo(x1 + dx, y1, x2 - dx, y2, x2, y2);
-        },
-
-        multiBezier(ctx, points, segmentK = 0.35) {
-            if (points.length < 2) return;
-            ctx.beginPath();
-            ctx.moveTo(points[0].x, points[0].y);
-
-            if (points.length === 2) {
-                const dx = Math.max(40, Math.abs(points[1].x - points[0].x) * 0.5);
-                ctx.bezierCurveTo(
-                    points[0].x + dx, points[0].y,
-                    points[1].x - dx, points[1].y,
-                    points[1].x, points[1].y
-                );
-                return;
-            }
-
-            for (let i = 0; i < points.length - 1; i++) {
-                const p0 = i === 0 ? points[i] : points[i - 1];
-                const p1 = points[i];
-                const p2 = points[i + 1];
-                const p3 = i + 2 < points.length ? points[i + 2] : points[i + 1];
-
-                const c1x = p1.x + (p2.x - p0.x) * segmentK;
-                const c1y = p1.y + (p2.y - p0.y) * segmentK;
-                const c2x = p2.x - (p3.x - p1.x) * segmentK;
-                const c2y = p2.y - (p3.y - p1.y) * segmentK;
-
-                ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
-            }
-        },
-
-        distToSegment(px, py, x1, y1, x2, y2) {
-            const dx = x2 - x1, dy = y2 - y1;
-            const len2 = dx * dx + dy * dy;
-            let t = len2 > 0 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
-            t = Math.max(0, Math.min(1, t));
-            const cx = x1 + dx * t, cy = y1 + dy * t;
-            const ddx = px - cx, ddy = py - cy;
-            return { dist: Math.sqrt(ddx * ddx + ddy * ddy), t, point: { x: cx, y: cy } };
-        }
-    });
-
-    // ═══════════════════════════════════════════════════════════════
     // УТИЛИТЫ — FILE
     // ═══════════════════════════════════════════════════════════════
 
@@ -2458,426 +2437,864 @@
     });
 
     // ═══════════════════════════════════════════════════════════════
-    // УТИЛИТЫ — GRAPH2D (Camera + GridCache)
+    // SYSTEM CONTROLS — header items для шапки окна
     // ═══════════════════════════════════════════════════════════════
-    //
-    // Общие утилиты для 2D-редакторов (NodeGraphWindow, 2DWindow и т.п.).
-    //
-    // Theme: объект { palette: { gridSmall, gridMedium, gridLarge, ... } }.
-    // Если тема не передана — используются дефолтные цвета сетки.
-    //
-    //   const cam = this.utils.graph2d.camera({ physics: {...} });
-    //   const gc  = this.utils.graph2d.gridCache(this._theme);
-    //   gc.render(ctx, cam, w, h, dpr);
 
-    (function installGraph2DUtils() {
-        'use strict';
+    (function installSystemControls() {
+        if (!window.HeaderController) return;
+        if (window.HeaderController.getHeaderItemTypes().indexOf('sys-close') !== -1) return;
 
-        const ZOOM_MIN = 0.15;
-        const ZOOM_MAX = 4.0;
-        const ZOOM_STEP_KEY = 0.1;
+        // ────────────────────────────────────────────────────────────
+        // HELPERS
+        // ────────────────────────────────────────────────────────────
 
-        const GRID_SMALL = 16;
-        const GRID_MEDIUM = GRID_SMALL * 10;
-        const GRID_LARGE = GRID_MEDIUM * 10;
-        const GRID_TILE_WORLD = GRID_LARGE;
-
-        const GRID_LOD_MEDIUM_MIN = 0.15;
-        const GRID_LOD_SMALL_MIN  = 0.45;
-
-        const _clamp = (v, mn, mx) => v < mn ? mn : (v > mx ? mx : v);
-
-        class Camera {
-            constructor() {
-                this.x = 0;
-                this.y = 0;
-                this.zoom = 1.0;
-                this.viewportWidth = 0;
-                this.viewportHeight = 0;
-
-                this.velocityX = 0;
-                this.velocityY = 0;
-                this.velocityZoom = 0;
-                this.friction = 0.92;
-                this.frictionZoom = 0.85;
-                this.maxVelocity = 100;
-                this.maxVelocityZoom = 0.5;
-                this.isPhysicsEnabled = true;
-
-                this.isAnimating = false;
-                this.animationId = null;
-                this.animStartTime = 0;
-                this.animDuration = 300;
-
-                this.startX = 0; this.startY = 0; this.startZoom = 1.0;
-                this.targetX = 0; this.targetY = 0; this.targetZoom = 1.0;
-
-                this.bezierP1 = { x: 0.25, y: 0.1 };
-                this.bezierP2 = { x: 0.25, y: 1.0 };
-
-                this._cachedCenter = null;
-                this._listeners = {
-                    onZoom: [], onPan: [], onReset: [],
-                    onAnimationStart: [], onAnimationEnd: []
-                };
-            }
-
-            setViewport(w, h) {
-                if (w <= 0 || h <= 0) return;
-                this.viewportWidth = w;
-                this.viewportHeight = h;
-                this._cachedCenter = null;
-            }
-
-            worldToScreen(wx, wy) {
-                return { x: (wx + this.x) * this.zoom, y: (wy + this.y) * this.zoom };
-            }
-            screenToWorld(sx, sy) {
-                return { x: sx / this.zoom - this.x, y: sy / this.zoom - this.y };
-            }
-            getViewCenter() {
-                if (this._cachedCenter) return this._cachedCenter;
-                this._cachedCenter = {
-                    x: this.viewportWidth / 2 / this.zoom - this.x,
-                    y: this.viewportHeight / 2 / this.zoom - this.y
-                };
-                return this._cachedCenter;
-            }
-            invalidateCache() { this._cachedCenter = null; }
-
-            setPhysicsParams(friction, frictionZoom, maxVelocity, maxVelocityZoom) {
-                this.friction = _clamp(friction, 0.5, 0.99);
-                this.frictionZoom = _clamp(frictionZoom, 0.5, 0.99);
-                this.maxVelocity = Math.max(1, maxVelocity);
-                this.maxVelocityZoom = Math.max(0.01, maxVelocityZoom);
-            }
-
-            applyImpulse(dx, dy, dZoom = 0) {
-                if (!this.isPhysicsEnabled) return;
-                this.velocityX += dx; this.velocityY += dy; this.velocityZoom += dZoom;
-            }
-
-            _updatePhysics(dt) {
-                if (!this.isPhysicsEnabled) return;
-                const d = Math.min(dt, 0.05);
-                if (Math.abs(this.velocityX) > 0.001 || Math.abs(this.velocityY) > 0.001) {
-                    this.x += this.velocityX * d;
-                    this.y += this.velocityY * d;
-                    this.velocityX *= this.friction;
-                    this.velocityY *= this.friction;
-                    if (Math.abs(this.velocityX) < 0.001) this.velocityX = 0;
-                    if (Math.abs(this.velocityY) < 0.001) this.velocityY = 0;
-                    this._cachedCenter = null;
-                }
-                if (Math.abs(this.velocityZoom) > 0.0001) {
-                    this.zoom = _clamp(this.zoom + this.velocityZoom * d, ZOOM_MIN, ZOOM_MAX);
-                    this.velocityZoom *= this.frictionZoom;
-                    if (Math.abs(this.velocityZoom) < 0.0001) this.velocityZoom = 0;
-                    this._cachedCenter = null;
-                }
-            }
-
-            zoomToPoint(targetZoom, screenX, screenY, animate = false) {
-                targetZoom = _clamp(targetZoom, ZOOM_MIN, ZOOM_MAX);
-                if (Math.abs(targetZoom - this.zoom) < 0.0005) return;
-
-                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
-                const worldBefore = this.screenToWorld(screenX, screenY);
-
-                if (!animate) {
-                    this.zoom = targetZoom;
-                    this.x = (screenX / this.zoom) - worldBefore.x;
-                    this.y = (screenY / this.zoom) - worldBefore.y;
-                    this._cachedCenter = null;
-                    this._emit('onZoom', { zoom: this.zoom });
-                    return;
-                }
-
-                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
-                this.targetZoom = targetZoom;
-                this.targetX = (screenX / targetZoom) - worldBefore.x;
-                this.targetY = (screenY / targetZoom) - worldBefore.y;
-                this.isAnimating = true;
-                this.animStartTime = performance.now();
-                this._startAnimation();
-                this._emit('onZoom', { zoom: targetZoom });
-            }
-
-            zoomToCenter(targetZoom, animate = true) {
-                targetZoom = _clamp(targetZoom, ZOOM_MIN, ZOOM_MAX);
-                if (Math.abs(targetZoom - this.zoom) < 0.0005) return;
-                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
-
-                const c = this.getViewCenter();
-                const newX = -(c.x) + this.viewportWidth / 2 / targetZoom;
-                const newY = -(c.y) + this.viewportHeight / 2 / targetZoom;
-
-                if (!animate) {
-                    this.x = newX; this.y = newY; this.zoom = targetZoom;
-                    this._cachedCenter = null;
-                    this._emit('onZoom', { zoom: this.zoom });
-                    return;
-                }
-                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
-                this.targetX = newX; this.targetY = newY; this.targetZoom = targetZoom;
-                this.isAnimating = true;
-                this.animStartTime = performance.now();
-                this._startAnimation();
-                this._emit('onZoom', { zoom: targetZoom });
-            }
-
-            zoomIn(step = ZOOM_STEP_KEY) { this.zoomToCenter(Math.min(ZOOM_MAX, this.zoom + step)); }
-            zoomOut(step = ZOOM_STEP_KEY) { this.zoomToCenter(Math.max(ZOOM_MIN, this.zoom - step)); }
-
-            moveCenterTo(worldX, worldY, animate = true) {
-                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
-                const targetX = -(worldX) + this.viewportWidth / 2 / this.zoom;
-                const targetY = -(worldY) + this.viewportHeight / 2 / this.zoom;
-
-                if (!animate) {
-                    this.x = targetX; this.y = targetY;
-                    this._cachedCenter = null;
-                    this._emit('onPan', { x: this.x, y: this.y });
-                    return;
-                }
-                this.startX = this.x; this.startY = this.y;
-                this.targetX = targetX; this.targetY = targetY;
-                this.startZoom = this.zoom; this.targetZoom = this.zoom;
-                this.isAnimating = true;
-                this.animStartTime = performance.now();
-                this._startAnimation();
-                this._emit('onPan', { x: targetX, y: targetY });
-            }
-
-            panByWorld(dxWorld, dyWorld) {
-                this.x -= dxWorld;
-                this.y -= dyWorld;
-                this._cachedCenter = null;
-                this._emit('onPan', { x: this.x, y: this.y });
-            }
-
-            reset(animate = true) {
-                this.velocityX = 0; this.velocityY = 0; this.velocityZoom = 0;
-                if (!animate) {
-                    this.x = 0; this.y = 0; this.zoom = 1.0;
-                    this._cachedCenter = null;
-                    this.isAnimating = false;
-                    this._emit('onReset', { x: 0, y: 0, zoom: 1.0 });
-                    return;
-                }
-                this.startX = this.x; this.startY = this.y; this.startZoom = this.zoom;
-                this.targetX = 0; this.targetY = 0; this.targetZoom = 1.0;
-                this.isAnimating = true;
-                this.animStartTime = performance.now();
-                this._startAnimation();
-                this._emit('onReset', { x: 0, y: 0, zoom: 1.0 });
-            }
-
-            _bezierEasing(t) {
-                const p1x = this.bezierP1.x, p1y = this.bezierP1.y;
-                const p2x = this.bezierP2.x, p2y = this.bezierP2.y;
-                let g = t;
-                for (let i = 0; i < 10; i++) {
-                    const cx = 3 * p1x * (1 - g) * (1 - g) + 3 * p2x * (1 - g) * g * g + g ** 3;
-                    if (Math.abs(cx - t) < 0.001) break;
-                    g -= (cx - t) / (6 * (1 - g) * (p1x * (1 - g) + p2x * g) + 3 * (p2x - p1x) * g * g + 3 * g * g);
-                    g = _clamp(g, 0, 1);
-                }
-                return 3 * p1y * (1 - g) ** 2 + 3 * p2y * (1 - g) * g * g + g ** 3;
-            }
-
-            _startAnimation() {
-                if (this.animationId !== null) return;
-                this._emit('onAnimationStart', {});
-                this._animateStep();
-            }
-
-            _animateStep() {
-                if (!this.isAnimating) { this.animationId = null; return; }
-                const elapsed = performance.now() - this.animStartTime;
-                const p = Math.min(1, elapsed / this.animDuration);
-                const e = this._bezierEasing(p);
-
-                this.x = this.startX + (this.targetX - this.startX) * e;
-                this.y = this.startY + (this.targetY - this.startY) * e;
-                this.zoom = this.startZoom + (this.targetZoom - this.startZoom) * e;
-                this.zoom = Math.round(this.zoom * 1000) / 1000;
-                this._cachedCenter = null;
-
-                if (p >= 1) {
-                    this.x = this.targetX; this.y = this.targetY; this.zoom = this.targetZoom;
-                    this.isAnimating = false;
-                    this.animationId = null;
-                    this._cachedCenter = null;
-                    this._emit('onAnimationEnd', { x: this.x, y: this.y, zoom: this.zoom });
-                    return;
-                }
-                this.animationId = requestAnimationFrame(() => this._animateStep());
-            }
-
-            stopAnimation() {
-                this.isAnimating = false;
-                if (this.animationId) { cancelAnimationFrame(this.animationId); this.animationId = null; }
-                this._emit('onAnimationEnd', { canceled: true });
-            }
-
-            update(dt) { if (this.isPhysicsEnabled) this._updatePhysics(dt); }
-
-            on(e, cb) { if (this._listeners[e]) this._listeners[e].push(cb); return this; }
-            off(e, cb) {
-                if (this._listeners[e]) this._listeners[e] = this._listeners[e].filter(x => x !== cb);
-                return this;
-            }
-            _emit(e, d) {
-                if (this._listeners[e]) for (const cb of this._listeners[e]) {
-                    try { cb(d); } catch (err) { console.error(`[Camera] ${e}:`, err); }
-                }
-            }
-
-            getZoomPercent() { return Math.round(this.zoom * 100); }
-
-            destroy() { this.stopAnimation(); this._listeners = {}; }
+        function esc(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
-        class GridCache {
-            constructor(theme) {
-                this.theme = theme || null;
-                this._tile = null;
-                this._tileDpr = 1;
-                this._tileZoomKey = null;
-                this._tileSizePx = 0;
-            }
-
-            static lodForZoom(z) {
-                if (z < GRID_LOD_MEDIUM_MIN) return { small: false, medium: false, large: true };
-                if (z < GRID_LOD_SMALL_MIN)  return { small: false, medium: true,  large: true };
-                return { small: true, medium: true, large: true };
-            }
-
-            _lodKey(lod) { return `${lod.small ? 1 : 0}${lod.medium ? 1 : 0}${lod.large ? 1 : 0}`; }
-
-            _palette() {
-                const p = this.theme && this.theme.palette ? this.theme.palette : null;
-                return {
-                    small:  (p && p.gridSmall)  || 'rgba(128,128,128,0.06)',
-                    medium: (p && p.gridMedium) || 'rgba(128,128,128,0.13)',
-                    large:  (p && p.gridLarge)  || 'rgba(128,128,128,0.22)'
-                };
-            }
-
-            ensureTile(zoom, dpr) {
-                const lod = GridCache.lodForZoom(zoom);
-                const key = this._lodKey(lod);
-                const tileSizeCss = GRID_TILE_WORLD * zoom;
-                const clampedSize = Math.max(64, Math.min(4096, Math.round(tileSizeCss)));
-
-                if (this._tile && this._tileZoomKey === key &&
-                    Math.abs(this._tileSizePx - clampedSize) < 0.5 &&
-                    this._tileDpr === dpr) {
-                    return { lod, tile: this._tile, tileSizeCss: this._tileSizePx / this._tileDpr };
-                }
-
-                this._tile = this._buildTile(lod, clampedSize, dpr);
-                this._tileZoomKey = key;
-                this._tileDpr = dpr;
-                this._tileSizePx = clampedSize;
-                return { lod, tile: this._tile, tileSizeCss: clampedSize / dpr };
-            }
-
-            _buildTile(lod, sizeCss, dpr) {
-                if (typeof document === 'undefined') return null;
-                const c = document.createElement('canvas');
-                c.width = Math.max(1, Math.floor(sizeCss * dpr));
-                c.height = Math.max(1, Math.floor(sizeCss * dpr));
-                const ctx = c.getContext('2d');
-                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                ctx.clearRect(0, 0, sizeCss, sizeCss);
-
-                const colors = this._palette();
-                const scale = sizeCss / GRID_TILE_WORLD;
-
-                const draw = (stepWorld, color) => {
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 1;
-                    const stepPx = stepWorld * scale;
-                    if (stepPx < 2) return;
-                    ctx.beginPath();
-                    for (let x = 0; x <= sizeCss + 0.5; x += stepPx) {
-                        const px = Math.round(x) + 0.5;
-                        ctx.moveTo(px, 0); ctx.lineTo(px, sizeCss);
-                    }
-                    for (let y = 0; y <= sizeCss + 0.5; y += stepPx) {
-                        const py = Math.round(y) + 0.5;
-                        ctx.moveTo(0, py); ctx.lineTo(sizeCss, py);
-                    }
-                    ctx.stroke();
-                };
-
-                if (lod.small)  draw(GRID_SMALL,  colors.small);
-                if (lod.medium) draw(GRID_MEDIUM, colors.medium);
-                if (lod.large)  draw(GRID_LARGE,  colors.large);
-
-                return c;
-            }
-
-            render(ctx, camera, w, h, dpr) {
-                const { tile, tileSizeCss } = this.ensureTile(camera.zoom, dpr);
-                if (!tile || tileSizeCss < 4) return;
-
-                const worldLeft = -camera.x;
-                const worldTop  = -camera.y;
-
-                const tileIndexX = Math.floor(worldLeft / GRID_TILE_WORLD);
-                const tileIndexY = Math.floor(worldTop  / GRID_TILE_WORLD);
-
-                const offsetX = (tileIndexX * GRID_TILE_WORLD - worldLeft) * camera.zoom;
-                const offsetY = (tileIndexY * GRID_TILE_WORLD - worldTop)  * camera.zoom;
-
-                const tilesX = Math.ceil(w / tileSizeCss) + 1;
-                const tilesY = Math.ceil(h / tileSizeCss) + 1;
-
-                ctx.save();
-                ctx.imageSmoothingEnabled = false;
-                for (let ty = 0; ty <= tilesY; ty++) {
-                    for (let tx = 0; tx <= tilesX; tx++) {
-                        const x = offsetX + tx * tileSizeCss;
-                        const y = offsetY + ty * tileSizeCss;
-                        if (x > w || y > h) continue;
-                        if (x + tileSizeCss < 0 || y + tileSizeCss < 0) continue;
-                        ctx.drawImage(tile, x, y, tileSizeCss, tileSizeCss);
-                    }
-                }
-                ctx.restore();
-            }
-
-            invalidate() { this._tile = null; this._tileZoomKey = null; this._tileSizePx = 0; }
+        function makeBaseButton() {
+            var btn = document.createElement('button');
+            btn.setAttribute('type', 'button');
+            btn.className = 'window-action-btn';
+            btn.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'width:22px',
+                'min-width:22px',
+                'height:22px',
+                'padding:0',
+                'border-width:1px',
+                'border-style:solid',
+                'border-color:var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:4px',
+                'background:var(--bg-hover, rgba(40, 40, 40, 0.4))',
+                'color:var(--text-secondary, #a09888)',
+                'cursor:pointer',
+                'transition:background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                'flex-shrink:0',
+                'box-sizing:border-box'
+            ].join(';');
+            return btn;
         }
 
-        registerComponent('utils', 'graph2d', {
-            version: '1.0.0',
+        function attachHover(btn, options) {
+            options = options || {};
 
-            ZOOM_MIN, ZOOM_MAX, ZOOM_STEP_KEY,
-            GRID_SMALL, GRID_MEDIUM, GRID_LARGE, GRID_TILE_WORLD,
-            GRID_LOD_MEDIUM_MIN, GRID_LOD_SMALL_MIN,
-            Camera, GridCache,
+            var baseBg = options.bg || 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+            var baseBorder = options.border || 'var(--border-color, rgba(200, 184, 154, 0.12))';
+            var baseColor = options.color || 'var(--text-secondary, #a09888)';
 
-            camera(opts = {}) {
-                const cam = new Camera();
-                if (opts.physics) {
-                    cam.setPhysicsParams(
-                        opts.physics.friction,
-                        opts.physics.frictionZoom,
-                        opts.physics.maxVelocity,
-                        opts.physics.maxVelocityZoom
-                    );
-                }
-                return cam;
-            },
+            var hoverBg = options.hoverBg || 'var(--bg-active, rgba(60, 60, 60, 0.8))';
+            var hoverBorder = options.hoverBorder || 'var(--border-hover, rgba(200, 184, 154, 0.4))';
+            var hoverColor = options.hoverColor || 'var(--text-primary, #e0d8cc)';
 
-            gridCache(theme) {
-                return new GridCache(theme);
-            }
+            btn.addEventListener('mouseenter', function() {
+                this.style.background = hoverBg;
+                this.style.borderColor = hoverBorder;
+                this.style.color = hoverColor;
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = baseBg;
+                this.style.borderColor = baseBorder;
+                this.style.color = baseColor;
+            });
+        }
+
+        function setIcon(btn, iconId, size) {
+            btn.innerHTML = [
+                '<svg class="icon-svg" style="width:' + size + 'px;height:' + size + 'px;fill:currentColor;display:block;">',
+                '    <use href="#' + esc(iconId) + '"></use>',
+                '</svg>'
+            ].join('');
+        }
+
+        function makeDropdownShell(className) {
+            var dd = document.createElement('div');
+            dd.className = 'window-dropdown ' + className;
+            dd.style.cssText = [
+                'position:fixed',
+                'background:var(--bg-panel, #1a1a1a)',
+                'border:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:var(--radius, 6px)',
+                'padding:4px 0',
+                'min-width:180px',
+                'max-width:320px',
+                'width:max-content',
+                'z-index:999999',
+                'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
+                'backdrop-filter:blur(12px)',
+                'display:none',
+                'opacity:0',
+                'transform:translateY(-8px) scale(0.98)',
+                'transition:opacity 0.15s ease, transform 0.15s ease',
+                'max-height:400px',
+                'overflow-y:auto'
+            ].join(';');
+            return dd;
+        }
+
+        function openDropdown(dropdown, anchor, header) {
+            dropdown.style.display = 'block';
+            dropdown.style.opacity = '0';
+            if (header) header.positionDropdown(dropdown, anchor);
+            requestAnimationFrame(function() {
+                dropdown.style.opacity = '1';
+                dropdown.style.transform = 'translateY(0) scale(1)';
+            });
+        }
+
+        function closeDropdown(dropdown, btn) {
+            dropdown.style.display = 'none';
+            dropdown.style.opacity = '0';
+            if (btn) btn.classList.remove('active');
+        }
+
+        // ────────────────────────────────────────────────────────────
+        // 1. sys-close
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-close', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn close-btn';
+            btn.title = desc.title || 'Close Window';
+            setIcon(btn, 'icon-close', 12);
+
+            btn.addEventListener('mouseenter', function() {
+                this.style.background = 'var(--accent-red, #cc2233)';
+                this.style.borderColor = 'var(--accent-red, #cc2233)';
+                this.style.color = '#fff';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
+                this.style.color = 'var(--text-secondary, #a09888)';
+            });
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (bw && typeof bw.close === 'function') bw.close();
+                else if (bw && typeof bw.destroy === 'function') bw.destroy();
+            });
+
+            return btn;
         });
+
+        // ────────────────────────────────────────────────────────────
+        // 2. sys-minimize
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-minimize', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn minimize-btn';
+            btn.title = desc.title || 'Свернуть окно';
+            setIcon(btn, 'icon-minimize', 12);
+            attachHover(btn);
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (bw && typeof bw.minimize === 'function') bw.minimize();
+            });
+
+            return btn;
+        });
+
+        // ────────────────────────────────────────────────────────────
+        // 3. sys-fullscreen
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-fullscreen', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn fullscreen-btn';
+            attachHover(btn);
+
+            var updateIcon = function() {
+                var isFs = bw && typeof bw.isFullscreen === 'function' && bw.isFullscreen();
+                setIcon(btn, isFs ? 'icon-fullscreen-exit' : 'icon-fullscreen', 12);
+                btn.title = isFs ? 'Выйти из полного экрана' : 'На весь экран';
+            };
+
+            updateIcon();
+
+            var onLayoutChanged = function() {
+                updateIcon();
+            };
+            document.addEventListener('layout-changed', onLayoutChanged);
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                if (!bw) return;
+                if (typeof bw.isFullscreen === 'function' && bw.isFullscreen()) {
+                    if (typeof bw.exitFullscreen === 'function') bw.exitFullscreen();
+                } else {
+                    if (typeof bw.setFullscreen === 'function') bw.setFullscreen();
+                }
+            });
+
+            btn.__lsDestroy = function() {
+                document.removeEventListener('layout-changed', onLayoutChanged);
+            };
+
+            return btn;
+        });
+
+        // ────────────────────────────────────────────────────────────
+        // 4. sys-data
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-data', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var header = ctx.header;
+            var dataBus = bw && bw._dataBus;
+
+            var wrapper = document.createElement('div');
+            wrapper.className = 'window-actions data-btn-wrapper';
+            wrapper.style.cssText = 'position:relative;display:flex;flex-shrink:0;';
+
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn data-btn';
+            btn.title = desc.title || 'Данные';
+            setIcon(btn, 'icon-data', 12);
+            attachHover(btn);
+
+            wrapper.appendChild(btn);
+
+            var dropdown = makeDropdownShell('data-dropdown');
+            if (bw) dropdown.dataset.windowId = String(bw.id);
+            document.body.appendChild(dropdown);
+
+            var cleanupCallbacks = [];
+
+            var makeDataItem = function(opts) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'dropdown-item';
+
+                var iconHtml = opts.icon && opts.icon.indexOf('icon-') === 0
+                    ? '<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;"><use href="#' + esc(opts.icon) + '"></use></svg>'
+                    : (opts.icon ? '<span style="font-size:14px;flex-shrink:0;width:16px;text-align:center;">' + esc(opts.icon) + '</span>' : '');
+
+                b.innerHTML = [
+                    iconHtml,
+                    '<span style="flex:1;text-align:left;">' + esc(opts.label || '') + '</span>'
+                ].join('');
+
+                b.style.cssText = [
+                    'display:flex',
+                    'align-items:center',
+                    'gap:8px',
+                    'width:100%',
+                    'padding:7px 14px',
+                    'border:none',
+                    'background:transparent',
+                    'color:' + (opts.danger ? 'var(--accent-red, #cc2233)' : 'var(--text-primary, #e0d8cc)'),
+                    'font-size:12px',
+                    'cursor:' + (opts.disabled ? 'default' : 'pointer'),
+                    'text-align:left',
+                    'transition:background 0.15s ease',
+                    'font-family:inherit',
+                    'opacity:' + (opts.disabled ? '0.4' : '1'),
+                    'outline:none'
+                ].join(';');
+
+                if (!opts.disabled) {
+                    b.addEventListener('mouseenter', function() {
+                        this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
+                    });
+                    b.addEventListener('mouseleave', function() {
+                        this.style.background = 'transparent';
+                    });
+                    b.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (opts.onClick) opts.onClick();
+                    });
+                }
+
+                return b;
+            };
+
+            var makeAttachItem = function() {
+                var wrap = document.createElement('div');
+                wrap.style.cssText = 'position:relative;';
+
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'dropdown-item';
+                b.innerHTML = [
+                    '<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;"><use href="#icon-link"></use></svg>',
+                    '<span style="flex:1;text-align:left;">Привязать</span>',
+                    '<svg class="icon-svg" style="width:9px;height:9px;flex-shrink:0;fill:currentColor;opacity:0.6;"><use href="#icon-chevron-right"></use></svg>'
+                ].join('');
+                b.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;padding:7px 14px;border:none;background:transparent;color:var(--text-primary, #e0d8cc);font-size:12px;cursor:pointer;text-align:left;transition:background 0.15s ease;font-family:inherit;outline:none;';
+
+                b.addEventListener('mouseenter', function() {
+                    this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
+                });
+                b.addEventListener('mouseleave', function() {
+                    this.style.background = 'transparent';
+                });
+
+                var submenu = makeDropdownShell('data-submenu');
+                submenu.style.minWidth = '200px';
+                submenu.style.maxWidth = '360px';
+                submenu.style.zIndex = '1000000';
+
+                var buildSubmenu = function() {
+                    submenu.innerHTML = '';
+
+                    if (!dataBus) {
+                        submenu.appendChild(makeDataItem({
+                            icon: 'icon-warning',
+                            label: 'DataBus недоступен',
+                            disabled: true
+                        }));
+                        return;
+                    }
+
+                    var type = bw ? bw.type : 'unknown';
+                    var currentSlotId = bw && typeof bw.getSlotId === 'function' ? bw.getSlotId() : null;
+
+                    var activeSlots = dataBus.getActiveSlotsByType(type);
+                    var freeSlots = dataBus.getFreeActiveSlotsByType(type);
+                    var archivedSlots = dataBus.getArchivedSlotsByType(type);
+
+                    var all = [];
+                    var seen = {};
+                    var push = function(sid) {
+                        if (seen[sid]) return;
+                        seen[sid] = true;
+                        all.push(sid);
+                    };
+                    for (var i = 0; i < freeSlots.length; i++) push(freeSlots[i]);
+                    for (var j = 0; j < activeSlots.length; j++) push(activeSlots[j]);
+                    for (var k = 0; k < archivedSlots.length; k++) push(archivedSlots[k]);
+
+                    if (all.length === 0) {
+                        submenu.appendChild(makeDataItem({
+                            icon: '—',
+                            label: 'Нет слотов',
+                            disabled: true
+                        }));
+                        return;
+                    }
+
+                    for (var m = 0; m < all.length; m++) {
+                        var sid = all[m];
+                        var slot = dataBus.getSlot(sid);
+                        if (!slot) continue;
+
+                        var isCurrent = sid === currentSlotId;
+                        var isArchived = slot.archived;
+                        var attachedCount = slot.attachedWindows.size;
+
+                        var hint = '';
+                        if (isArchived) hint = 'архив';
+                        else if (attachedCount > 1) hint = attachedCount + ' окон';
+                        else if (attachedCount === 1) hint = '1 окно';
+
+                        var iconId = isCurrent ? 'icon-circle-filled'
+                            : (isArchived ? 'icon-archive' : 'icon-circle');
+
+                        var node = makeDataItem({
+                            icon: iconId,
+                            label: sid + (hint ? '  ·  ' + hint : ''),
+                            danger: isCurrent,
+                            onClick: (function(sidArg, isCur) {
+                                return function() {
+                                    if (!isCur) {
+                                        header._emit('data-attach', {
+                                            windowId: bw.id,
+                                            slotId: sidArg
+                                        });
+                                    }
+                                    closeDropdown(submenu, null);
+                                    closeDropdown(dropdown, btn);
+                                };
+                            })(sid, isCurrent)
+                        });
+
+                        if (isCurrent) node.style.opacity = '0.7';
+                        submenu.appendChild(node);
+                    }
+                };
+
+                var openSubmenu = function() {
+                    buildSubmenu();
+                    submenu.style.display = 'block';
+                    submenu.style.opacity = '0';
+
+                    var bRect = b.getBoundingClientRect();
+                    var ddW = submenu.offsetWidth || 200;
+                    var ddH = submenu.offsetHeight || 200;
+
+                    var left = Math.round(bRect.right + 4);
+                    var top = Math.round(bRect.top);
+
+                    if (left + ddW > window.innerWidth - 4) {
+                        left = Math.round(bRect.left - ddW - 4);
+                    }
+                    if (left < 4) left = 4;
+                    if (top + ddH > window.innerHeight - 4) {
+                        top = window.innerHeight - ddH - 4;
+                    }
+                    if (top < 4) top = 4;
+
+                    submenu.style.left = left + 'px';
+                    submenu.style.top = top + 'px';
+
+                    requestAnimationFrame(function() {
+                        submenu.style.opacity = '1';
+                    });
+                };
+
+                var closeSubmenu = function() {
+                    closeDropdown(submenu, null);
+                };
+
+                b.addEventListener('mouseenter', openSubmenu);
+                b.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    openSubmenu();
+                });
+
+                wrap.addEventListener('mouseleave', function(e) {
+                    if (submenu.contains(e.relatedTarget)) return;
+                    closeSubmenu();
+                });
+                submenu.addEventListener('mouseleave', function(e) {
+                    if (wrap.contains(e.relatedTarget)) return;
+                    closeSubmenu();
+                });
+
+                wrap.appendChild(b);
+                document.body.appendChild(submenu);
+
+                cleanupCallbacks.push(function() {
+                    if (submenu.parentNode) submenu.parentNode.removeChild(submenu);
+                });
+
+                return wrap;
+            };
+
+            var defaultDataMenu = function() {
+                return [
+                    { icon: 'icon-import', label: 'Импорт', action: 'import' },
+                    { icon: 'icon-export', label: 'Экспорт', action: 'export' },
+                    { divider: true },
+                    { icon: 'icon-plus',   label: 'Новый слот', action: 'new-slot' },
+                    { icon: 'icon-link',   label: 'Привязать',  action: 'attach' }
+                ];
+            };
+
+            var buildDataMenuItem = function(item, realInstance) {
+                if (!item || typeof item !== 'object') return null;
+
+                if (item.divider) {
+                    var hr = document.createElement('hr');
+                    hr.style.cssText = 'border:none;border-top:1px solid var(--border-color, rgba(200, 184, 154, 0.12));margin:4px 8px;opacity:0.3;';
+                    return hr;
+                }
+
+                if (item.header) {
+                    var h = document.createElement('div');
+                    h.className = 'dropdown-header';
+                    h.style.cssText = 'padding:6px 14px 4px;font-size:10px;font-weight:600;color:var(--text-muted, rgba(200,184,154,0.35));text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border-color, rgba(200,184,154,0.12));margin-bottom:2px;pointer-events:none;';
+                    h.textContent = item.header;
+                    return h;
+                }
+
+                var proto = (typeof window !== 'undefined' && window.BaseWindowInstance)
+                    ? window.BaseWindowInstance.prototype
+                    : null;
+
+                var canImport = !!realInstance
+                    && typeof realInstance.onImport === 'function'
+                    && (!proto || realInstance.onImport !== proto.onImport);
+                var canExport = !!realInstance
+                    && typeof realInstance.onExport === 'function'
+                    && (!proto || realInstance.onExport !== proto.onExport);
+
+                if (item.action === 'import') {
+                    return makeDataItem({
+                        icon: item.icon || 'icon-import',
+                        label: item.label || 'Импорт',
+                        disabled: item.disabled || !canImport,
+                        onClick: function() {
+                            header._emit('data-import', { windowId: bw.id });
+                            closeDropdown(dropdown, btn);
+                        }
+                    });
+                }
+
+                if (item.action === 'export') {
+                    return makeDataItem({
+                        icon: item.icon || 'icon-export',
+                        label: item.label || 'Экспорт',
+                        disabled: item.disabled || !canExport,
+                        onClick: function() {
+                            header._emit('data-export', { windowId: bw.id });
+                            closeDropdown(dropdown, btn);
+                        }
+                    });
+                }
+
+                if (item.action === 'new-slot') {
+                    return makeDataItem({
+                        icon: item.icon || 'icon-plus',
+                        label: item.label || 'Новый слот',
+                        disabled: !!item.disabled,
+                        onClick: function() {
+                            header._emit('data-new-slot', { windowId: bw.id });
+                            closeDropdown(dropdown, btn);
+                        }
+                    });
+                }
+
+                if (item.action === 'attach') {
+                    return makeAttachItem();
+                }
+
+                if (typeof item.onClick === 'function') {
+                    return makeDataItem({
+                        icon: item.icon || null,
+                        label: item.label || '',
+                        disabled: !!item.disabled,
+                        danger: !!item.danger,
+                        onClick: function() {
+                            try {
+                                item.onClick(item, { baseWindow: bw });
+                            } catch (e) {
+                                console.error('[UserAPI.sys-data] onClick error:', e);
+                            }
+                            closeDropdown(dropdown, btn);
+                        }
+                    });
+                }
+
+                if (item.action) {
+                    return makeDataItem({
+                        icon: item.icon || null,
+                        label: item.label || '',
+                        disabled: !!item.disabled,
+                        danger: !!item.danger,
+                        onClick: function() {
+                            header._emit('menu-action', {
+                                windowId: bw.id,
+                                action: item.action,
+                                value: item.value || '',
+                                payload: item.payload !== undefined ? item.payload : null,
+                                item: item
+                            });
+                            closeDropdown(dropdown, btn);
+                        }
+                    });
+                }
+
+                return null;
+            };
+
+            var renderItems = function() {
+                dropdown.innerHTML = '';
+
+                var realInstance = bw && typeof bw.getRealInstance === 'function'
+                    ? bw.getRealInstance()
+                    : null;
+
+                if (realInstance
+                    && typeof realInstance._hasCustomDataMenuOpen === 'function'
+                    && realInstance._hasCustomDataMenuOpen()) {
+                    try {
+                        realInstance.onDataMenuOpen(btn, dropdown);
+                    } catch (e) {
+                        console.error('[UserAPI.sys-data] onDataMenuOpen error:', e);
+                    }
+                    return;
+                }
+
+                var items = (realInstance && typeof realInstance._resolveDataMenu === 'function')
+                    ? realInstance._resolveDataMenu()
+                    : defaultDataMenu();
+
+                for (var i = 0; i < items.length; i++) {
+                    var el = buildDataMenuItem(items[i], realInstance);
+                    if (el) dropdown.appendChild(el);
+                }
+            };
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+
+                document.querySelectorAll('.data-dropdown').forEach(function(el) {
+                    if (el !== dropdown) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                    }
+                });
+
+                var isOpen = dropdown.style.display === 'block';
+                if (isOpen) {
+                    closeDropdown(dropdown, btn);
+                    return;
+                }
+
+                renderItems();
+                if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
+                openDropdown(dropdown, btn, header);
+                btn.classList.add('active');
+            });
+
+            var closeHandler = function(e) {
+                if (dropdown.style.display !== 'block') return;
+                if (btn.contains(e.target)) return;
+                if (dropdown.contains(e.target)) return;
+                closeDropdown(dropdown, btn);
+            };
+            document.addEventListener('click', closeHandler);
+
+            var repositionHandler = function() {
+                if (dropdown.style.display !== 'block') return;
+                if (header) header.positionDropdown(dropdown, btn);
+            };
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+
+            wrapper.__lsDestroy = function() {
+                document.removeEventListener('click', closeHandler);
+                window.removeEventListener('resize', repositionHandler);
+                window.removeEventListener('scroll', repositionHandler, true);
+                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+                for (var i = 0; i < cleanupCallbacks.length; i++) {
+                    try { cleanupCallbacks[i](); } catch (e) {}
+                }
+                cleanupCallbacks = [];
+            };
+
+            return wrapper;
+        });
+
+        // ────────────────────────────────────────────────────────────
+        // 5. sys-changeType
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-changeType', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var header = ctx.header;
+            var registry = ctx.registry;
+
+            var wrapper = document.createElement('div');
+            wrapper.className = 'window-actions change-type-wrapper';
+            wrapper.style.cssText = 'position:relative;display:flex;flex-shrink:0;';
+
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn change-type-btn';
+            btn.title = desc.title || 'Change Window Type';
+            setIcon(btn, 'icon-window-type', 12);
+            attachHover(btn);
+
+            wrapper.appendChild(btn);
+
+            var dropdown = makeDropdownShell('change-type-dropdown');
+            if (bw) dropdown.dataset.windowId = String(bw.id);
+            document.body.appendChild(dropdown);
+
+            var renderItems = function() {
+                var allTypes = registry ? registry.getAllTypes() : [];
+                var currentType = bw ? bw.type : null;
+
+                var html = '<div style="padding:6px 14px 4px 14px;font-size:10px;font-weight:600;color:var(--text-muted, rgba(200,184,154,0.35));text-transform:uppercase;letter-spacing:0.5px;">Change Window Type</div><hr style="border:none;border-top:1px solid var(--border-color, rgba(200,184,154,0.12));margin:4px 8px;opacity:0.3;">';
+
+                for (var i = 0; i < allTypes.length; i++) {
+                    var type = allTypes[i];
+                    var isActive = type.id === currentType;
+                    var iconHtml = type.icon && typeof type.icon === 'string' && type.icon.indexOf('icon-') === 0
+                        ? '<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;"><use href="#' + esc(type.icon) + '"></use></svg>'
+                        : '<span style="font-size:14px;flex-shrink:0;">' + esc(type.icon || '📄') + '</span>';
+
+                    html += '<button class="dropdown-item' + (isActive ? ' active' : '') + '" data-type-id="' + esc(type.id) + '" style="display:flex;align-items:center;gap:8px;width:100%;padding:6px 14px;border:none;background:' + (isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent') + ';color:var(--text-primary, #e0d8cc);font-size:12px;cursor:pointer;text-align:left;transition:background 0.15s ease;font-family:inherit;border-radius:0;border-left:2px solid ' + (isActive ? 'var(--accent-red, #cc2233)' : 'transparent') + ';">' + iconHtml + '<span style="flex:1;">' + esc(type.name) + '</span>' + (isActive ? '<span style="color:var(--accent-red, #cc2233);margin-left:4px;">✓</span>' : '') + '</button>';
+                }
+
+                dropdown.innerHTML = html;
+            };
+
+            dropdown.addEventListener('click', function(e) {
+                var item = e.target.closest('.dropdown-item');
+                if (!item) return;
+                e.stopPropagation();
+                e.preventDefault();
+
+                var newType = item.dataset.typeId;
+                if (newType && bw && newType !== bw.type) {
+                    header._emit('change-type', { windowId: bw.id, newType: newType });
+                }
+                closeDropdown(dropdown, btn);
+            });
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+
+                document.querySelectorAll('.change-type-dropdown').forEach(function(el) {
+                    if (el !== dropdown) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                    }
+                });
+
+                var isOpen = dropdown.style.display === 'block';
+                if (isOpen) {
+                    closeDropdown(dropdown, btn);
+                    return;
+                }
+
+                renderItems();
+                if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
+                openDropdown(dropdown, btn, header);
+                btn.classList.add('active');
+            });
+
+            var closeHandler = function(e) {
+                if (dropdown.style.display !== 'block') return;
+                if (btn.contains(e.target)) return;
+                if (dropdown.contains(e.target)) return;
+                closeDropdown(dropdown, btn);
+            };
+            document.addEventListener('click', closeHandler);
+
+            var repositionHandler = function() {
+                if (dropdown.style.display !== 'block') return;
+                if (header) header.positionDropdown(dropdown, btn);
+            };
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+
+            wrapper.__lsDestroy = function() {
+                document.removeEventListener('click', closeHandler);
+                window.removeEventListener('resize', repositionHandler);
+                window.removeEventListener('scroll', repositionHandler, true);
+                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+            };
+
+            return wrapper;
+        });
+
+        // ────────────────────────────────────────────────────────────
+        // 6. sys-layout
+        // ────────────────────────────────────────────────────────────
+
+        HeaderController.registerHeaderItemType('sys-layout', function(desc, ctx) {
+            var bw = ctx.baseWindow;
+            var header = ctx.header;
+            var layoutManager = ctx.layoutManager;
+
+            var wrapper = document.createElement('div');
+            wrapper.className = 'window-actions layout-wrapper';
+            wrapper.style.cssText = 'position:relative;display:flex;flex-shrink:0;';
+
+            var btn = makeBaseButton();
+            btn.className = 'window-action-btn layout-toggle-btn';
+            btn.title = desc.title || 'Change Layout';
+            setIcon(btn, 'icon-layout', 12);
+            attachHover(btn);
+
+            wrapper.appendChild(btn);
+
+            var dropdown = makeDropdownShell('layout-dropdown');
+            if (bw) dropdown.dataset.windowId = String(bw.id);
+            document.body.appendChild(dropdown);
+
+            var renderItems = function() {
+                var styles = layoutManager ? layoutManager.getAvailableStyles() : [];
+                var currentStyle = layoutManager ? layoutManager.getCurrentStyle() : null;
+
+                if (styles.length === 0) {
+                    dropdown.innerHTML = '<div style="padding:8px 14px;color:var(--text-muted, rgba(200,184,154,0.35));font-size:12px;text-align:center;">No layouts available</div>';
+                    return;
+                }
+
+                var html = '<div style="padding:6px 14px 4px 14px;font-size:10px;font-weight:600;color:var(--text-muted, rgba(200,184,154,0.35));text-transform:uppercase;letter-spacing:0.5px;">Layout Style</div><hr style="border:none;border-top:1px solid var(--border-color, rgba(200,184,154,0.12));margin:4px 8px;opacity:0.3;">';
+
+                for (var i = 0; i < styles.length; i++) {
+                    var style = styles[i];
+                    var isActive = style.id === currentStyle;
+                    html += '<button class="dropdown-item' + (isActive ? ' active' : '') + '" data-style-id="' + esc(style.id) + '" style="display:flex;align-items:center;gap:8px;width:100%;padding:6px 14px;border:none;background:' + (isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent') + ';color:var(--text-primary, #e0d8cc);font-size:12px;cursor:pointer;text-align:left;transition:background 0.15s ease;font-family:inherit;border-radius:0;border-left:2px solid ' + (isActive ? 'var(--accent-red, #cc2233)' : 'transparent') + ';"><span style="font-size:16px;">' + esc(style.icon || '⊞') + '</span><span style="flex:1;">' + esc(style.label) + '</span>' + (isActive ? '<span style="color:var(--accent-red, #cc2233);margin-left:4px;">✓</span>' : '') + '</button>';
+                }
+
+                dropdown.innerHTML = html;
+            };
+
+            dropdown.addEventListener('click', function(e) {
+                var item = e.target.closest('.dropdown-item');
+                if (!item) return;
+                e.stopPropagation();
+                e.preventDefault();
+
+                var styleId = item.dataset.styleId;
+                if (styleId) {
+                    header._emit('layout-change', { windowId: bw.id, styleId: styleId });
+                }
+                closeDropdown(dropdown, btn);
+            });
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+
+                document.querySelectorAll('.layout-dropdown').forEach(function(el) {
+                    if (el !== dropdown) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                    }
+                });
+
+                var isOpen = dropdown.style.display === 'block';
+                if (isOpen) {
+                    closeDropdown(dropdown, btn);
+                    return;
+                }
+
+                renderItems();
+                if (window.__uiMenuRegistry) window.__uiMenuRegistry.closeAll();
+                openDropdown(dropdown, btn, header);
+                btn.classList.add('active');
+            });
+
+            var closeHandler = function(e) {
+                if (dropdown.style.display !== 'block') return;
+                if (btn.contains(e.target)) return;
+                if (dropdown.contains(e.target)) return;
+                closeDropdown(dropdown, btn);
+            };
+            document.addEventListener('click', closeHandler);
+
+            var repositionHandler = function() {
+                if (dropdown.style.display !== 'block') return;
+                if (header) header.positionDropdown(dropdown, btn);
+            };
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+
+            wrapper.__lsDestroy = function() {
+                document.removeEventListener('click', closeHandler);
+                window.removeEventListener('resize', repositionHandler);
+                window.removeEventListener('scroll', repositionHandler, true);
+                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+            };
+
+            return wrapper;
+        });
+
     })();
 
 })();
