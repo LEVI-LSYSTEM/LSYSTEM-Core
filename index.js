@@ -11,6 +11,9 @@
     // переходят в компактный (иконочный) режим.
     const HEADER_COMPACT_BREAKPOINT = 900;
 
+    // Ширина viewport (в px), при которой скрываются названия в логотипе.
+    const HEADER_COMPACT_BREAKPOINT_NAME = 500;
+
     // Гистерезис, чтобы не дёргалось на границе.
     const HEADER_COMPACT_HYSTERESIS = 4;
 
@@ -1262,6 +1265,7 @@
         if (!el.header) return;
 
         let compact = false;
+        let namesCompact = false;
         let rafId = null;
 
         const applyState = () => {
@@ -1280,9 +1284,21 @@
                 shouldCompact = viewportW <= (HEADER_COMPACT_BREAKPOINT + HEADER_COMPACT_HYSTERESIS);
             }
 
+            let shouldCompactNames = namesCompact;
+            if (!namesCompact) {
+                shouldCompactNames = viewportW <= HEADER_COMPACT_BREAKPOINT_NAME;
+            } else {
+                shouldCompactNames = viewportW <= (HEADER_COMPACT_BREAKPOINT_NAME + HEADER_COMPACT_HYSTERESIS);
+            }
+
             if (shouldCompact !== compact) {
                 compact = shouldCompact;
                 el.header.classList.toggle('is-compact', compact);
+            }
+
+            if (shouldCompactNames !== namesCompact) {
+                namesCompact = shouldCompactNames;
+                el.header.classList.toggle('is-name-compact', namesCompact);
             }
         };
 

@@ -1,10 +1,5 @@
 // core/window/WindowChrome.js
-// Версия 5.0.0
-// - headerItems: direction:rtl + justify-content:flex-start.
-//   Правый край items прибит к правому краю шапки.
-//   При сжатии содержимое уходит за ЛЕВЫЙ край и обрезается.
-//   Порядок items в DOM — прямой (совпадает с static menu).
-// - Внутри items — обычный LTR (компенсация через CSS-правило .window-header-items > *).
+// Версия 5.1.0
 
 (function() {
     'use strict';
@@ -179,8 +174,7 @@
         this._headerItems.className = 'window-header-items';
         this._headerItems.style.cssText = [
             'display:flex',
-            'direction:rtl',
-            'justify-content:flex-start',
+            'justify-content:flex-end',
             'align-items:center',
             'flex:0 1 auto',
             'min-width:0',

@@ -232,9 +232,17 @@ body {
     font-weight: 300;
     border-left: 1px solid var(--border-color);
     padding-left: 8px;
-    transition: color 0.4s ease, border-color 0.4s ease;
+    transition:
+        color 0.4s ease,
+        border-color 0.4s ease,
+        max-width 0.35s ease,
+        margin 0.35s ease,
+        padding 0.35s ease,
+        opacity 0.35s ease;
     white-space: nowrap;
     flex-shrink: 0;
+    max-width: 80px;
+    overflow: hidden;
 }
 
 .logo-project-name {
@@ -248,7 +256,13 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: color 0.4s ease, border-color 0.4s ease, opacity 0.4s ease;
+    transition:
+        color 0.4s ease,
+        border-color 0.4s ease,
+        opacity 0.35s ease,
+        max-width 0.35s ease,
+        margin 0.35s ease,
+        padding 0.35s ease;
     letter-spacing: 0.2px;
     position: relative;
     top: 0.5px;
@@ -2572,9 +2586,13 @@ body.header-collapsed[data-theme="light"] .header {
     gap: 4px;
 }
 
-.header.is-compact .logo-sub,
-.header.is-compact .logo-project-name {
-    display: none !important;
+.header.is-name-compact .logo-sub,
+.header.is-name-compact .logo-project-name {
+    max-width: 0;
+    margin-left: 0;
+    padding-left: 0;
+    border-left-color: transparent;
+    opacity: 0;
 }
 
 .header.is-compact .logo {

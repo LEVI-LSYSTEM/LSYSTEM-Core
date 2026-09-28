@@ -1,28 +1,24 @@
 // core/PluginSystem.js
-// Версия 12.0.0 — Оркестратор плагинов под новый PluginLoader v2.0.0.
+// Версия 13.0.0 — без манифеста.
 //
 // Модель:
-//   - Один manifest.json в корне рабочей папки. ОБЯЗАТЕЛЕН.
-//   - Все .js из manifest.files выполняются по priority (см. PluginLoader).
-//   - Плагин = окно (определяется автоматически по static meta).
-//   - Выключенные плагины — выполняются, но типы снимаются из реестра.
-//   - URL-плагины живут отдельно (IndexedDB, хранятся в .lsu).
-//   - NodeGraph сам запрашивает nodes/ и presets/ через listFolder().
+//   - Один рабочий каталог плагинов. Никакого manifest.json.
+//   - Все .js из папки выполняются по алфавиту (см. PluginLoader).
+//   - Плагин = окно (класс с static meta.id в module.exports).
+//   - Выключенные плагины — снимаются из реестра, но остаются в списке.
+//   - URL-плагины живут отдельно (IndexedDB, .lsu).
 //
 // API:
 //   loadAll / reload
 //   pickFolder / restoreFolder / forgetFolder / rescanFolder
 //   requestFolderPermission
 //   getFolderName / getFolderState / getPluginSource
-//
 //   getAllPlugins / getActivePlugins / getHiddenPlugins
 //   enablePlugin / disablePlugin / uninstallPlugin
-//
 //   installFromUrl / checkUpdates
 //   getUrlPlugins / getUrlPlugin(id)
-//
-//   listFolder(folderName)         — для NodeGraph
-//   readFile(path)                 — для NodeGraph
+//   listFolder(folderName) / listFolderByRelPath(folderName)
+//   readFile(path)
 //   readAsset(name) / resolveAsset(name) / getAssetIndex()
 //
 // События:
@@ -33,12 +29,6 @@
 
 (function() {
     'use strict';
-
-    console.log('[PluginSystem] Loading v12.0.0...');
-
-    // ================================================================
-    // ХЕЛПЕРЫ
-    // ================================================================
 
     function _slugFromUrl(url) {
         if (!url) return null;
@@ -67,10 +57,6 @@
         return trimmed;
     }
 
-    // ================================================================
-    // ОСНОВНОЙ КЛАСС
-    // ================================================================
-
     class PluginSystem {
         constructor(options) {
             options = options || {};
@@ -86,11 +72,10 @@
             this._isLoaded = false;
             this._isLoading = false;
             this._loadPromise = null;
-            this._plugins = new Map();       // id → plugin descriptor
+            this._plugins = new Map();
             this._folderState = 'none';
             this._folderName = '';
             this._lastReloadAt = 0;
-            this._manifest = null;
 
             this._debug = !!options.debug;
 
@@ -113,10 +98,7 @@
             if (window.PluginLoader) {
                 this._loader = new window.PluginLoader({
                     folderSource: this._folderSource,
-                    registry: this._registry,
-                    onLog: this._debug
-                        ? function(msg) { console.log('[PluginLoader]', msg); }
-                        : null
+                    registry: this._registry
                 });
             } else {
                 console.warn('[PluginSystem] PluginLoader not available');
@@ -129,7 +111,6 @@
 
         async loadAll() {
             if (this._isLoaded && !this._isLoading) {
-                if (this._debug) console.log('[PluginSystem] Already loaded');
                 return;
             }
 
@@ -150,17 +131,12 @@
         }
 
         async _doLoadAll() {
-            console.log('[PluginSystem] Loading plugins...');
-
-            // 1) Восстановить рабочую папку
             await this._tryRestoreFolder();
 
-            // 2) Загрузить плагины из папки (scan + loadAll)
             if (this._folderState === 'granted' && this._loader) {
                 try {
                     var ok = await this._loader.scan();
                     if (ok) {
-                        this._manifest = this._loader.getManifest();
                         await this._loader.loadAll();
                         this._refreshPluginsFromRegistry();
                     }
@@ -169,7 +145,6 @@
                 }
             }
 
-            // 3) URL-плагины
             if (this._urlStorage) {
                 try {
                     await this._loadUrlPlugins();
@@ -178,17 +153,12 @@
                 }
             }
 
-            console.log('[PluginSystem] Loaded ' + this._plugins.size + ' plugin(s)');
             this._emit('plugins:changed', { plugins: this.getAllPlugins() });
         }
 
         async reload() {
-            console.log('[PluginSystem] Reloading plugins...');
-
-            // Снимаем типы всех folder-плагинов
             this._clearFolderPlugins();
             this._plugins.clear();
-            this._manifest = null;
 
             if (this._loader) {
                 this._loader.resetFull();
@@ -202,7 +172,7 @@
         }
 
         // ============================================================
-        // ПЕРЕСБОРКА СПИСКА ПЛАГИНОВ ИЗ РЕЕСТРА
+        // ПЕРЕСБОРКА СПИСКА ПЛАГИНОВ
         // ============================================================
 
         _refreshPluginsFromRegistry() {
@@ -210,33 +180,31 @@
 
             var loadedIds = this._loader.getLoadedIds();
             var fileMap = this._loader.getPluginFileMap();
-            var disabled = this._loader.getDisabledIds();
+            var disabledSet = new Set(this._loader.getDisabledIds());
 
-            // Обновляем записи для folder-плагинов
             for (var i = 0; i < loadedIds.length; i++) {
-                var id = loadedIds[i];
+                var id = String(loadedIds[i]);
                 var typeConfig = this._registry.getType(id);
-                if (!typeConfig) continue;
+                var isDisabled = disabledSet.has(id);
 
-                var file = fileMap[id] || '';
-                var enabled = !this._loader.isDisabled(id);
+                var name = typeConfig ? typeConfig.name : id;
+                var icon = typeConfig ? typeConfig.icon : 'icon-layout';
+                var meta = typeConfig ? (typeConfig.metadata || {}) : {};
+                var description = typeConfig ? (typeConfig.description || '') : '';
 
-                var meta = typeConfig.metadata || {};
-                var plugin = {
+                this._plugins.set(id, {
                     id: id,
-                    name: typeConfig.name || id,
+                    name: name,
                     version: meta.version || '1.0.0',
                     author: meta.author || '',
-                    icon: typeConfig.icon || 'icon-layout',
-                    description: typeConfig.description || '',
+                    icon: icon,
+                    description: description,
                     source: 'folder',
-                    enabled: enabled,
+                    enabled: !isDisabled,
                     url: null,
-                    file: file,
+                    file: fileMap[id] || '',
                     installedAt: 0
-                };
-
-                this._plugins.set(id, plugin);
+                });
             }
         }
 
@@ -252,7 +220,6 @@
                 if (ok) {
                     this._folderState = 'granted';
                     this._folderName = this._folderSource.getDisplayName() || '';
-                    console.log('[PluginSystem] Folder restored: ' + this._folderName);
                 } else {
                     var perm = await this._folderSource.queryPermission();
                     if (perm === 'prompt') {
@@ -282,7 +249,6 @@
             if (!this._folderSource) return false;
 
             try {
-                // Снимаем старые folder-плагины
                 this._clearFolderPlugins();
                 if (this._loader) this._loader.resetFull();
 
@@ -295,7 +261,6 @@
                 if (this._loader) {
                     var scanOk = await this._loader.scan();
                     if (scanOk) {
-                        this._manifest = this._loader.getManifest();
                         await this._loader.loadAll();
                         this._refreshPluginsFromRegistry();
                     }
@@ -334,15 +299,12 @@
             if (!this._loader) return false;
 
             try {
-                // Снимаем типы, чтобы не было дублей
                 this._clearFolderPlugins();
-
                 this._loader.reset();
 
                 var ok = await this._loader.scan();
                 if (!ok) return false;
 
-                this._manifest = this._loader.getManifest();
                 await this._loader.loadAll();
                 this._refreshPluginsFromRegistry();
 
@@ -400,24 +362,18 @@
             return this._folderSource;
         }
 
-        getManifest() {
-            return this._manifest;
-        }
-
         // ============================================================
         // ПЛАГИНЫ — список
         // ============================================================
 
         getAllPlugins() {
             var out = [];
-            var self = this;
 
-            // 1) Core-типы (встроенные)
             if (this._registry && typeof this._registry.getAllTypes === 'function') {
                 var types = this._registry.getAllTypes() || [];
                 for (var i = 0; i < types.length; i++) {
                     var t = types[i];
-                    if (self._plugins.has(t.id)) continue; // дальше добавим как folder/url
+                    if (this._plugins.has(t.id)) continue;
                     var meta = t.metadata || {};
                     out.push({
                         id: t.id,
@@ -435,7 +391,6 @@
                 }
             }
 
-            // 2) Folder/URL плагины
             this._plugins.forEach(function(p) {
                 out.push(Object.assign({}, p));
             });
@@ -465,9 +420,14 @@
                 if (!file) return false;
 
                 this._loader.setDisabled(id, false);
-                await this._loader.reloadFile(file);
+                var ok = await this._loader.reloadFile(file);
 
-                plugin.enabled = true;
+                if (!ok) {
+                    var typeConfig = this._registry ? this._registry.getType(id) : null;
+                    if (!typeConfig) return false;
+                }
+
+                this._refreshPluginsFromRegistry();
                 this._emit('plugins:changed', { plugins: this.getAllPlugins() });
                 return true;
             }
@@ -518,18 +478,11 @@
             return false;
         }
 
-        /**
-         * Удалить плагин.
-         * Folder — только снимает тип и запоминает как disabled.
-         * URL — удаляет из storage и registry.
-         */
         async uninstallPlugin(id) {
             var plugin = this._plugins.get(id);
             if (!plugin) return false;
 
             if (plugin.source === 'folder') {
-                // File удалить нельзя (пользователь сам его уберёт)
-                // Просто деактивируем
                 if (this._loader) this._loader.setDisabled(id, true);
                 if (this._registry && typeof this._registry.unregister === 'function') {
                     try { this._registry.unregister(id); } catch (e) {}
@@ -645,7 +598,6 @@
             for (var i = 0; i < newIds.length; i++) {
                 var reg = this._registry ? this._registry.getType(newIds[i]) : null;
                 if (reg) {
-                    // Если id изменился — удаляем старую запись
                     if (newIds[i] !== record.id) {
                         await this._urlStorage.remove(record.id);
                     }
@@ -726,7 +678,7 @@
         }
 
         // ============================================================
-        // ФАЙЛЫ / АССЕТЫ — API для NodeGraph и окон
+        // ФАЙЛЫ / АССЕТЫ
         // ============================================================
 
         listFolder(folderName) {
@@ -809,7 +761,6 @@
             this._folderSource = null;
             this._urlStorage = null;
             this._loader = null;
-            console.log('[PluginSystem] Destroyed');
         }
     }
 
@@ -819,7 +770,6 @@
 
     if (typeof window !== 'undefined') {
         window.PluginSystem = PluginSystem;
-        console.log('[PluginSystem] Registered globally v12.0.0');
     }
 
     if (typeof module !== 'undefined' && module.exports) {

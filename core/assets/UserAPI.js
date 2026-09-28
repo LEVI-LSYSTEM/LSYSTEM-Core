@@ -1,21 +1,11 @@
 // data/UserAPI.js
-// Версия 2.2.0
-// - Add: utils.graph2d (Camera + GridCache) — общие утилиты для 2D-редакторов
-// - Remove: i18n.ru (переводы больше не входят в UserAPI)
-//
-// Компоненты:
-//   ui.button, ui.input, ui.block, ui.text
-//   ui.icon (svg + canvas)
-//   ui.contextMenu, ui.modal, ui.confirm, ui.inlineEditor
-//   ui.categoryPanel, ui.listPanel
-//   utils.dom, utils.canvas, utils.file
-//   utils.graph2d (Camera, GridCache)
+// Версия 2.3.0
 
 (function() {
     'use strict';
 
     // ═══════════════════════════════════════════════════════════════
-    // UI MENU REGISTRY — глобальный реестр открытых меню
+    // UI MENU REGISTRY
     // ═══════════════════════════════════════════════════════════════
 
     (function installMenuRegistry() {
@@ -1683,9 +1673,6 @@
                     btn.appendChild(sh);
                 }
 
-                // === PATCH: поддержка item.actions (кнопки-иконки справа) ===
-                // Формат: actions: [{ icon, title?, danger?, onClick(item, event) }]
-                // Клик по кнопке НЕ триггерит onClick самого item.
                 if (Array.isArray(item.actions) && item.actions.length > 0) {
                     const actionsWrap = document.createElement('span');
                     actionsWrap.className = 'ui-catpanel__item-actions';
@@ -1715,12 +1702,9 @@
                             } catch (err) {
                                 console.error('[ui.categoryPanel] action click error:', err);
                             }
-                            // По умолчанию action не закрывает панель — иначе нельзя
-                            // сделать, например, «закрыть среду, но оставить панель открытой».
                             if (act.closePanel === true) closePanel();
                         });
 
-                        // Клик по иконке не должен выделять строку hover’ом самого item
                         ab.addEventListener('mousedown', (e) => {
                             e.stopPropagation();
                         });
@@ -1730,7 +1714,6 @@
 
                     btn.appendChild(actionsWrap);
                 }
-                // === /PATCH ===
 
                 if (!item.disabled) {
                     btn.addEventListener('click', (e) => {
@@ -2437,16 +2420,449 @@
     });
 
     // ═══════════════════════════════════════════════════════════════
-    // SYSTEM CONTROLS — header items для шапки окна
+    // HEADER ITEMS — базовые типы (button / dropdown / separator)
+    // ═══════════════════════════════════════════════════════════════
+
+    (function installBaseHeaderItems() {
+        if (!window.HeaderController) return;
+
+        function esc(s) {
+            if (s == null) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        var _registered = false;
+        if (window.HeaderController.getHeaderItemTypes().indexOf('button') !== -1
+            && window.HeaderController.getHeaderItemTypes().indexOf('dropdown') !== -1
+            && window.HeaderController.getHeaderItemTypes().indexOf('separator') !== -1) {
+            _registered = true;
+        }
+        if (_registered) return;
+
+        window.HeaderController.registerHeaderItemType('button', function(desc, ctx) {
+            var btn = document.createElement('button');
+            btn.className = 'window-action-btn';
+            btn.title = desc.title || '';
+            btn.setAttribute('type', 'button');
+
+            if (desc.action) btn.setAttribute('data-action', desc.action);
+            if (desc.value)  btn.setAttribute('data-value', desc.value);
+
+            var iconHtml = desc.icon && desc.icon.indexOf('icon-') === 0
+                ? '<svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;flex-shrink:0;"><use href="#' + esc(desc.icon) + '"></use></svg>'
+                : esc(desc.icon || '');
+
+            var labelHtml = desc.label
+                ? '<span class="btn-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:var(--rw-label-opacity, 1);max-width:var(--rw-label-maxw, 80px);">' + esc(desc.label) + '</span>'
+                : '';
+
+            btn.innerHTML = [
+                '<span class="btn-icon" style="display:flex;align-items:center;flex-shrink:0;">' + iconHtml + '</span>',
+                '<span class="btn-text-wrapper" style="display:flex;align-items:center;gap:var(--rw-btn-gap-active, 4px);min-width:0;overflow:hidden;">',
+                labelHtml,
+                '</span>'
+            ].join('');
+
+            btn.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'gap:var(--rw-btn-gap-active, 4px)',
+                'padding:0 var(--rw-btn-pad-x, 8px)',
+                'height:22px',
+                'min-height:22px',
+                'border-width:1px',
+                'border-style:solid',
+                'border-color:var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:4px',
+                'background:' + (desc.bg || 'var(--bg-hover, rgba(40, 40, 40, 0.4))'),
+                'color:' + (desc.color || 'var(--text-secondary, #a09888)'),
+                'font-size:10px',
+                'font-weight:500',
+                'cursor:pointer',
+                'transition:background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                'white-space:nowrap',
+                'font-family:inherit',
+                'flex-shrink:0',
+                'user-select:none',
+                'overflow:hidden',
+                'box-sizing:border-box'
+            ].join(';');
+
+            btn.addEventListener('mouseenter', function() {
+                if (desc.danger) {
+                    this.style.background = 'var(--accent-red, #cc2233)';
+                    this.style.borderColor = 'var(--accent-red, #cc2233)';
+                    this.style.color = '#fff';
+                    return;
+                }
+                this.style.background = desc.hoverBg || 'var(--bg-active, rgba(60, 60, 60, 0.8))';
+                this.style.borderColor = 'var(--border-hover, rgba(200, 184, 154, 0.4))';
+                this.style.color = 'var(--text-primary, #e0d8cc)';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.background = desc.bg || 'var(--bg-hover, rgba(40, 40, 40, 0.4))';
+                this.style.borderColor = 'var(--border-color, rgba(200, 184, 154, 0.12))';
+                this.style.color = desc.color || 'var(--text-secondary, #a09888)';
+            });
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+
+                if (desc.callback && typeof desc.callback === 'function') {
+                    try { desc.callback(ctx.baseWindow, ctx); } catch (err) {
+                        console.error('[UserAPI.header.button] callback error:', err);
+                    }
+                    return;
+                }
+
+                ctx.header._emit('menu-action', {
+                    windowId: ctx.header._id,
+                    action: desc.action || '',
+                    value: desc.value || '',
+                    payload: desc.payload !== undefined ? desc.payload : null,
+                    item: desc
+                });
+            });
+
+            return btn;
+        });
+
+        window.HeaderController.registerHeaderItemType('dropdown', function(desc, ctx) {
+            var header = ctx.header;
+
+            var wrapper = document.createElement('div');
+            wrapper.className = 'window-actions dropdown-wrapper';
+            if (desc.id) wrapper.dataset.dropdownId = desc.id;
+
+            wrapper.style.cssText = [
+                'position:relative',
+                'display:flex',
+                'flex-shrink:0',
+                'overflow:hidden'
+            ].join(';');
+
+            var btn = document.createElement('button');
+            btn.className = 'window-action-btn dropdown-toggle';
+            btn.title = desc.title || desc.label || 'Menu';
+            btn.setAttribute('type', 'button');
+            if (desc.action) btn.setAttribute('data-action', desc.action);
+
+            var iconHtml = desc.icon && desc.icon.indexOf('icon-') === 0
+                ? '<svg class="icon-svg" style="width:12px;height:12px;fill:currentColor;display:block;flex-shrink:0;"><use href="#' + esc(desc.icon) + '"></use></svg>'
+                : esc(desc.icon || '☰');
+
+            btn.innerHTML = [
+                '<span class="dropdown-icon" style="display:flex;align-items:center;flex-shrink:0;">' + iconHtml + '</span>',
+                '<span class="btn-text-wrapper" style="display:flex;align-items:center;gap:var(--rw-btn-gap-active, 4px);min-width:0;overflow:hidden;">',
+                '    <span class="dropdown-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:var(--rw-label-opacity, 1);max-width:var(--rw-label-maxw, 80px);">' + esc(desc.label || '') + '</span>',
+                '    <span class="dropdown-arrow" style="font-size:8px;flex-shrink:0;opacity:var(--rw-label-opacity, 1);">▼</span>',
+                '</span>'
+            ].join('');
+
+            btn.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'gap:var(--rw-btn-gap-active, 4px)',
+                'padding:0 var(--rw-btn-pad-x, 8px)',
+                'height:22px',
+                'min-height:22px',
+                'border-width:1px',
+                'border-style:solid',
+                'border-color:var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:4px',
+                'background:var(--bg-hover, rgba(40, 40, 40, 0.4))',
+                'color:var(--text-secondary, #a09888)',
+                'font-size:10px',
+                'font-weight:500',
+                'cursor:pointer',
+                'transition:background 0.2s ease, border-color 0.2s ease, color 0.2s ease',
+                'white-space:nowrap',
+                'font-family:inherit',
+                'flex-shrink:0',
+                'user-select:none',
+                'overflow:hidden',
+                'box-sizing:border-box'
+            ].join(';');
+
+            var dropdown = document.createElement('div');
+            dropdown.className = 'window-dropdown menu-dropdown';
+            if (ctx.header._id != null) dropdown.dataset.windowId = String(ctx.header._id);
+            if (desc.id) dropdown.dataset.dropdownId = desc.id;
+            dropdown.style.cssText = [
+                'position:fixed',
+                'background:var(--bg-panel, #1a1a1a)',
+                'border:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                'border-radius:var(--radius, 6px)',
+                'padding:4px 0',
+                'min-width:100px',
+                'max-width:320px',
+                'width:max-content',
+                'z-index:999999',
+                'box-shadow:0 8px 32px rgba(0,0,0,0.6)',
+                'backdrop-filter:blur(12px)',
+                'display:none',
+                'opacity:0',
+                'transform:translateY(-8px) scale(0.98)',
+                'transition:opacity 0.15s ease, transform 0.15s ease',
+                'max-height:500px',
+                'overflow-y:auto'
+            ].join(';');
+
+            var resolveItems = function() {
+                var items = desc.items;
+                if (typeof items === 'function') {
+                    try {
+                        var bw = ctx.baseWindow;
+                        var real = bw && typeof bw.getRealInstance === 'function'
+                            ? bw.getRealInstance()
+                            : bw;
+                        items = items(real, bw, ctx.layoutManager);
+                    } catch (e) {
+                        console.warn('[UserAPI.header.dropdown] items() error:', e);
+                        items = [];
+                    }
+                }
+                return Array.isArray(items) ? items : [];
+            };
+
+            var renderItems = function() {
+                var items = resolveItems();
+                renderDropdownItems(dropdown, items, header);
+            };
+
+            renderItems();
+
+            wrapper.appendChild(btn);
+            document.body.appendChild(dropdown);
+
+            var closeDropdown = function() {
+                dropdown.style.display = 'none';
+                dropdown.style.opacity = '0';
+                btn.classList.remove('active');
+                var arrow = btn.querySelector('.dropdown-arrow');
+                if (arrow) arrow.style.transform = 'rotate(0deg)';
+            };
+
+            var openDropdown = function() {
+                renderItems();
+                dropdown.style.display = 'block';
+                dropdown.style.opacity = '0';
+                header.positionDropdown(dropdown, btn);
+                requestAnimationFrame(function() {
+                    dropdown.style.opacity = '1';
+                    dropdown.style.transform = 'translateY(0) scale(1)';
+                });
+                btn.classList.add('active');
+                var arrow = btn.querySelector('.dropdown-arrow');
+                if (arrow) arrow.style.transform = 'rotate(180deg)';
+            };
+
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                e.preventDefault();
+
+                document.querySelectorAll('.menu-dropdown').forEach(function(el) {
+                    if (el !== dropdown) {
+                        el.style.display = 'none';
+                        el.style.opacity = '0';
+                    }
+                });
+
+                var isOpen = dropdown.style.display === 'block';
+                if (isOpen) closeDropdown();
+                else openDropdown();
+            });
+
+            var closeHandler = function(e) {
+                if (dropdown.style.display !== 'block') return;
+                if (wrapper.contains(e.target)) return;
+                if (dropdown.contains(e.target)) return;
+                closeDropdown();
+            };
+            document.addEventListener('click', closeHandler);
+
+            var repositionHandler = function() {
+                if (dropdown.style.display === 'block') header.positionDropdown(dropdown, btn);
+            };
+            window.addEventListener('resize', repositionHandler);
+            window.addEventListener('scroll', repositionHandler, true);
+
+            wrapper._cleanup = function() {
+                document.removeEventListener('click', closeHandler);
+                window.removeEventListener('resize', repositionHandler);
+                window.removeEventListener('scroll', repositionHandler, true);
+                if (dropdown.parentNode) dropdown.parentNode.removeChild(dropdown);
+            };
+            wrapper._refreshItems = function() {
+                if (dropdown.style.display === 'block') renderItems();
+            };
+            wrapper._closeDropdown = closeDropdown;
+
+            return wrapper;
+        });
+
+        window.HeaderController.registerHeaderItemType('separator', function(desc) {
+            var sep = document.createElement('span');
+            sep.className = 'header-separator';
+            sep.dataset.action = desc.action || '';
+            sep.style.cssText = [
+                'width:' + (desc.width || '1px'),
+                'height:' + (desc.height || '14px'),
+                'background:' + (desc.color || 'var(--border-color, rgba(200, 184, 154, 0.12))'),
+                'flex-shrink:0',
+                'margin:' + (desc.margin || '0 2px'),
+                'align-self:center',
+                'opacity:' + (desc.opacity || '0.6')
+            ].join(';');
+            return sep;
+        });
+
+        function renderDropdownItems(container, items, header) {
+            if (!Array.isArray(items)) return;
+            container.innerHTML = '';
+
+            for (var i = 0; i < items.length; i++) {
+                var item = items[i];
+                if (!item) continue;
+
+                if (item.header) {
+                    var headerEl = document.createElement('div');
+                    headerEl.className = 'dropdown-header';
+                    headerEl.style.cssText = [
+                        'padding:6px 14px 4px 14px',
+                        'font-size:10px',
+                        'font-weight:600',
+                        'color:var(--text-muted, rgba(200, 184, 154, 0.35))',
+                        'text-transform:uppercase',
+                        'letter-spacing:0.5px',
+                        'border-bottom:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                        'margin-bottom:2px',
+                        'pointer-events:none'
+                    ].join(';');
+                    headerEl.textContent = item.header;
+                    container.appendChild(headerEl);
+                    continue;
+                }
+
+                if (item.divider) {
+                    var divider = document.createElement('hr');
+                    divider.style.cssText = [
+                        'border:none',
+                        'border-top:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
+                        'margin:4px 12px',
+                        'opacity:0.3'
+                    ].join(';');
+                    container.appendChild(divider);
+                    continue;
+                }
+
+                var b = document.createElement('button');
+                b.className = 'dropdown-item';
+                b.dataset.action = item.action || '';
+                b.dataset.value = (item.value !== undefined && item.value !== null) ? String(item.value) : '';
+                b.setAttribute('type', 'button');
+
+                var isActive = item.check || false;
+                var isDanger = item.danger || false;
+                var isDisabled = item.disabled || false;
+
+                var iconHtml = item.icon && item.icon.indexOf('icon-') === 0
+                    ? '<svg class="icon-svg" style="width:14px;height:14px;flex-shrink:0;fill:currentColor;"><use href="#' + esc(item.icon) + '"></use></svg>'
+                    : (item.icon ? '<span style="font-size:14px;flex-shrink:0;">' + esc(item.icon) + '</span>' : '');
+
+                var shortcutHtml = item.shortcut
+                    ? '<span class="item-shortcut" style="color:var(--text-muted, rgba(200,184,154,0.35));font-size:9px;flex-shrink:0;">' + esc(item.shortcut) + '</span>'
+                    : '';
+
+                var checkHtml = isActive
+                    ? '<span class="dropdown-check" style="color:var(--accent-red, #cc2233);margin-left:4px;">✓</span>'
+                    : '';
+
+                b.innerHTML = [
+                    iconHtml,
+                    '<span class="item-label" style="flex:1;text-align:left;">' + esc(item.label || '') + '</span>',
+                    shortcutHtml,
+                    checkHtml
+                ].join('');
+
+                b.style.cssText = [
+                    'display:flex',
+                    'align-items:center',
+                    'gap:8px',
+                    'width:100%',
+                    'padding:6px 14px',
+                    'border:none',
+                    'background:' + (isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent'),
+                    'color:' + (isDanger ? 'var(--accent-red, #cc2233)' : 'var(--text-primary, #e0d8cc)'),
+                    'font-size:12px',
+                    'cursor:' + (isDisabled ? 'default' : 'pointer'),
+                    'text-align:left',
+                    'transition:background 0.15s ease',
+                    'font-family:inherit',
+                    'opacity:' + (isDisabled ? '0.4' : '1'),
+                    'border-left:' + (isActive ? '3px solid var(--accent-red, #cc2233)' : '3px solid transparent'),
+                    'outline:none'
+                ].join(';');
+
+                if (!isDisabled) {
+                    b.addEventListener('mouseenter', function() {
+                        this.style.background = 'var(--bg-hover, rgba(40,40,40,0.4))';
+                    });
+                    b.addEventListener('mouseleave', function() {
+                        this.style.background = isActive ? 'var(--bg-hover, rgba(40,40,40,0.4))' : 'transparent';
+                    });
+                }
+
+                b.addEventListener('click', (function(capturedItem, capturedBtn) {
+                    return function(e) {
+                        e.stopPropagation();
+                        e.preventDefault();
+
+                        if (capturedBtn.disabled) return;
+
+                        var action = capturedBtn.dataset.action || '';
+                        var value = capturedBtn.dataset.value || '';
+
+                        if (capturedItem.callback && typeof capturedItem.callback === 'function') {
+                            try {
+                                capturedItem.callback(header._baseWindow, capturedItem);
+                            } catch (err) {
+                                console.error('[UserAPI.header.dropdown] item callback error:', err);
+                            }
+                        }
+
+                        header._emit('menu-action', {
+                            windowId: header._id,
+                            action: action,
+                            value: value,
+                            payload: capturedItem.payload !== undefined ? capturedItem.payload : null,
+                            item: capturedItem
+                        });
+
+                        container.style.display = 'none';
+                        container.style.opacity = '0';
+                    };
+                })(item, b));
+
+                container.appendChild(b);
+            }
+        }
+    })();
+
+    // ═══════════════════════════════════════════════════════════════
+    // SYSTEM CONTROLS — sys-* header items
     // ═══════════════════════════════════════════════════════════════
 
     (function installSystemControls() {
         if (!window.HeaderController) return;
         if (window.HeaderController.getHeaderItemTypes().indexOf('sys-close') !== -1) return;
-
-        // ────────────────────────────────────────────────────────────
-        // HELPERS
-        // ────────────────────────────────────────────────────────────
 
         function esc(s) {
             if (s == null) return '';
@@ -2556,10 +2972,6 @@
             if (btn) btn.classList.remove('active');
         }
 
-        // ────────────────────────────────────────────────────────────
-        // 1. sys-close
-        // ────────────────────────────────────────────────────────────
-
         HeaderController.registerHeaderItemType('sys-close', function(desc, ctx) {
             var bw = ctx.baseWindow;
             var btn = makeBaseButton();
@@ -2587,10 +2999,6 @@
             return btn;
         });
 
-        // ────────────────────────────────────────────────────────────
-        // 2. sys-minimize
-        // ────────────────────────────────────────────────────────────
-
         HeaderController.registerHeaderItemType('sys-minimize', function(desc, ctx) {
             var bw = ctx.baseWindow;
             var btn = makeBaseButton();
@@ -2606,10 +3014,6 @@
 
             return btn;
         });
-
-        // ────────────────────────────────────────────────────────────
-        // 3. sys-fullscreen
-        // ────────────────────────────────────────────────────────────
 
         HeaderController.registerHeaderItemType('sys-fullscreen', function(desc, ctx) {
             var bw = ctx.baseWindow;
@@ -2646,10 +3050,6 @@
 
             return btn;
         });
-
-        // ────────────────────────────────────────────────────────────
-        // 4. sys-data
-        // ────────────────────────────────────────────────────────────
 
         HeaderController.registerHeaderItemType('sys-data', function(desc, ctx) {
             var bw = ctx.baseWindow;
@@ -3084,10 +3484,6 @@
             return wrapper;
         });
 
-        // ────────────────────────────────────────────────────────────
-        // 5. sys-changeType
-        // ────────────────────────────────────────────────────────────
-
         HeaderController.registerHeaderItemType('sys-changeType', function(desc, ctx) {
             var bw = ctx.baseWindow;
             var header = ctx.header;
@@ -3188,10 +3584,6 @@
 
             return wrapper;
         });
-
-        // ────────────────────────────────────────────────────────────
-        // 6. sys-layout
-        // ────────────────────────────────────────────────────────────
 
         HeaderController.registerHeaderItemType('sys-layout', function(desc, ctx) {
             var bw = ctx.baseWindow;

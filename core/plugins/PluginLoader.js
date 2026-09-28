@@ -1,52 +1,39 @@
 // core/plugins/PluginLoader.js
-// Версия 3.0.0 — Автодискаверинг классов-плагинов.
+// Версия 5.0.0 — авто-скан без манифеста.
 //
 // Модель:
-//   - Один manifest.json в корне рабочей папки. ОБЯЗАТЕЛЕН.
-//   - manifest.files = [{ path, priority }, ...]. Только .js.
-//   - Файлы выполняются по возрастанию priority.
-//   - После выполнения файла загрузчик ИЩЕТ классы-плагины в module.exports.
-//     Класс считается плагином, если это функция с static meta.id.
-//   - Найденные классы регистрируются через registry.registerFromClass.
-//   - Плагин = окно. Определяется автоматически: если после выполнения файла
-//     в WindowRegistry появился новый тип — это плагин. Если нет — просто
-//     shared-утилита.
-//   - Выключенные плагины (localStorage 'lsystem-plugin-disabled') выполняются,
-//     но их типы снимаются из реестра сразу после регистрации.
-//   - Ассеты (любые файлы, не только .js) индексируются по имени.
-//
-// Контракт плагина (единственный, что должен знать разработчик):
-//
-//     class MyWindow extends window.BaseWindowInstance {
-//         static get meta() { return { id: 'my-window', name: 'My Window', ... }; }
-//         // ...
-//     }
-//     module.exports = { MyWindow };
-//
-//   Всё остальное — забота ядра.
+//   - Никакого manifest.json. Папка сканируется рекурсивно.
+//   - Все .js загружаются в алфавитном порядке пути.
+//   - Файлы с префиксом "_" или "." игнорируются.
+//   - После выполнения файла ищем в module.exports классы с static meta.id.
+//     Найденные — регистрируем как окна. Остальное остаётся доступным
+//     через module.exports и/или globalThis.
+//   - require() работает синхронно из предзагруженного кэша.
 //
 // API:
-//   new PluginLoader({ folderSource, registry, onLog })
-//   await scan()                      — прочитать манифест, построить индекс
-//   await loadAll()                   — выполнить все файлы по priority
-//   listFolder(folderName)            — файлы из папки (для NodeGraph)
-//   readFile(path)                    — содержимое файла
-//   readAsset(name)                   — содержимое ассета по имени
-//   resolveAsset(name)                — путь ассета по имени
-//   getAssetIndex()                   — полный индекс ассетов
-//   getManifest()                     — текущий манифест
-//   getLoadedIds()                    — id плагинов, зарегистрированных в реестре
-//   getPluginFileMap()                — id → путь файла
-//   getDisabledIds()                  — id выключенных плагинов
-//   reset()                           — сбросить состояние
+//   new PluginLoader({ folderSource, registry })
+//   await scan()
+//   await loadAll()
+//   await reloadFile(path)
+//   listFolder(folderName)
+//   listFolderByRelPath(folderName)
+//   readFile(path)
+//   readAsset(name)
+//   resolveAsset(name)
+//   getAssetIndex()
+//   getSortedFiles()
+//   getLoadedIds()
+//   getPluginFileMap()
+//   getFilePluginMap()
+//   getDisabledIds()
+//   isDisabled(id) / setDisabled(id, bool)
+//   reset() / resetFull()
 
 (function() {
     'use strict';
 
-    console.log('[PluginLoader] Loading v3.0.0...');
-
-    var MANIFEST_FILE = 'manifest.json';
     var DISABLED_KEY = 'lsystem-plugin-disabled';
+    var MAX_SCAN_DEPTH = 32;
 
     // ================================================================
     // УТИЛИТЫ
@@ -56,19 +43,15 @@
         return /\.js$/i.test(name);
     }
 
-    function _endsWithJson(name) {
-        return /\.json$/i.test(name);
-    }
-
     function _normalizePath(p) {
         if (!p) return '';
         return String(p).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
     }
 
-    function _splitPath(p) {
-        var norm = _normalizePath(p);
-        if (!norm) return [];
-        return norm.split('/').filter(Boolean);
+    function _dirnameOf(path) {
+        var norm = _normalizePath(path);
+        var idx = norm.lastIndexOf('/');
+        return idx >= 0 ? norm.slice(0, idx) : '';
     }
 
     function _isPathInFolder(filePath, folderName) {
@@ -85,21 +68,6 @@
         if (norm === folder) return '';
         return norm.slice(folder.length + 1);
     }
-
-    function _sortByPriorityThenPath(a, b) {
-        if (a.priority !== b.priority) return a.priority - b.priority;
-        return a.path.localeCompare(b.path);
-    }
-
-    // ================================================================
-    // ПРОВЕРКА: ЯВЛЯЕТСЯ ЛИ ЗНАЧЕНИЕ КЛАССОМ-ПЛАГИНОМ
-    // ================================================================
-    //
-    // Класс-плагин — это функция с непустым static meta.id.
-    // Всё остальное (утилиты, хелперы, константы) игнорируется.
-    //
-    // Эта проверка — единственное место, где ядро решает, "что такое плагин".
-    // Если контракт нужно расширить — расширяется ровно здесь.
 
     function _isPluginClass(value) {
         if (typeof value !== 'function') return false;
@@ -119,39 +87,23 @@
 
             this.folderSource = opts.folderSource || null;
             this.registry = opts.registry || null;
-            this.onLog = typeof opts.onLog === 'function' ? opts.onLog : null;
 
-            this._manifest = null;             // распарсенный manifest.json
-            this._manifestRaw = null;          // как прочитано
-            this._sortedFiles = [];            // [{ path, priority }]
-            this._assetIndex = new Map();      // name → fullPath
-            this._assetDuplicates = [];        // [{ name, paths: [p1, p2] }]
-            this._pluginFileMap = new Map();   // pluginId → filePath
-            this._filePluginMap = new Map();   // filePath → pluginId
-            this._loadedIds = new Set();       // id, зарегистрированные в реестре
+            this._sortedFiles = [];
+            this._assetIndex = new Map();
+            this._assetDuplicates = [];
+            this._pluginFileMap = new Map();
+            this._filePluginMap = new Map();
+            this._loadedIds = new Set();
             this._disabledIds = this._readDisabledIds();
             this._scanned = false;
 
-            this._log = this._log.bind(this);
+            this._fileCache = new Map();
+            this._moduleCache = new Map();
+            this._loading = new Map();
         }
 
         // ============================================================
-        // ЛОГ
-        // ============================================================
-
-        _log(msg) {
-            console.log('[PluginLoader]', msg);
-            if (this.onLog) {
-                try { this.onLog(msg); } catch (e) {}
-            }
-        }
-
-        _warn(msg) {
-            console.warn('[PluginLoader]', msg);
-        }
-
-        // ============================================================
-        // ВЫКЛЮЧЕННЫЕ ПЛАГИНЫ (localStorage)
+        // ВЫКЛЮЧЕННЫЕ ПЛАГИНЫ
         // ============================================================
 
         _readDisabledIds() {
@@ -188,76 +140,47 @@
         // ============================================================
 
         async scan() {
-            this._manifest = null;
-            this._manifestRaw = null;
             this._sortedFiles = [];
             this._assetIndex.clear();
             this._assetDuplicates = [];
+            this._fileCache.clear();
+            this._moduleCache.clear();
+            this._loading.clear();
 
             if (!this.folderSource) {
-                this._warn('scan: no folderSource');
+                console.warn('[PluginLoader] scan: no folderSource');
                 this._scanned = false;
                 return false;
             }
 
-            // Читаем manifest.json
-            var manifestText;
-            try {
-                manifestText = await this.folderSource.readFile(MANIFEST_FILE);
-            } catch (err) {
-                this._warn('scan: manifest.json not found or unreadable: ' + err.message);
-                this._scanned = false;
-                return false;
-            }
+            var jsFiles = [];
+            await this._scanTree('', jsFiles, 0);
 
-            var manifest;
-            try {
-                manifest = JSON.parse(manifestText);
-            } catch (err) {
-                this._warn('scan: manifest.json is not valid JSON: ' + err.message);
-                this._scanned = false;
-                return false;
-            }
+            jsFiles.sort();
+            this._sortedFiles = jsFiles.map(function(p) {
+                return { path: p };
+            });
 
-            if (!manifest || typeof manifest !== 'object') {
-                this._warn('scan: manifest.json is not an object');
-                this._scanned = false;
-                return false;
-            }
-
-            this._manifest = manifest;
-            this._manifestRaw = manifestText;
-
-            // Парсим files
-            var files = Array.isArray(manifest.files) ? manifest.files : [];
-            var normalized = [];
-            for (var i = 0; i < files.length; i++) {
-                var entry = files[i];
-                if (!entry || typeof entry !== 'object') continue;
-                var path = _normalizePath(entry.path);
-                if (!path) continue;
-                if (!_endsWithJs(path)) {
-                    this._warn('scan: file "' + path + '" is not .js — skipped');
-                    continue;
+            for (var i = 0; i < this._sortedFiles.length; i++) {
+                var fp = this._sortedFiles[i].path;
+                try {
+                    var content = await this.folderSource.readFile(fp);
+                    this._fileCache.set(fp, content);
+                } catch (err) {
+                    console.warn('[PluginLoader] scan: cannot preload ' + fp + ': ' + err.message);
                 }
-                var priority = Number(entry.priority);
-                if (!isFinite(priority)) priority = 9999;
-                normalized.push({ path: path, priority: priority });
             }
-            normalized.sort(_sortByPriorityThenPath);
-            this._sortedFiles = normalized;
-
-            // Строим индекс ассетов — рекурсивно обходим всю папку
-            await this._buildAssetIndex('');
 
             this._scanned = true;
-            this._log('scan: manifest ok, ' + this._sortedFiles.length + ' file(s), '
-                + this._assetIndex.size + ' asset(s)');
-
             return true;
         }
 
-        async _buildAssetIndex(currentPath) {
+        async _scanTree(currentPath, jsFiles, depth) {
+            if (depth > MAX_SCAN_DEPTH) {
+                console.warn('[PluginLoader] scan: max depth at ' + currentPath);
+                return;
+            }
+
             var entries;
             try {
                 entries = await this.folderSource.listDir(currentPath);
@@ -267,31 +190,46 @@
 
             for (var i = 0; i < entries.length; i++) {
                 var name = entries[i];
+
+                if (name.charAt(0) === '_' || name.charAt(0) === '.') continue;
+
                 var fullPath = currentPath ? (currentPath + '/' + name) : name;
 
                 if (this.folderSource.isDirectory(name)) {
-                    await this._buildAssetIndex(fullPath);
-                } else {
-                    var slash = name.lastIndexOf('/');
-                    var baseName = slash >= 0 ? name.slice(slash + 1) : name;
+                    await this._scanTree(fullPath, jsFiles, depth + 1);
+                    continue;
+                }
 
-                    if (this._assetIndex.has(baseName)) {
-                        var existing = this._assetIndex.get(baseName);
-                        var dup = this._assetDuplicates.find(function(d) { return d.name === baseName; });
-                        if (dup) {
-                            dup.paths.push(fullPath);
-                        } else {
-                            this._assetDuplicates.push({
-                                name: baseName,
-                                paths: [existing, fullPath]
-                            });
+                if (_endsWithJs(name)) {
+                    jsFiles.push(fullPath);
+                    continue;
+                }
+
+                var slash = name.lastIndexOf('/');
+                var baseName = slash >= 0 ? name.slice(slash + 1) : name;
+
+                if (this._assetIndex.has(baseName)) {
+                    var existing = this._assetIndex.get(baseName);
+                    var dup = null;
+                    for (var d = 0; d < this._assetDuplicates.length; d++) {
+                        if (this._assetDuplicates[d].name === baseName) {
+                            dup = this._assetDuplicates[d];
+                            break;
                         }
-                        if (fullPath < existing) {
-                            this._assetIndex.set(baseName, fullPath);
-                        }
+                    }
+                    if (dup) {
+                        dup.paths.push(fullPath);
                     } else {
+                        this._assetDuplicates.push({
+                            name: baseName,
+                            paths: [existing, fullPath]
+                        });
+                    }
+                    if (fullPath < existing) {
                         this._assetIndex.set(baseName, fullPath);
                     }
+                } else {
+                    this._assetIndex.set(baseName, fullPath);
                 }
             }
         }
@@ -320,45 +258,79 @@
             return newIds;
         }
 
+        async reloadFile(path) {
+            var norm = _normalizePath(path);
+
+            var code = this._fileCache.get(norm);
+            if (code == null) {
+                try {
+                    code = await this.folderSource.readFile(norm);
+                    this._fileCache.set(norm, code);
+                } catch (err) {
+                    console.warn('[PluginLoader] reloadFile: cannot read ' + norm + ': ' + err.message);
+                    return false;
+                }
+            }
+
+            this._moduleCache.delete(norm);
+            var ids = await this._executeFile(norm);
+
+            for (var i = 0; i < ids.length; i++) {
+                this._loadedIds.add(ids[i]);
+            }
+
+            return ids.length > 0;
+        }
+
         // ============================================================
         // ВЫПОЛНЕНИЕ ФАЙЛА
         // ============================================================
-        //
-        // Порядок:
-        //   1. Прочитать код.
-        //   2. Снять снапшот реестра "до".
-        //   3. Создать module / module.exports (снаружи!).
-        //   4. Выполнить код.
-        //   5. Найти классы-плагины в module.exports.
-        //   6. Зарегистрировать их в реестре.
-        //   7. Снять снапшот "после" — получить diff.
-        //   8. Зафиксировать связь id ↔ file.
-        //   9. Если плагин выключен — снять тип из реестра.
 
         async _executeFile(path) {
             if (!this.folderSource) return [];
 
-            var code;
-            try {
-                code = await this.folderSource.readFile(path);
-            } catch (err) {
-                this._warn('Cannot read ' + path + ': ' + err.message);
-                return [];
+            // Уже выполнен (через require или предыдущий loadAll).
+            // Возвращаем id классов, которые этот модуль регистрирует.
+            if (this._moduleCache.has(path)) {
+                var cached = this._moduleCache.get(path);
+                var cachedClasses = this._discoverClasses(cached);
+                var present = [];
+                for (var ci = 0; ci < cachedClasses.length; ci++) {
+                    var cid = cachedClasses[ci].meta && cachedClasses[ci].meta.id;
+                    if (!cid) continue;
+                    if (this.registry && typeof this.registry.hasType === 'function'
+                        && this.registry.hasType(cid)) {
+                        present.push(cid);
+                    }
+                }
+                return present;
+            }
+
+            var code = this._fileCache.get(path);
+            if (code == null) {
+                try {
+                    code = await this.folderSource.readFile(path);
+                    this._fileCache.set(path, code);
+                } catch (err) {
+                    console.warn('[PluginLoader] Cannot read ' + path + ': ' + err.message);
+                    return [];
+                }
             }
 
             var beforeIds = this._snapshotRegistry();
-
-            // module создаётся СНАРУЖИ и передаётся в _execute,
-            // чтобы после выполнения прочитать module.exports.
             var moduleRef = { exports: {} };
 
-            this._execute(path, code, moduleRef);
+            this._loading.set(path, moduleRef);
+            try {
+                this._execute(path, code, moduleRef);
+            } finally {
+                this._loading.delete(path);
+            }
+            this._moduleCache.set(path, moduleRef);
 
-            // Дискаверинг классов-плагинов в module.exports.
             var discovered = this._discoverClasses(moduleRef);
 
             if (discovered.length > 0) {
-                this._log('Discovered ' + discovered.length + ' class(es) in ' + path);
                 for (var i = 0; i < discovered.length; i++) {
                     this._registerClass(discovered[i], path);
                 }
@@ -366,7 +338,6 @@
 
             var addedIds = this._diffRegistry(beforeIds);
 
-            // Фиксируем связь id ↔ file и обрабатываем disabled.
             for (var j = 0; j < addedIds.length; j++) {
                 var id = addedIds[j];
                 this._pluginFileMap.set(id, path);
@@ -374,42 +345,103 @@
 
                 if (this._disabledIds.has(String(id))) {
                     this._unregisterId(id);
-                    this._log('File ' + path + ' registered type "' + id + '" (disabled — unregistered)');
-                } else {
-                    this._log('File ' + path + ' registered type "' + id + '"');
                 }
-            }
-
-            // Сообщение о результате
-            if (addedIds.length === 0 && discovered.length === 0) {
-                this._log('File ' + path + ' executed (shared, no type)');
-            } else if (addedIds.length === 0 && discovered.length > 0) {
-                this._log('File ' + path + ' executed (no new types — already registered)');
             }
 
             return addedIds;
         }
 
         _execute(path, code, moduleRef) {
-            try {
-                var fn = new Function('module', 'exports', 'console',
-                    '"use strict";\n' + code);
-                fn(moduleRef, moduleRef.exports, console);
-            } catch (err) {
-                this._warn('Error executing ' + path + ': ' + err.message);
+            var self = this;
+            var dir = _dirnameOf(path);
+
+            function localRequire(reqPath) {
+                return self._resolveRequire(dir, reqPath);
             }
+
+            try {
+                var fn = new Function(
+                    'module', 'exports', 'console', 'require', '__filename', '__dirname',
+                    '"use strict";\n' + code
+                );
+                fn(moduleRef, moduleRef.exports, console, localRequire, path, dir);
+            } catch (err) {
+                console.warn('[PluginLoader] Error executing ' + path + ': ' + err.message);
+            }
+        }
+
+        // ============================================================
+        // REQUIRE
+        // ============================================================
+
+        _resolveRequire(fromDir, reqPath) {
+            if (!reqPath || typeof reqPath !== 'string') {
+                throw new Error('require: path must be a string');
+            }
+
+            var candidates;
+
+            if (reqPath.charAt(0) === '.') {
+                var resolved = _normalizePath(fromDir + '/' + reqPath);
+                candidates = [resolved, resolved + '.js', resolved + '/index.js'];
+            } else {
+                var root = _normalizePath(reqPath);
+                candidates = [root, root + '.js', root + '/index.js'];
+            }
+
+            for (var i = 0; i < candidates.length; i++) {
+                var c = candidates[i];
+                if (this._moduleCache.has(c)) {
+                    return this._moduleCache.get(c).exports;
+                }
+            }
+
+            var target = null;
+            for (var j = 0; j < this._sortedFiles.length; j++) {
+                var p = this._sortedFiles[j].path;
+                for (var k = 0; k < candidates.length; k++) {
+                    if (p === candidates[k]) { target = p; break; }
+                }
+                if (target) break;
+            }
+
+            if (!target) {
+                throw new Error('require: cannot resolve "' + reqPath + '" from "' + fromDir + '"');
+            }
+
+            if (this._loading.has(target)) {
+                return this._loading.get(target).exports;
+            }
+
+            var code = this._fileCache.get(target);
+            if (code == null) {
+                throw new Error('require: "' + target + '" not in cache');
+            }
+
+            var moduleRef = { exports: {} };
+            this._loading.set(target, moduleRef);
+
+            try {
+                var dir = _dirnameOf(target);
+                var self = this;
+                function nestedRequire(p) { return self._resolveRequire(dir, p); }
+
+                var fn = new Function(
+                    'module', 'exports', 'console', 'require', '__filename', '__dirname',
+                    '"use strict";\n' + code
+                );
+                fn(moduleRef, moduleRef.exports, console, nestedRequire, target, dir);
+            } finally {
+                this._loading.delete(target);
+            }
+
+            this._moduleCache.set(target, moduleRef);
+            return moduleRef.exports;
         }
 
         // ============================================================
         // ДИСКАВЕРИНГ КЛАССОВ
         // ============================================================
-        //
-        // Плагин может экспортировать:
-        //   - один класс:      module.exports = MyClass;
-        //   - объект классов:  module.exports = { MyClass, Other };
-        //   - массив классов:  module.exports = [MyClass, Other];
-        //
-        // Всё, что не является функцией с meta.id, игнорируется.
 
         _discoverClasses(moduleRef) {
             var out = [];
@@ -439,12 +471,12 @@
         }
 
         // ============================================================
-        // РЕГИСТРАЦИЯ КЛАССА В РЕЕСТРЕ
+        // РЕГИСТРАЦИЯ КЛАССА
         // ============================================================
 
         _registerClass(Class, path) {
             if (!this.registry || typeof this.registry.registerFromClass !== 'function') {
-                this._warn('registerFromClass not available — cannot register '
+                console.warn('[PluginLoader] registerFromClass not available — cannot register '
                     + (Class.meta && Class.meta.id));
                 return false;
             }
@@ -452,25 +484,14 @@
             var id = Class.meta && Class.meta.id;
             if (!id) return false;
 
-            // Уже зарегистрирован — нормально при reload плагина.
-            // Молча пропускаем, чтобы не засорять лог.
             if (typeof this.registry.hasType === 'function' && this.registry.hasType(id)) {
-                this._log('Type "' + id + '" already registered — skipping ('
-                    + (path || 'unknown') + ')');
                 return false;
             }
 
             try {
-                var ok = this.registry.registerFromClass(Class);
-                if (ok) {
-                    this._log('Registered type "' + id + '" from class ('
-                        + (path || 'unknown') + ')');
-                } else {
-                    this._warn('registerFromClass returned false for "' + id + '"');
-                }
-                return !!ok;
+                return !!this.registry.registerFromClass(Class);
             } catch (e) {
-                this._warn('registerFromClass("' + id + '") threw: ' + e.message);
+                console.warn('[PluginLoader] registerFromClass("' + id + '") threw: ' + e.message);
                 return false;
             }
         }
@@ -511,25 +532,38 @@
 
         listFolder(folderName) {
             var out = [];
+            var folder = _normalizePath(folderName);
+
+            for (var i = 0; i < this._sortedFiles.length; i++) {
+                var p = this._sortedFiles[i].path;
+                if (_isPathInFolder(p, folder)) out.push(p);
+            }
+
             this._assetIndex.forEach(function(fullPath) {
-                if (_isPathInFolder(fullPath, folderName)) {
-                    out.push(fullPath);
-                }
+                if (_isPathInFolder(fullPath, folder)) out.push(fullPath);
             });
+
             out.sort();
             return out;
         }
 
         listFolderByRelPath(folderName) {
             var out = [];
+            var folder = _normalizePath(folderName);
+
+            for (var i = 0; i < this._sortedFiles.length; i++) {
+                var p = this._sortedFiles[i].path;
+                if (_isPathInFolder(p, folder)) {
+                    out.push({ fullPath: p, relPath: _relPathWithinFolder(p, folder) });
+                }
+            }
+
             this._assetIndex.forEach(function(fullPath) {
-                if (_isPathInFolder(fullPath, folderName)) {
-                    out.push({
-                        fullPath: fullPath,
-                        relPath: _relPathWithinFolder(fullPath, folderName)
-                    });
+                if (_isPathInFolder(fullPath, folder)) {
+                    out.push({ fullPath: fullPath, relPath: _relPathWithinFolder(fullPath, folder) });
                 }
             });
+
             out.sort(function(a, b) { return a.relPath.localeCompare(b.relPath); });
             return out;
         }
@@ -545,7 +579,7 @@
             try {
                 return await this.folderSource.readFile(path);
             } catch (err) {
-                this._warn('readAsset(' + name + ') failed: ' + err.message);
+                console.warn('[PluginLoader] readAsset(' + name + ') failed: ' + err.message);
                 return null;
             }
         }
@@ -570,12 +604,8 @@
         // МЕТАДАННЫЕ
         // ============================================================
 
-        getManifest() {
-            return this._manifest;
-        }
-
         getSortedFiles() {
-            return this._sortedFiles.map(function(f) { return { path: f.path, priority: f.priority }; });
+            return this._sortedFiles.map(function(f) { return f.path; });
         }
 
         getLoadedIds() {
@@ -603,14 +633,15 @@
         // ============================================================
 
         reset() {
-            this._manifest = null;
-            this._manifestRaw = null;
             this._sortedFiles = [];
             this._assetIndex.clear();
             this._assetDuplicates = [];
             this._pluginFileMap.clear();
             this._filePluginMap.clear();
             this._loadedIds.clear();
+            this._fileCache.clear();
+            this._moduleCache.clear();
+            this._loading.clear();
             this._scanned = false;
         }
 
@@ -626,7 +657,6 @@
 
     if (typeof window !== 'undefined') {
         window.PluginLoader = PluginLoader;
-        console.log('[PluginLoader] Registered globally v3.0.0');
     }
 
     if (typeof module !== 'undefined' && module.exports) {
