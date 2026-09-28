@@ -1,8 +1,5 @@
-/* index.css */
-/* Версия 2.5.0 — Вынесены стили графика (см. окно графика) и меню Windows (см. index.js). */
-
 /* ================================================================
-   ТЁМНАЯ ТЕМА (по умолчанию)
+   ТЁМНАЯ ТЕМА
    ================================================================ */
 
 :root {
@@ -282,7 +279,7 @@ body {
 }
 
 /* ================================================================
-   BUTTONS (header)
+   BUTTONS
    ================================================================ */
 
 .btn {
@@ -391,7 +388,7 @@ body {
 }
 
 /* ================================================================
-   DROPDOWN WRAPPER (header)
+   DROPDOWN WRAPPER
    ================================================================ */
 
 .dropdown-wrapper {
@@ -410,8 +407,9 @@ body {
 .dropdown-menu {
     position: absolute;
     top: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%) translateY(-8px) scale(0.95);
+    left: 0;
+    transform: translateY(-8px) scale(0.95);
+    transform-origin: top left;
     min-width: 100px;
     background: var(--bg-panel);
     border: 1px solid var(--border-color);
@@ -424,13 +422,13 @@ body {
     z-index: 1000;
     overflow: hidden;
     backdrop-filter: blur(16px);
-    transform-origin: top center;
+    max-width: calc(100vw - 24px);
 }
 
 .dropdown-wrapper.active .dropdown-menu {
     opacity: 1;
     visibility: visible;
-    transform: translateX(-50%) translateY(0) scale(1);
+    transform: translateY(0) scale(1);
 }
 
 .dropdown-wrapper.active .dropdown-menu::before {
@@ -447,13 +445,23 @@ body {
     animation-delay: 0.1s;
 }
 
+.dropdown-menu.is-align-right {
+    transform-origin: top right;
+}
+
+.dropdown-wrapper.active .dropdown-menu.is-align-right::before {
+    left: auto;
+    right: 16px;
+    transform: translateX(0);
+}
+
 @keyframes dropdownArrowAppear {
     from { opacity: 0; transform: translateX(-50%) translateY(-4px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* ================================================================
-   DROPDOWN ITEMS (header)
+   DROPDOWN ITEMS
    ================================================================ */
 
 .dropdown-menu .dropdown-item,
@@ -648,7 +656,7 @@ body {
 }
 
 /* ================================================================
-   DIALOG (unsaved)
+   DIALOG
    ================================================================ */
 
 .unsaved-dialog-overlay {
@@ -884,7 +892,7 @@ body {
 }
 
 /* ================================================================
-   DROPDOWN ВНУТРИ ОКОН (RenderWindow)
+   DROPDOWN ВНУТРИ ОКОН
    ================================================================ */
 
 .window-dropdown {
@@ -1316,13 +1324,7 @@ body {
     }
     .dropdown-menu {
         min-width: 200px;
-        right: 0;
-        left: 50%;
-        transform: translateX(-50%) translateY(-8px) scale(0.95);
         border-radius: 10px;
-    }
-    .dropdown-wrapper.active .dropdown-menu {
-        transform: translateX(-50%) translateY(0) scale(1);
     }
     .dropdown-item {
         padding: 8px 16px;
@@ -1433,16 +1435,11 @@ body {
         min-width: 180px;
         padding: 4px 0;
         border-radius: 8px;
-        left: 50%;
-        transform: translateX(-50%) translateY(-6px) scale(0.95);
         box-shadow: 0 8px 24px rgba(0,0,0,0.7);
         border-width: 1px;
     }
     [data-theme="light"] .dropdown-menu {
         box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-    }
-    .dropdown-wrapper.active .dropdown-menu {
-        transform: translateX(-50%) translateY(0) scale(1);
     }
     .dropdown-wrapper.active .dropdown-menu::before {
         top: -6px;
@@ -1707,7 +1704,7 @@ body {
 }
 
 /* ================================================================
-   TOUCH-ОПТИМИЗАЦИЯ ЯДРА
+   TOUCH-ОПТИМИЗАЦИЯ
    ================================================================ */
 
 @media (hover: none) and (pointer: coarse) {
@@ -1760,14 +1757,14 @@ body {
    ================================================================ */
 
 #historyDropdown .dropdown-menu {
-    right: 0;
-    left: auto;
+    left: 0;
+    right: auto;
     min-width: 220px;
     max-width: 300px;
     max-height: calc(100vh - 80px);
     overflow: hidden;
     transform: translateY(-8px) scale(0.95);
-    transform-origin: top right;
+    transform-origin: top left;
 }
 
 #historyDropdown.active .dropdown-menu {
@@ -1775,6 +1772,16 @@ body {
 }
 
 #historyDropdown.active .dropdown-menu::before {
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+}
+
+#historyDropdown .dropdown-menu.is-align-right {
+    transform-origin: top right;
+}
+
+#historyDropdown.active .dropdown-menu.is-align-right::before {
     left: auto;
     right: 24px;
     transform: translateX(0);
@@ -2019,16 +2026,6 @@ body {
     #historyDropdown .dropdown-menu {
         min-width: 200px;
         max-width: 240px;
-        left: 50%;
-        transform: translateX(-50%) translateY(-8px) scale(0.95);
-        transform-origin: top center;
-    }
-    #historyDropdown.active .dropdown-menu {
-        transform: translateX(-50%) translateY(0) scale(1);
-    }
-    #historyDropdown.active .dropdown-menu::before {
-        left: 50%;
-        transform: translateX(-50%);
     }
     #historyMenu .history-entry {
         padding: 8px 8px 8px 10px;
@@ -2541,7 +2538,7 @@ body.header-collapsed[data-theme="light"] .header {
 }
 
 /* ================================================================
-   COMPACT HEADER MODE — только иконки
+   COMPACT HEADER MODE
    ================================================================ */
 
 .header.is-compact .btn {

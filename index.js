@@ -1,13 +1,18 @@
-// index.js
-// Версия 10.6.0
-// - createModal и showNotification вставляют SVG-иконки через <use>, а не текст.
-// - Иконки модалок окрашиваются по типу (error/warning/success).
-// - setupGlobalHotkeys: handler ищется по entry.original.
-
 (function() {
     'use strict';
 
     const HEADER_COLLAPSE_KEY = 'lsystem-header-collapsed';
+
+    // ============================================================
+    // КОНСТАНТЫ АДАПТИВА ШАПКИ
+    // ============================================================
+
+    // Ширина viewport (в px), при которой кнопки шапки
+    // переходят в компактный (иконочный) режим.
+    const HEADER_COMPACT_BREAKPOINT = 900;
+
+    // Гистерезис, чтобы не дёргалось на границе.
+    const HEADER_COMPACT_HYSTERESIS = 4;
 
     const state = {
         projectPath: null,
@@ -48,11 +53,13 @@
     }
 
     // ============================================================
-    // ИКОНКИ
+    // SVG-ИКОНКИ
     // ============================================================
 
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
     function makeSvgIcon(iconId, size, color) {
-        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        const svg = document.createElementNS(SVG_NS, 'svg');
         svg.setAttribute('class', 'icon-svg');
         svg.style.cssText = [
             'width:' + size + 'px',
@@ -63,14 +70,48 @@
             'margin:0'
         ].join(';');
 
-        const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+        const use = document.createElementNS(SVG_NS, 'use');
         use.setAttribute('href', '#' + iconId);
         svg.appendChild(use);
         return svg;
     }
 
+    function makeSvgIconString(iconId, size, className) {
+        const s = size || 14;
+        const cls = 'icon-svg' + (className ? ' ' + className : '');
+        return '<svg class="' + cls + '" style="width:' + s + 'px;height:' + s +
+            'px;flex-shrink:0;display:block;margin:0;fill:currentColor;">' +
+            '<use href="#' + iconId + '"></use></svg>';
+    }
+
     function isSvgIcon(value) {
         return typeof value === 'string' && value.indexOf('icon-') === 0;
+    }
+
+    function resolveIconName(icon, fallback) {
+        if (typeof icon === 'string' && icon.startsWith('icon-')) return icon;
+        return fallback || 'icon-data';
+    }
+
+    // ============================================================
+    // HTML-УТИЛИТЫ
+    // ============================================================
+
+    function escapeHtml(s) {
+        if (s == null) return '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function cssEscape(s) {
+        if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+            return CSS.escape(s);
+        }
+        return String(s).replace(/([^\w-])/g, '\\$1');
     }
 
     // ============================================================
@@ -132,12 +173,7 @@
             color: iconColor
         });
 
-        if (isSvgIcon(icon)) {
-            iconEl.appendChild(makeSvgIcon(icon, 42));
-        } else {
-            iconEl.style.fontSize = '48px';
-            iconEl.textContent = icon || '';
-        }
+        iconEl.appendChild(makeSvgIcon(resolveIconName(icon, 'icon-warning'), 42));
 
         const titleEl = document.createElement('div');
         Object.assign(titleEl.style, {
@@ -364,8 +400,7 @@
             boxSizing: 'border-box'
         });
 
-        const iconEl = makeSvgIcon(iconId, 14, accent);
-        toast.appendChild(iconEl);
+        toast.appendChild(makeSvgIcon(iconId, 14, accent));
 
         const textEl = document.createElement('span');
         textEl.style.cssText = 'overflow:hidden;text-overflow:ellipsis;';
@@ -387,18 +422,8 @@
         }, d);
     }
 
-    function escapeHtml(s) {
-        if (s == null) return '';
-        return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
     // ============================================================
-    // МЕНЮ WINDOWS — STYLES
+    // CSS МЕНЮ WINDOWS
     // ============================================================
 
     function injectWindowMenuCSS() {
@@ -471,6 +496,12 @@
                 margin-bottom: 2px;
             }
 
+            .window-menu__section .icon-svg {
+                width: 10px;
+                height: 10px;
+                opacity: 0.7;
+            }
+
             .window-menu__group-header {
                 display: flex;
                 align-items: center;
@@ -496,11 +527,18 @@
             }
 
             .window-menu__group-arrow {
-                font-size: 8px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
                 flex-shrink: 0;
-                width: 10px;
-                text-align: center;
+                width: 12px;
+                height: 12px;
                 opacity: 0.7;
+            }
+
+            .window-menu__group-arrow .icon-svg {
+                width: 10px;
+                height: 10px;
             }
 
             .window-menu__group-name {
@@ -556,16 +594,6 @@
                 opacity: 0.85;
             }
 
-            .window-menu__icon--emoji {
-                font-size: 13px;
-                line-height: 1;
-                text-align: center;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                opacity: 0.85;
-            }
-
             .window-menu__label {
                 flex: 1;
                 min-width: 0;
@@ -613,10 +641,10 @@
         const actionsRow = document.createElement('div');
         actionsRow.className = 'history-actions-row';
 
-        const undoBtn = makeHistoryActionButton('↶', 'Undo', 'Ctrl+Z', canUndo, () => {
+        const undoBtn = makeHistoryActionButton('icon-undo', 'Undo', 'Ctrl+Z', canUndo, () => {
             if (hm.canUndo()) doHistoryUndo();
         });
-        const redoBtn = makeHistoryActionButton('↷', 'Redo', 'Ctrl+Y', canRedo, () => {
+        const redoBtn = makeHistoryActionButton('icon-redo', 'Redo', 'Ctrl+Y', canRedo, () => {
             if (hm.canRedo()) doHistoryRedo();
         });
 
@@ -648,17 +676,18 @@
         el.historyMenu.appendChild(footer);
     }
 
-    function makeHistoryActionButton(icon, label, shortcut, enabled, onClick) {
+    function makeHistoryActionButton(iconId, label, shortcut, enabled, onClick) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'history-action-btn';
         btn.disabled = !enabled;
         btn.title = `${label} (${shortcut})`;
 
-        btn.innerHTML = `
-            <span style="font-size:14px;line-height:1;">${icon}</span>
-            <span>${label}</span>
-        `;
+        btn.appendChild(makeSvgIcon(iconId, 14));
+
+        const labelEl = document.createElement('span');
+        labelEl.textContent = label;
+        btn.appendChild(labelEl);
 
         if (enabled) {
             btn.addEventListener('click', (e) => {
@@ -696,10 +725,11 @@
         if (!isCurrent) {
             const jumpBtn = document.createElement('span');
             jumpBtn.className = 'history-jump-btn';
-            jumpBtn.textContent = '⇥';
             jumpBtn.title = `Перейти к состоянию #${entry.index}`;
             jumpBtn.setAttribute('role', 'button');
             jumpBtn.setAttribute('tabindex', '0');
+
+            jumpBtn.appendChild(makeSvgIcon('icon-arrow-right', 12));
 
             const doJump = (e) => {
                 e.stopPropagation();
@@ -728,28 +758,22 @@
 
     function doHistoryUndo() {
         if (!window.historyManager) return;
-
         const result = window.historyManager.undo();
         if (!result || !result.entry) return;
-
         applySnapshot(result.entry.snapshot);
     }
 
     function doHistoryRedo() {
         if (!window.historyManager) return;
-
         const result = window.historyManager.redo();
         if (!result || !result.entry) return;
-
         applySnapshot(result.entry.snapshot);
     }
 
     function doHistoryJumpTo(index) {
         if (!window.historyManager) return;
-
         const result = window.historyManager.jumpTo(index);
         if (!result || !result.entry) return;
-
         applySnapshot(result.entry.snapshot);
     }
 
@@ -829,9 +853,7 @@
         return snap;
     }
 
-    const IGNORED_LAYOUT_ACTIONS = new Set([
-        'focus'
-    ]);
+    const IGNORED_LAYOUT_ACTIONS = new Set(['focus']);
 
     function setupHistoryEvents() {
         if (!window.historyManager) return;
@@ -841,13 +863,9 @@
             if (window.historyManager.isRestoring && window.historyManager.isRestoring()) return;
 
             const d = e.detail || {};
-
-            if (IGNORED_LAYOUT_ACTIONS.has(d.action)) {
-                return;
-            }
+            if (IGNORED_LAYOUT_ACTIONS.has(d.action)) return;
 
             let label;
-
             switch (d.action) {
                 case 'add': {
                     const t = getTypeName(d.type);
@@ -861,34 +879,13 @@
                     label = `${t} — удалено${slot}`;
                     break;
                 }
-                case 'swap':
-                    label = 'Окна — перестановка';
-                    break;
-                case 'style':
-                    label = `Layout — ${d.styleId || 'стиль'}`;
-                    break;
-                case 'minimize': {
-                    const t = getTypeName(d.type);
-                    label = `Свернуть: ${t}`;
-                    break;
-                }
-                case 'restore': {
-                    const t = getTypeName(d.type);
-                    label = `Развернуть: ${t}`;
-                    break;
-                }
-                case 'fullscreen': {
-                    const t = getTypeName(d.type);
-                    label = `Полный экран: ${t}`;
-                    break;
-                }
-                case 'fullscreen-exit': {
-                    const t = getTypeName(d.type);
-                    label = `Выход из полного экрана: ${t}`;
-                    break;
-                }
-                default:
-                    return;
+                case 'swap': label = 'Окна — перестановка'; break;
+                case 'style': label = `Layout — ${d.styleId || 'стиль'}`; break;
+                case 'minimize': label = `Свернуть: ${getTypeName(d.type)}`; break;
+                case 'restore': label = `Развернуть: ${getTypeName(d.type)}`; break;
+                case 'fullscreen': label = `Полный экран: ${getTypeName(d.type)}`; break;
+                case 'fullscreen-exit': label = `Выход из полного экрана: ${getTypeName(d.type)}`; break;
+                default: return;
             }
 
             window.historyManager.record(label);
@@ -929,7 +926,7 @@
     }
 
     // ============================================================
-    // МОДАЛКИ СОХРАНЕНИЯ / ЗАГРУЗКИ
+    // МОДАЛКИ ПРОЕКТОВ
     // ============================================================
 
     function showSaveModal(onSave) {
@@ -1152,19 +1149,13 @@
 
     function setupTheme() {
         if (window.appState) {
-            window.appState.subscribe('theme', (theme) => {
-                console.log('[LSYSTEM] Theme changed:', theme,
-                    '(mode:', window.appState.getThemeMode() + ')');
-            });
-
-            window.appState.subscribe('themeMode', (mode) => {
-                console.log('[LSYSTEM] Theme mode:', mode);
-            });
+            window.appState.subscribe('theme', () => {});
+            window.appState.subscribe('themeMode', () => {});
         }
     }
 
     // ============================================================
-    // СВОРАЧИВАНИЕ HEADER → ОСТРОВ
+    // HEADER COLLAPSE
     // ============================================================
 
     function isHeaderCollapsed() {
@@ -1248,9 +1239,7 @@
     function refreshLogoImageTitle() {
         const logoImg = el.logo?.querySelector('.logo-img');
         if (!logoImg) return;
-
-        const collapsed = isHeaderCollapsed();
-        logoImg.title = collapsed ? 'Expand Header' : 'Collapse Header';
+        logoImg.title = isHeaderCollapsed() ? 'Expand Header' : 'Collapse Header';
     }
 
     function refreshIslandButtons() {
@@ -1260,108 +1249,35 @@
         const visibleCount = window.layoutManager?.getVisibleWindowCount() || 0;
         const maxed = visibleCount >= 4;
 
-        if (el.saveBtn) {
-            el.saveBtn.classList.toggle('is-hidden-in-island', !hasWindows);
-        }
-
-        if (el.newProjectBtn) {
-            el.newProjectBtn.classList.toggle('is-hidden-in-island', !hasWindows);
-        }
-
-        if (el.newWindowBtn) {
-            el.newWindowBtn.classList.toggle('is-hidden-in-island', maxed);
-        }
+        if (el.saveBtn) el.saveBtn.classList.toggle('is-hidden-in-island', !hasWindows);
+        if (el.newProjectBtn) el.newProjectBtn.classList.toggle('is-hidden-in-island', !hasWindows);
+        if (el.newWindowBtn) el.newWindowBtn.classList.toggle('is-hidden-in-island', maxed);
     }
 
     // ============================================================
-    // АДАПТИВ ПОЛНОЙ ШАПКИ — COMPACT MODE
+    // АДАПТИВ HEADER (ФИКСИРОВАННЫЙ BREAKPOINT)
     // ============================================================
 
     function setupHeaderAdaptive() {
         if (!el.header) return;
 
-        let fullContentWidth = 0;
-        let measuredForState = '';
-
         let compact = false;
         let rafId = null;
-        let lastHeaderW = -1;
-
-        const buildStateKey = () => {
-            const parts = [];
-            if (el.saveBtn) {
-                parts.push('s:' + (el.saveBtnLabel ? el.saveBtnLabel.textContent : ''));
-                parts.push('sd:' + (el.saveBtn.disabled ? 1 : 0));
-            }
-            if (el.newProjectBtn) {
-                parts.push('n:' + (el.newProjectBtn.disabled ? 1 : 0));
-            }
-            if (el.newWindowBtn) {
-                parts.push('w:' + (el.newWindowBtn.disabled ? 1 : 0));
-            }
-            if (el.historyBtn) {
-                parts.push('h:' + (el.historyBtn.style.opacity || '1'));
-            }
-            const name = state.projectName || '';
-            parts.push('p:' + name);
-            return parts.join('|');
-        };
-
-        const measureFullWidth = () => {
-            const key = buildStateKey();
-            if (key === measuredForState && fullContentWidth > 0) {
-                return fullContentWidth;
-            }
-
-            const hadCompact = el.header.classList.contains('is-compact');
-            if (hadCompact) el.header.classList.remove('is-compact');
-
-            const prevMinWidth = el.mainMenu ? el.mainMenu.style.minWidth : '';
-            const prevFlex = el.mainMenu ? el.mainMenu.style.flex : '';
-
-            if (el.mainMenu) {
-                el.mainMenu.style.minWidth = 'max-content';
-                el.mainMenu.style.flex = '0 0 auto';
-            }
-
-            void el.header.offsetWidth;
-
-            const logoW = el.logo ? el.logo.scrollWidth : 0;
-            const menuW = el.mainMenu ? el.mainMenu.scrollWidth : 0;
-            const padding = 40;
-
-            fullContentWidth = logoW + menuW + padding;
-            measuredForState = key;
-
-            if (el.mainMenu) {
-                el.mainMenu.style.minWidth = prevMinWidth || '';
-                el.mainMenu.style.flex = prevFlex || '';
-            }
-
-            if (hadCompact) el.header.classList.add('is-compact');
-
-            return fullContentWidth;
-        };
 
         const applyState = () => {
             rafId = null;
 
-            const headerW = el.header.clientWidth || 0;
-            if (headerW === 0) return;
-
-            if (headerW === lastHeaderW) return;
-            lastHeaderW = headerW;
-
-            const fullW = measureFullWidth();
-
-            const ENTER_THRESHOLD = 8;
-            const EXIT_THRESHOLD = 24;
+            const viewportW = window.innerWidth || 0;
+            if (viewportW === 0) return;
 
             let shouldCompact = compact;
+
             if (!compact) {
-                shouldCompact = fullW > headerW - ENTER_THRESHOLD;
+                // Переход в compact: ширина <= breakpoint
+                shouldCompact = viewportW <= HEADER_COMPACT_BREAKPOINT;
             } else {
-                shouldCompact = fullW > headerW - EXIT_THRESHOLD;
+                // Выход из compact: ширина > breakpoint + гистерезис
+                shouldCompact = viewportW <= (HEADER_COMPACT_BREAKPOINT + HEADER_COMPACT_HYSTERESIS);
             }
 
             if (shouldCompact !== compact) {
@@ -1375,40 +1291,16 @@
             rafId = requestAnimationFrame(applyState);
         };
 
-        setupHeaderAdaptive._apply = () => {
-            measuredForState = '';
-            fullContentWidth = 0;
-            lastHeaderW = -1;
-            schedule();
-        };
-
-        setupHeaderAdaptive._invalidateMeasurement = () => {
-            measuredForState = '';
-            fullContentWidth = 0;
-        };
+        setupHeaderAdaptive._apply = schedule;
+        setupHeaderAdaptive._invalidateMeasurement = () => {};
 
         requestAnimationFrame(() => {
             requestAnimationFrame(applyState);
         });
 
-        if (typeof ResizeObserver !== 'undefined') {
-            const ro = new ResizeObserver(() => {
-                schedule();
-            });
-            ro.observe(el.header);
-            setupHeaderAdaptive._ro = ro;
-        }
-
         window.addEventListener('resize', () => {
             clearTimeout(setupHeaderAdaptive._t);
             setupHeaderAdaptive._t = setTimeout(schedule, 60);
-        });
-
-        document.addEventListener('layout-changed', () => {
-            if (setupHeaderAdaptive._invalidateMeasurement) {
-                setupHeaderAdaptive._invalidateMeasurement();
-            }
-            schedule();
         });
     }
 
@@ -1419,7 +1311,7 @@
     }
 
     // ============================================================
-    // ГЛОБАЛЬНЫЕ ХОТКЕИ
+    // ГОРЯЧИЕ КЛАВИШИ
     // ============================================================
 
     function setupGlobalHotkeys() {
@@ -1480,7 +1372,7 @@
     }
 
     // ============================================================
-    // ПРОЕКТНЫЕ СОБЫТИЯ
+    // СОБЫТИЯ ПРОЕКТА
     // ============================================================
 
     function setupProjectEvents() {
@@ -1592,15 +1484,9 @@
         });
 
         document.addEventListener('click', (e) => {
-            if (el.loadDropdown && !el.loadDropdown.contains(e.target)) {
-                closeDropdown(el.loadDropdown);
-            }
-            if (el.newWindowDropdown && !el.newWindowDropdown.contains(e.target)) {
-                closeDropdown(el.newWindowDropdown);
-            }
-            if (el.historyDropdown && !el.historyDropdown.contains(e.target)) {
-                closeDropdown(el.historyDropdown);
-            }
+            if (el.loadDropdown && !el.loadDropdown.contains(e.target)) closeDropdown(el.loadDropdown);
+            if (el.newWindowDropdown && !el.newWindowDropdown.contains(e.target)) closeDropdown(el.newWindowDropdown);
+            if (el.historyDropdown && !el.historyDropdown.contains(e.target)) closeDropdown(el.historyDropdown);
         });
 
         let resizeTimeout;
@@ -1608,8 +1494,11 @@
             clearTimeout(resizeTimeout);
             resizeTimeout = setTimeout(() => {
                 if (window.layoutManager) window.layoutManager.resizeAll();
+                repositionOpenDropdowns();
             }, 150);
         });
+
+        window.addEventListener('scroll', repositionOpenDropdowns, true);
     }
 
     // ============================================================
@@ -1617,15 +1506,76 @@
     // ============================================================
 
     function closeAllTopbarDropdowns(except = null) {
-        const dropdowns = [
-            el.loadDropdown,
-            el.newWindowDropdown,
-            el.historyDropdown
-        ];
+        const dropdowns = [el.loadDropdown, el.newWindowDropdown, el.historyDropdown];
         for (const dd of dropdowns) {
-            if (dd && dd !== except) {
-                dd.classList.remove('active');
-            }
+            if (dd && dd !== except) dd.classList.remove('active');
+        }
+    }
+
+    function positionDropdown(dropdownWrapper) {
+        if (!dropdownWrapper) return;
+
+        const menu = dropdownWrapper.querySelector('.dropdown-menu');
+        if (!menu) return;
+
+        menu.classList.remove('is-align-right');
+        menu.style.left = '';
+        menu.style.right = '';
+        menu.style.top = '';
+        menu.style.bottom = '';
+
+        const prevVisibility = menu.style.visibility;
+        const prevOpacity = menu.style.opacity;
+        const prevDisplay = menu.style.display;
+
+        menu.style.visibility = 'hidden';
+        menu.style.opacity = '0';
+        menu.style.display = 'block';
+
+        const wrapperRect = dropdownWrapper.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+
+        const viewportW = window.innerWidth;
+        const viewportH = window.innerHeight;
+        const margin = 8;
+
+        let left = wrapperRect.left + wrapperRect.width / 2 - menuRect.width / 2;
+
+        if (left + menuRect.width > viewportW - margin) {
+            left = wrapperRect.right - menuRect.width;
+            menu.classList.add('is-align-right');
+        }
+
+        if (left < margin) {
+            left = wrapperRect.left;
+            menu.classList.remove('is-align-right');
+        }
+
+        left = Math.max(margin, Math.min(left, viewportW - menuRect.width - margin));
+        menu.style.left = (left - wrapperRect.left) + 'px';
+
+        const spaceBelow = viewportH - wrapperRect.bottom - margin;
+        const spaceAbove = wrapperRect.top - margin;
+
+        if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
+            menu.style.top = 'auto';
+            menu.style.bottom = 'calc(100% + 6px)';
+            menu.style.transformOrigin = 'bottom ' + (menu.classList.contains('is-align-right') ? 'right' : 'left');
+        } else {
+            menu.style.top = 'calc(100% + 6px)';
+            menu.style.bottom = 'auto';
+            menu.style.transformOrigin = 'top ' + (menu.classList.contains('is-align-right') ? 'right' : 'left');
+        }
+
+        menu.style.visibility = prevVisibility;
+        menu.style.opacity = prevOpacity;
+        menu.style.display = prevDisplay;
+    }
+
+    function repositionOpenDropdowns() {
+        const wrappers = [el.loadDropdown, el.newWindowDropdown, el.historyDropdown];
+        for (const w of wrappers) {
+            if (w && w.classList.contains('active')) positionDropdown(w);
         }
     }
 
@@ -1640,25 +1590,18 @@
             closeAllTopbarDropdowns(element);
             element.classList.add('active');
 
-            if (element === el.loadDropdown) {
-                updateRecentProjects();
-            }
-            if (element === el.newWindowDropdown) {
-                populateWindowMenu();
-            }
-            if (element === el.historyDropdown) {
-                renderHistoryMenu();
-            }
+            if (element === el.loadDropdown) updateRecentProjects();
+            if (element === el.newWindowDropdown) populateWindowMenu();
+            if (element === el.historyDropdown) renderHistoryMenu();
+
+            requestAnimationFrame(() => positionDropdown(element));
         }
     }
 
     function closeDropdown(element) {
         if (!element) return;
         element.classList.remove('active');
-
-        if (element === el.newWindowDropdown) {
-            state.windowSearchQuery = '';
-        }
+        if (element === el.newWindowDropdown) state.windowSearchQuery = '';
     }
 
     // ============================================================
@@ -1715,10 +1658,7 @@
 
     function handleSave() {
         return new Promise((resolve) => {
-            if (state.isSaving) {
-                resolve(false);
-                return;
-            }
+            if (state.isSaving) { resolve(false); return; }
 
             if (!window.projectManager) {
                 showErrorModal('Ошибка', 'ProjectManager не инициализирован');
@@ -1739,10 +1679,7 @@
             }
 
             showSaveModal((projectName) => {
-                if (!projectName) {
-                    resolve(false);
-                    return;
-                }
+                if (!projectName) { resolve(false); return; }
 
                 const filename = projectName.endsWith('.lsp') ? projectName : projectName + '.lsp';
                 state.projectPath = filename;
@@ -1860,14 +1797,8 @@
                 resolve(file);
             };
 
-            input.onchange = () => {
-                const file = input.files?.[0] || null;
-                finish(file);
-            };
-
-            input.oncancel = () => {
-                finish(null);
-            };
+            input.onchange = () => finish(input.files?.[0] || null);
+            input.oncancel = () => finish(null);
 
             const onFocus = () => {
                 setTimeout(() => {
@@ -1929,17 +1860,13 @@
                 showNotification('Проект "' + state.projectName + '" загружен', 'success');
             } else {
                 showErrorModal('Ошибка', 'Проект не найден или повреждён');
-                if (window.projectManager) {
-                    window.projectManager.removeRecentProject(path);
-                }
+                if (window.projectManager) window.projectManager.removeRecentProject(path);
                 updateRecentProjects();
             }
         } catch (error) {
             console.error('[LSYSTEM] Load recent error:', error);
             showErrorModal('Ошибка загрузки', error.message || 'Не удалось загрузить проект');
-            if (window.projectManager) {
-                window.projectManager.removeRecentProject(path);
-            }
+            if (window.projectManager) window.projectManager.removeRecentProject(path);
             updateRecentProjects();
         } finally {
             state.isLoading = false;
@@ -1955,7 +1882,8 @@
 
         const registry = window.__registry;
         if (!registry) {
-            el.windowTypeMenu.innerHTML = '<div style="padding:8px 12px;color:var(--text-muted);font-size:11px;text-align:center;">Реестр не инициализирован</div>';
+            el.windowTypeMenu.innerHTML =
+                '<div class="window-menu__empty">Реестр не инициализирован</div>';
             return;
         }
 
@@ -1984,7 +1912,9 @@
         const visibleMinimized = minimized.filter(w => !query || matchesQuery(w, query));
 
         if (visibleMinimized.length > 0) {
-            html += `<div class="window-menu__section">📌 Свёрнутые <span class="window-menu__count">${visibleMinimized.length}</span></div>`;
+            html += `<div class="window-menu__section">${
+                makeSvgIconString('icon-archive', 10)
+            } Свёрнутые <span class="window-menu__count">${visibleMinimized.length}</span></div>`;
 
             for (const w of visibleMinimized) {
                 html += renderMinimizedItem(w);
@@ -2002,11 +1932,11 @@
             hasAnyType = true;
 
             const isCollapsed = !!collapsed[groupName];
-            const arrow = isCollapsed ? '▶' : '▼';
+            const arrowIcon = isCollapsed ? 'icon-chevron-right' : 'icon-chevron-down';
 
             html += `
                 <button type="button" class="window-menu__group-header" data-group-toggle="${escapeHtml(groupName)}">
-                    <span class="window-menu__group-arrow">${arrow}</span>
+                    <span class="window-menu__group-arrow">${makeSvgIconString(arrowIcon, 10)}</span>
                     <span class="window-menu__group-name">${escapeHtml(groupName)}</span>
                     <span class="window-menu__count">${visibleTypes.length}</span>
                 </button>
@@ -2065,7 +1995,12 @@
                 const isCollapsed = window.appState?.isGroupCollapsed(groupName);
 
                 if (items) items.style.display = isCollapsed ? 'none' : 'block';
-                if (arrow) arrow.textContent = isCollapsed ? '▶' : '▼';
+                if (arrow) {
+                    arrow.innerHTML = makeSvgIconString(
+                        isCollapsed ? 'icon-chevron-right' : 'icon-chevron-down',
+                        10
+                    );
+                }
             });
         });
 
@@ -2095,21 +2030,17 @@
     }
 
     function renderTypeItem(type) {
-        const isSvg = type.icon && typeof type.icon === 'string' && type.icon.startsWith('icon-');
-        const icon = isSvg
-            ? `<svg class="icon-svg window-menu__icon"><use href="#${type.icon}"></use></svg>`
-            : `<span class="window-menu__icon window-menu__icon--emoji">${escapeHtml(type.icon || '📄')}</span>`;
-
-        return `<button class="window-menu__item" data-type="${escapeHtml(type.id)}">${icon}<span class="window-menu__label">${escapeHtml(type.name)}</span></button>`;
+        const iconId = resolveIconName(type.icon, 'icon-window-type');
+        return `<button class="window-menu__item" data-type="${escapeHtml(type.id)}">${
+            makeSvgIconString(iconId, 14, 'window-menu__icon')
+        }<span class="window-menu__label">${escapeHtml(type.name)}</span></button>`;
     }
 
     function renderMinimizedItem(w) {
-        const isSvg = w.icon && typeof w.icon === 'string' && w.icon.startsWith('icon-');
-        const icon = isSvg
-            ? `<svg class="icon-svg window-menu__icon"><use href="#${w.icon}"></use></svg>`
-            : `<span class="window-menu__icon window-menu__icon--emoji">${escapeHtml(w.icon || '📄')}</span>`;
-
-        return `<button class="window-menu__item window-menu__item--minimized" data-minimized-id="${escapeHtml(String(w.id))}">${icon}<span class="window-menu__label">${escapeHtml(w.title || ('#' + w.id))}</span><span class="window-menu__id">#${escapeHtml(String(w.id))}</span></button>`;
+        const iconId = resolveIconName(w.icon, 'icon-window-type');
+        return `<button class="window-menu__item window-menu__item--minimized" data-minimized-id="${escapeHtml(String(w.id))}">${
+            makeSvgIconString(iconId, 14, 'window-menu__icon')
+        }<span class="window-menu__label">${escapeHtml(w.title || ('#' + w.id))}</span><span class="window-menu__id">#${escapeHtml(String(w.id))}</span></button>`;
     }
 
     function matchesQuery(w, query) {
@@ -2123,13 +2054,6 @@
         const name = (type.name || '').toLowerCase();
         const id = (type.id || '').toLowerCase();
         return name.includes(query) || id.includes(query);
-    }
-
-    function cssEscape(s) {
-        if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
-            return CSS.escape(s);
-        }
-        return String(s).replace(/([^\w-])/g, '\\$1');
     }
 
     // ============================================================
@@ -2181,7 +2105,8 @@
         const recent = window.projectManager?.getRecentProjects() || [];
 
         if (recent.length === 0) {
-            el.recentList.innerHTML = '<div style="padding:8px 16px;color:var(--text-muted);font-size:11px;text-align:center;">Нет недавних проектов</div>';
+            el.recentList.innerHTML =
+                '<div class="window-menu__empty">Нет недавних проектов</div>';
             return;
         }
 
@@ -2189,12 +2114,16 @@
         for (const path of recent) {
             const name = path.split('/').pop() || path;
             const isActive = path === state.projectPath;
+            const iconId = isActive ? 'icon-circle-filled' : 'icon-data';
+
             html += `
                 <button class="recent-item" data-path="${escapeHtml(path)}" style="${isActive ? 'border-left-color:var(--accent-red);background:var(--bg-hover);' : ''}">
-                    <span class="recent-icon">${isActive ? '●' : '📄'}</span>
+                    <span class="recent-icon">${makeSvgIconString(iconId, 14)}</span>
                     <span class="recent-name" title="${escapeHtml(path)}">${escapeHtml(name)}</span>
                     <span class="recent-path">${escapeHtml(path)}</span>
-                    <button class="recent-remove" data-path="${escapeHtml(path)}" title="Удалить">✕</button>
+                    <button class="recent-remove" data-path="${escapeHtml(path)}" title="Удалить">${
+                        makeSvgIconString('icon-close', 12)
+                    }</button>
                 </button>
             `;
         }
@@ -2203,7 +2132,7 @@
 
         el.recentList.querySelectorAll('.recent-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                if (e.target.classList.contains('recent-remove')) return;
+                if (e.target.closest('.recent-remove')) return;
                 const path = item.dataset.path;
                 if (path && path !== state.projectPath) {
                     closeDropdown(el.loadDropdown);
@@ -2284,9 +2213,7 @@
     function bootstrap() {
         try {
             const saved = localStorage.getItem(HEADER_COLLAPSE_KEY);
-            if (saved === '1') {
-                document.body.classList.add('header-collapsed');
-            }
+            if (saved === '1') document.body.classList.add('header-collapsed');
         } catch (e) {}
 
         init();
