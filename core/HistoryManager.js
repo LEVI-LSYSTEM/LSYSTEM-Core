@@ -1,13 +1,8 @@
 // core/HistoryManager.js
-// Версия 3.3.0 - Fix: циклы через 2+ объекта
-// - _deepCopy: seen НЕ удаляется в finally — живёт до конца всего дерева
-// - ArrayBuffer/TypedArray/DataView — по ссылке (v3.2.0)
-// - Map/Set/Date/RegExp/Array/Object — как было
+// Версия 3.3.0
 
 (function() {
     'use strict';
-
-    console.log('[HistoryManager] Loading v3.3.0...');
 
     class HistoryManager {
         constructor(options = {}) {
@@ -25,10 +20,6 @@
             this._listeners = [];
         }
 
-        // ============================================================
-        // 1. НАСТРОЙКА
-        // ============================================================
-
         setSnapshotProvider(fn) {
             this._snapshotProvider = fn;
         }
@@ -37,23 +28,13 @@
             this._snapshotApplier = fn;
         }
 
-        // ============================================================
-        // 2. RESTORE GUARD
-        // ============================================================
-
         beginRestore() {
             this._restoringCount++;
-            if (this._debug) {
-                console.log('[HistoryManager] beginRestore →', this._restoringCount);
-            }
         }
 
         endRestore() {
             if (this._restoringCount > 0) {
                 this._restoringCount--;
-            }
-            if (this._debug) {
-                console.log('[HistoryManager] endRestore →', this._restoringCount);
             }
         }
 
@@ -61,15 +42,8 @@
             return this._restoringCount > 0;
         }
 
-        // ============================================================
-        // 3. ЗАПИСЬ
-        // ============================================================
-
         record(label = 'Действие') {
             if (this._restoringCount > 0) {
-                if (this._debug) {
-                    console.log('[HistoryManager] record ignored (restoring):', label);
-                }
                 return;
             }
 
@@ -105,12 +79,6 @@
                 }
             }
 
-            if (this._debug) {
-                console.log('[HistoryManager] record:', label,
-                    'index:', this._index,
-                    'size:', this._entries.length);
-            }
-
             this._notify();
         }
 
@@ -118,13 +86,8 @@
             this._entries = [];
             this._index = -1;
             this._restoringCount = 0;
-            if (this._debug) console.log('[HistoryManager] cleared');
             this._notify();
         }
-
-        // ============================================================
-        // 4. UNDO / REDO
-        // ============================================================
 
         undo() {
             if (this._index <= 0) return null;
@@ -140,7 +103,6 @@
                     index: this._index - 1
                 };
                 this._index--;
-                if (this._debug) console.log('[HistoryManager] undo →', this._index, prev.label);
                 this._notify();
                 return result;
             } finally {
@@ -162,7 +124,6 @@
                     index: this._index + 1
                 };
                 this._index++;
-                if (this._debug) console.log('[HistoryManager] redo →', this._index, next.label);
                 this._notify();
                 return result;
             } finally {
@@ -185,7 +146,6 @@
                     index: index
                 };
                 this._index = index;
-                if (this._debug) console.log('[HistoryManager] jump →', index, entry.label);
                 this._notify();
                 return result;
             } finally {
@@ -200,10 +160,6 @@
         canRedo() {
             return this._index < this._entries.length - 1;
         }
-
-        // ============================================================
-        // 5. ИНФОРМАЦИЯ
-        // ============================================================
 
         getHistory() {
             return this._entries.map((entry, index) => ({
@@ -227,10 +183,6 @@
             return this._deepCopy(this._entries[this._index]);
         }
 
-        // ============================================================
-        // 6. ПОДПИСКИ
-        // ============================================================
-
         subscribe(cb) {
             if (typeof cb !== 'function') return () => {};
 
@@ -249,33 +201,15 @@
             }
         }
 
-        // ============================================================
-        // 7. ГЛУБОКОЕ КОПИРОВАНИЕ
-        // ============================================================
-
-        /**
-         * ✅ FIX v3.3.0:
-         * `seen` живёт до конца всего копирования — а не удаляется в finally.
-         * Это корректно защищает от циклов через 2+ объекта (a.b=c, c.a=a).
-         *
-         * Побочный эффект: shared-объекты (вставленные в две ветки) будут
-         * скопированы один раз, и вторая ссылка будет указывать на тот же клон.
-         * Для истории это скорее плюс — меньше памяти, консистентные ссылки.
-         *
-         * ArrayBuffer / TypedArray / DataView — по ССЫЛКЕ (v3.2.0).
-         */
         _deepCopy(obj, seen) {
             if (obj === null || obj === undefined) return obj;
             if (typeof obj !== 'object') return obj;
 
-            // ArrayBuffer-подобные — по ссылке
             if (ArrayBuffer.isView(obj)) return obj;
             if (obj instanceof ArrayBuffer) return obj;
 
             if (!seen) seen = new WeakSet();
             if (seen.has(obj)) {
-                // ✅ Цикл — возвращаем null (не можем восстановить ссылку без WeakMap-словаря).
-                // Для истории сносное поведение: циклические данные всё равно не сериализуются.
                 return null;
             }
             seen.add(obj);
@@ -307,20 +241,11 @@
                 return result;
             }
 
-            // Прочие классы — как есть
             return obj;
         }
 
-        // ============================================================
-        // 8. ОТЛАДКА
-        // ============================================================
-
-        enableDebug() { this._debug = true; console.log('[HistoryManager] debug ON'); }
-        disableDebug() { this._debug = false; console.log('[HistoryManager] debug OFF'); }
-
-        // ============================================================
-        // 9. УНИЧТОЖЕНИЕ
-        // ============================================================
+        enableDebug() { this._debug = true; }
+        disableDebug() { this._debug = false; }
 
         destroy() {
             this._entries = [];
@@ -329,7 +254,6 @@
             this._listeners = [];
             this._snapshotProvider = null;
             this._snapshotApplier = null;
-            console.log('[HistoryManager] Destroyed');
         }
     }
 
@@ -339,7 +263,6 @@
 
     if (typeof window !== 'undefined') {
         window.HistoryManager = HistoryManager;
-        console.log('[HistoryManager] Registered globally v3.3.0');
     }
 
 })();

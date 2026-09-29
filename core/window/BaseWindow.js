@@ -1,8 +1,5 @@
 // core/window/BaseWindow.js
 // Версия 12.0.0
-// - BaseWindow больше не знает про конкретные системные контролы.
-// - Все кнопки шапки — обычные headerItems.
-// - getRenderWindow() по-прежнему возвращает chrome (совместимость с LayoutManager).
 
 (function() {
     'use strict';

@@ -612,10 +612,6 @@
         });
     };
 
-    // ============================================================
-    // ОТКРЫТИЕ / ЗАКРЫТИЕ
-    // ============================================================
-
     SettingsModal.prototype.open = function() {
         this._isOpen = true;
         this._overlay.classList.add('is-open');
@@ -626,7 +622,6 @@
         this._renderWorkingFolder();
         this._renderPluginsFolderBanner();
 
-        // Форсируем загрузку (если ещё не загружено) и только потом рендерим.
         var self = this;
         var ps = window.pluginSystem;
 
@@ -671,10 +666,6 @@
 
     SettingsModal.prototype.isOpen = function() { return this._isOpen; };
 
-    // ============================================================
-    // EULA MODAL
-    // ============================================================
-
     SettingsModal.prototype._openEulaModal = function() {
         if (this._isEulaOpen) return;
         this._isEulaOpen = true;
@@ -696,10 +687,6 @@
     };
 
     SettingsModal.prototype.isEulaOpen = function() { return this._isEulaOpen; };
-
-    // ============================================================
-    // ПРОФИЛЬ
-    // ============================================================
 
     SettingsModal.prototype._renderProfile = function() {
         var acc = window.appState ? window.appState.getAccount() : null;
@@ -742,10 +729,6 @@
         this._renderProfile();
         if (window.__lsystem) window.__lsystem.showNotification('Профиль сброшен', 'info');
     };
-
-    // ============================================================
-    // ПРОФИЛЬ — ЭКСПОРТ / ИМПОРТ
-    // ============================================================
 
     SettingsModal.prototype._exportProfile = function() {
         if (!window.appState) {
@@ -857,12 +840,10 @@
                     }
                 }
 
-                // Перерисовываем UI поверх нового состояния
                 self._renderProfile();
                 self._renderThemeMode();
                 self._renderHotkeys();
 
-                // Уведомляем остальную систему
                 document.dispatchEvent(new CustomEvent('profile:imported', {
                     detail: { applied: res.applied, errors: res.errors }
                 }));
@@ -904,10 +885,6 @@
             if (window.__lsystem) window.__lsystem.showNotification('Ошибка скачивания', 'error');
         }
     };
-
-    // ============================================================
-    // ТЕМА
-    // ============================================================
 
     SettingsModal.prototype._renderThemeMode = function() {
         var appState = window.appState;
@@ -1013,10 +990,6 @@
         }
     };
 
-    // ============================================================
-    // ПЛАГИНЫ — рабочая папка
-    // ============================================================
-
     SettingsModal.prototype._renderWorkingFolder = function() {
         var el = this._overlay.querySelector('#pluginsWorkingFolder');
         if (!el) return;
@@ -1058,10 +1031,6 @@
             banner.style.display = 'none';
         }
     };
-
-    // ============================================================
-    // ПЛАГИНЫ — события
-    // ============================================================
 
     SettingsModal.prototype._bindPluginsEvents = function() {
         var self = this;
@@ -1225,10 +1194,6 @@
             });
         }
     };
-
-    // ============================================================
-    // ПЛАГИНЫ — рендер
-    // ============================================================
 
     SettingsModal.prototype._renderPlugins = function() {
         var listEl = this._overlay.querySelector('#pluginsList');
@@ -1407,10 +1372,6 @@
         return row;
     };
 
-    // ============================================================
-    // ПЛАГИНЫ — модалка установки по URL
-    // ============================================================
-
     SettingsModal.prototype._openInstallUrlModal = function() {
         var overlay = document.createElement('div');
         overlay.className = 'plugin-install-overlay';
@@ -1541,10 +1502,6 @@
             if (e.target === overlay) document.body.removeChild(overlay);
         });
     };
-
-    // ============================================================
-    // ХОТКЕИ
-    // ============================================================
 
     SettingsModal.prototype._renderHotkeys = function() {
         var appState = window.appState;
@@ -1789,10 +1746,6 @@
         if (window.__lsystem) window.__lsystem.showNotification('Хоткеи сброшены', 'info');
     };
 
-    // ============================================================
-    // APPLY
-    // ============================================================
-
     SettingsModal.prototype._applyAll = function() {
         this._saveProfile();
         this.close();
@@ -1801,21 +1754,13 @@
         }
     };
 
-    // ============================================================
-    // УТИЛИТЫ
-    // ============================================================
-
     SettingsModal.prototype._notifyStub = function(title, message) {
         if (window.__lsystem) {
             window.__lsystem.showNotification(title + ' — ' + message, 'info', 2400);
         } else {
-            console.log('[SettingsModal stub]', title, '—', message);
+            console.warn('[SettingsModal stub]', title, '—', message);
         }
     };
-
-    // ============================================================
-    // УНИЧТОЖЕНИЕ
-    // ============================================================
 
     SettingsModal.prototype.destroy = function() {
         this._cancelCapture();
@@ -1837,10 +1782,6 @@
         }
         this._eulaOverlay = null;
     };
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { SettingsModal: SettingsModal, EULA_TEXT: EULA_TEXT };

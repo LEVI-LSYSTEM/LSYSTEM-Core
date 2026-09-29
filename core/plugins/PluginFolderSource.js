@@ -23,15 +23,6 @@
 (function() {
     'use strict';
 
-    console.log('[PluginFolderSource] Loading v2.0.0...');
-
-    // ================================================================
-    // ЕДИНЫЙ INDEXEDDB (через PluginDB)
-    // ================================================================
-    //
-    // Ключ хранения — единственный (одна активная папка).
-    // Store: 'folder-handles' — keyPath не задан, используем внешний ключ.
-
     var _IDB_KEY = 'active-folder';
 
     function _getStoreName() {
@@ -69,10 +60,6 @@
         });
     }
 
-    // ================================================================
-    // Common helpers
-    // ================================================================
-
     function _normalizePath(p) {
         if (!p) return '';
         p = String(p).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
@@ -84,18 +71,6 @@
         if (!p) return [];
         return p.split('/').filter(Boolean);
     }
-
-    function _isJsFile(name) {
-        return /\.js$/i.test(name);
-    }
-
-    function _isJsonFile(name) {
-        return /\.json$/i.test(name);
-    }
-
-    // ================================================================
-    // BASE (интерфейс)
-    // ================================================================
 
     class PluginFolderSourceBase {
         constructor() {
@@ -116,8 +91,6 @@
         async exists() { throw new Error('exists() not implemented'); }
 
         isDirectory(name) {
-            // Угадываем по расширению: если есть .js/.json/.css/.html — это файл,
-            // иначе — директория. Точнее нельзя без обращения к ФС.
             if (!name) return false;
             var s = String(name);
             if (s.indexOf('.') === -1) return true;
@@ -129,10 +102,6 @@
         destroy() {}
     }
 
-    // ================================================================
-    // CHROMIUM — FileSystemAccess API
-    // ================================================================
-
     class ChromiumFolderSource extends PluginFolderSourceBase {
         constructor() {
             super();
@@ -142,8 +111,6 @@
             this._handle = null;
             this._displayName = '';
         }
-
-        // --- API файловой системы ---
 
         async pick() {
             if (!this._available) return false;
@@ -182,7 +149,6 @@
                         this._displayName = handle.name || 'plugins';
                         return true;
                     }
-                    // Оставляем handle, но помечаем как «требует разрешения»
                     this._handle = handle;
                     this._displayName = handle.name || 'plugins';
                     return false;
@@ -266,7 +232,6 @@
                 await dir.getFileHandle(fileName);
                 return true;
             } catch (err) {
-                // может быть директория
                 try {
                     var d = this._handle;
                     for (var j = 0; j < parts.length; j++) {
@@ -298,16 +263,12 @@
         }
     }
 
-    // ================================================================
-    // INPUT — <input type="file" webkitdirectory> (Firefox, Safari)
-    // ================================================================
-
     class InputFolderSource extends PluginFolderSourceBase {
         constructor() {
             super();
             this._available = true;
-            this._files = new Map();  // relativePath -> File
-            this._dirs = new Set();   // relativePath директорий
+            this._files = new Map();
+            this._dirs = new Set();
             this._displayName = '';
         }
 
@@ -360,13 +321,11 @@
 
                     if (!rootName) rootName = parts[0];
 
-                    // Все промежуточные папки — запоминаем
                     for (var j = 1; j < parts.length; j++) {
                         var dirPath = parts.slice(1, j).join('/');
                         if (dirPath) this._dirs.add(dirPath);
                     }
 
-                    // Сам файл — только последний сегмент после корня
                     var relFromRoot = parts.slice(1).join('/');
                     if (relFromRoot) {
                         this._files.set(relFromRoot, file);
@@ -382,8 +341,6 @@
         }
 
         async restore() {
-            // Невозможно — FileSystemAccess не поддерживается,
-            // при следующем старте нужно выбирать снова.
             return false;
         }
 
@@ -394,13 +351,12 @@
             var norm = _normalizePath(relativePath);
             var out = new Set();
 
-            // Дочерние папки
             this._dirs.forEach(function(dirPath) {
                 if (norm === '') {
                     var first = dirPath.split('/')[0];
                     if (first) out.add(first);
                 } else if (dirPath === norm) {
-                    // сама папка — ничего не добавляем
+                    // skip
                 } else if (dirPath.indexOf(norm + '/') === 0) {
                     var rest = dirPath.slice(norm.length + 1);
                     var first2 = rest.split('/')[0];
@@ -408,7 +364,6 @@
                 }
             });
 
-            // Файлы
             this._files.forEach(function(file, path) {
                 if (norm === '') {
                     if (path.indexOf('/') === -1) out.add(path);
@@ -435,7 +390,6 @@
         }
 
         async persist() {
-            // Не поддерживается
             return false;
         }
 
@@ -446,10 +400,6 @@
         }
     }
 
-    // ================================================================
-    // DESKTOP — Electron / Tauri (заглушка под будущее)
-    // ================================================================
-
     class DesktopFolderSource extends PluginFolderSourceBase {
         constructor() {
             super();
@@ -457,12 +407,10 @@
             this._basePath = null;
             this._displayName = '';
 
-            // Tauri v2
             if (window.__TAURI__ && window.__TAURI__.dialog && window.__TAURI__.fs) {
                 this._available = true;
                 this._mode = 'tauri';
             }
-            // Electron
             else if (window.electronAPI && typeof window.electronAPI.pickFolder === 'function') {
                 this._available = true;
                 this._mode = 'electron';
@@ -587,28 +535,18 @@
         }
     }
 
-    // ================================================================
-    // FACTORY
-    // ================================================================
-
     var PluginFolderSource = {
         create: function() {
-            // Desktop (Electron/Tauri) — приоритет
             var desktop = new DesktopFolderSource();
             if (desktop.isAvailable()) {
-                console.log('[PluginFolderSource] Using DesktopFolderSource');
                 return desktop;
             }
 
-            // Chromium — FileSystemAccess
             var chromium = new ChromiumFolderSource();
             if (chromium.isAvailable()) {
-                console.log('[PluginFolderSource] Using ChromiumFolderSource');
                 return chromium;
             }
 
-            // Fallback — input webkitdirectory
-            console.log('[PluginFolderSource] Using InputFolderSource (fallback)');
             return new InputFolderSource();
         },
 
@@ -617,13 +555,8 @@
         DesktopFolderSource: DesktopFolderSource
     };
 
-    // ================================================================
-    // EXPORT
-    // ================================================================
-
     if (typeof window !== 'undefined') {
         window.PluginFolderSource = PluginFolderSource;
-        console.log('[PluginFolderSource] Registered globally v2.0.0');
     }
 
     if (typeof module !== 'undefined' && module.exports) {

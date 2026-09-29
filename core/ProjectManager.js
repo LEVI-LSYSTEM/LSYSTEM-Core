@@ -1,13 +1,8 @@
 // core/ProjectManager.js
-// Версия 4.2.0 - Feature: importFromJSON(json) для cloud-sync
-// - importFromJSON(dataOrString) — импорт без файла
-// - saveProject/loadProject/_importProject/_migrateProject — без изменений
-// - Auto-save / recent projects — без изменений
+// Версия 4.2.0
 
 (function() {
     'use strict';
-
-    console.log('[ProjectManager] Loading v4.2.0...');
 
     var STORAGE_KEYS = {
         PROJECT_DATA: 'lsystem_project_data',
@@ -16,10 +11,6 @@
     };
 
     var PROJECT_FORMAT_VERSION = '4.2.0';
-
-    // ============================================================
-    // ХЕЛПЕРЫ
-    // ============================================================
 
     function sanitizeFilename(name) {
         if (!name) return 'project.lsp';
@@ -38,10 +29,6 @@
         if (!name) return 'Untitled';
         return String(name).replace(/\.lsp$/i, '').replace(/\.json$/i, '');
     }
-
-    // ============================================================
-    // КЛАСС
-    // ============================================================
 
     class ProjectManager {
         constructor(options = {}) {
@@ -69,21 +56,11 @@
                     this._markDirty();
                 });
             }
-
-            console.log('[ProjectManager] Initialized v4.2.0');
         }
-
-        // ============================================================
-        // 0. ПРИВЯЗКА LAYOUTMANAGER
-        // ============================================================
 
         setLayoutManager(layoutManager) {
             this._layoutManager = layoutManager;
         }
-
-        // ============================================================
-        // 1. СОХРАНЕНИЕ ПРОЕКТА (.lsp)
-        // ============================================================
 
         saveProject(options = {}) {
             if (!this._dataBus) {
@@ -140,9 +117,6 @@
                 if (this._dataBus) {
                     this._dataBus.markSaved();
                 }
-
-                console.log('[ProjectManager] Project saved:', this._projectPath,
-                    download ? '(downloaded)' : '(local only)');
 
                 this._notify('saved', {
                     path: this._projectPath,
@@ -218,10 +192,6 @@
             return this._layoutStyle || 'four-grid-2x2';
         }
 
-        // ============================================================
-        // 2. ЗАГРУЗКА ПРОЕКТА (.lsp)
-        // ============================================================
-
         loadFromFile(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -254,16 +224,6 @@
             });
         }
 
-        /**
-         * ✅ v4.2.0: импорт проекта из JSON-строки или объекта.
-         * Для cloud-sync, paste, drag&drop файла без <input type=file>.
-         *
-         * @param {string|object} dataOrString — JSON-строка или распарсенный объект
-         * @param {object} [options]
-         * @param {string} [options.path] — путь проекта (опционально)
-         * @param {string} [options.name] — имя проекта (опционально)
-         * @returns {boolean}
-         */
         importFromJSON(dataOrString, options = {}) {
             if (!dataOrString) {
                 console.error('[ProjectManager] importFromJSON: empty input');
@@ -289,7 +249,6 @@
                 const result = this._importProject(parsed);
                 if (!result) return false;
 
-                // Устанавливаем метаданные проекта
                 if (options.path !== undefined) {
                     this._projectPath = options.path ? String(options.path) : null;
                 }
@@ -310,7 +269,6 @@
                     source: 'json'
                 });
 
-                console.log('[ProjectManager] Project imported from JSON:', this._projectName);
                 return true;
             } catch (error) {
                 console.error('[ProjectManager] importFromJSON error:', error);
@@ -368,7 +326,6 @@
                     this._dataBus.markSaved();
                 }
 
-                console.log('[ProjectManager] Loaded last project:', lastProject);
                 return true;
             } catch (error) {
                 console.error('[ProjectManager] Error loading last project:', error);
@@ -444,7 +401,6 @@
                 }
 
                 this._notify('imported', { name: this._projectName });
-                console.log('[ProjectManager] Project imported successfully');
                 return true;
             } catch (error) {
                 console.error('[ProjectManager] Import error:', error);
@@ -458,8 +414,6 @@
             }
 
             if (data.windows && typeof data.windows === 'object') {
-                console.log('[ProjectManager] Migrating .lsp v3.x → v4.2.0');
-
                 const slots = {};
                 const archive = {};
                 const counters = {};
@@ -532,10 +486,6 @@
             };
         }
 
-        // ============================================================
-        // 3. УПРАВЛЕНИЕ ПРОЕКТОМ
-        // ============================================================
-
         newProject(options = {}) {
             if (this._isDirty && !options.force) {
                 console.warn('[ProjectManager] newProject called with unsaved changes');
@@ -561,7 +511,6 @@
             }
 
             this._notify('new', { name: this._projectName });
-            console.log('[ProjectManager] New project created');
             return true;
         }
 
@@ -590,9 +539,6 @@
             };
         }
 
-        /**
-         * ✅ v4.2.0: экспорт проекта как JSON-строки (без сохранения в файл).
-         */
         exportToJSON() {
             const data = this.getProjectData();
             if (!data) return null;
@@ -617,10 +563,6 @@
             this._isDirty = false;
             this._projectMetadata = {};
         }
-
-        // ============================================================
-        // 4. НЕДАВНИЕ ПРОЕКТЫ
-        // ============================================================
 
         getRecentProjects() {
             try {
@@ -664,10 +606,6 @@
             }
         }
 
-        // ============================================================
-        // 5. АВТОСОХРАНЕНИЕ
-        // ============================================================
-
         _markDirty() {
             this._isDirty = true;
             this._notify('dirty', { isDirty: true });
@@ -688,7 +626,6 @@
 
             this._autoSaveTimer = setInterval(() => {
                 if (this._isDirty && this._projectPath) {
-                    console.log('[ProjectManager] Auto-saving...');
                     this.saveProject({ download: false });
                 }
             }, this._autoSaveInterval);
@@ -701,17 +638,9 @@
             }
         }
 
-        // ============================================================
-        // 6. GETTERS
-        // ============================================================
-
         getProjectPath() { return this._projectPath; }
         getProjectName() { return this._projectName; }
         getProjectMetadata() { return { ...this._projectMetadata }; }
-
-        // ============================================================
-        // 7. СОБЫТИЯ
-        // ============================================================
 
         _notify(event, data) {
             if (this._listeners[event]) {
@@ -747,20 +676,11 @@
             }
         }
 
-        // ============================================================
-        // 8. УНИЧТОЖЕНИЕ
-        // ============================================================
-
         destroy() {
             this._stopAutoSave();
             this._listeners = {};
-            console.log('[ProjectManager] Destroyed');
         }
     }
-
-    // ============================================================
-    // 9. ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { ProjectManager, STORAGE_KEYS };
@@ -769,7 +689,6 @@
     if (typeof window !== 'undefined') {
         window.ProjectManager = ProjectManager;
         window.STORAGE_KEYS = STORAGE_KEYS;
-        console.log('[ProjectManager] Registered globally v4.2.0');
     }
 
 })();

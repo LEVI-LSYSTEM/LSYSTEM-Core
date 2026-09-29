@@ -1,8 +1,5 @@
 // core/HotkeyRegistry.js
 // Версия 3.0.0
-// - handle(): при активном внешнем drag (DragController.isDragging()) не гасим окно.
-//   Escape и прочие клавиши уходят в DragController, а не в окно.
-// - Остальная логика без изменений.
 
 (function() {
     'use strict';
@@ -132,10 +129,6 @@
             this._capturedWindowId = null;
         }
 
-        // ============================================================
-        // 1. РЕГИСТРАЦИЯ
-        // ============================================================
-
         registerGlobal(combo, callback, meta = {}) {
             const key = normalizeCombo(combo);
             if (!key || typeof callback !== 'function') return () => {};
@@ -208,10 +201,6 @@
             this._capturedWindowId = null;
         }
 
-        // ============================================================
-        // 2. REBIND
-        // ============================================================
-
         rebindGlobal(oldCombo, newCombo) {
             const oldKey = normalizeCombo(oldCombo);
             const newKey = normalizeCombo(newCombo);
@@ -262,10 +251,6 @@
             return true;
         }
 
-        // ============================================================
-        // 3. ФОКУС
-        // ============================================================
-
         setFocusedWindow(windowId) {
             const nextId = windowId != null ? String(windowId) : null;
             this._focusedWindowId = nextId;
@@ -280,10 +265,6 @@
         getFocusedWindow() {
             return this._focusedWindowId;
         }
-
-        // ============================================================
-        // 4. ЗАХВАТ КЛАВИАТУРЫ
-        // ============================================================
 
         captureKeyboard(windowId) {
             if (windowId == null) {
@@ -318,20 +299,14 @@
             return this._capturedWindowId;
         }
 
-        // ============================================================
-        // 5. ОБРАБОТКА
-        // ============================================================
-
         handle(event) {
             if (!event) return false;
             const combo = eventToCombo(event);
 
-            // Приоритет 0: внешний drag — окна не трогаем.
             if (isExternalDrag()) {
                 return false;
             }
 
-            // Приоритет 1: capture
             if (this._capturedWindowId) {
                 if (this._focusedWindowId !== this._capturedWindowId) {
                     this._capturedWindowId = null;
@@ -350,12 +325,9 @@
                 }
             }
 
-            // Приоритет 2: [data-capture-keyboard]
             if (isKeyboardCaptureElementFocused()) {
                 return false;
             }
-
-            // Приоритет 3: обычная логика
 
             if (isInputFocused() && combo !== 'Escape') {
                 return false;
@@ -385,10 +357,6 @@
             return false;
         }
 
-        // ============================================================
-        // 6. ATTACH / DETACH
-        // ============================================================
-
         attach(target = document) {
             if (this._handler) this.detach();
 
@@ -410,10 +378,6 @@
             this._target = null;
             this._handler = null;
         }
-
-        // ============================================================
-        // 7. GETTERS
-        // ============================================================
 
         getGlobalBindings() {
             const result = [];
@@ -444,10 +408,6 @@
             };
         }
 
-        // ============================================================
-        // 8. УНИЧТОЖЕНИЕ
-        // ============================================================
-
         destroy() {
             this.detach();
             this._globalBindings.clear();
@@ -456,10 +416,6 @@
             this._capturedWindowId = null;
         }
     }
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {

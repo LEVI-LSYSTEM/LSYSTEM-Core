@@ -16,10 +16,6 @@
 (function() {
     'use strict';
 
-    // ============================================================
-    // 1. КОНСТАНТЫ
-    // ============================================================
-
     var NodeType = { LEAF: 'leaf', SPLIT: 'split' };
     var SplitDirection = { HORIZONTAL: 'horizontal', VERTICAL: 'vertical' };
 
@@ -50,19 +46,11 @@
         4: LayoutStyle.FOUR_GRID_2X2
     };
 
-    // ============================================================
-    // 2. ГЛОБАЛЬНЫЕ СЧЁТЧИКИ
-    // ============================================================
-
     var _idCounter = 0;
     function generateId() { return ++_idCounter; }
     function setIdFloor(v) {
         if (typeof v === 'number' && v >= _idCounter) _idCounter = v + 1;
     }
-
-    // ============================================================
-    // 3. УЗЕЛ ДЕРЕВА
-    // ============================================================
 
     class LayoutNode {
         constructor(opts) {
@@ -164,10 +152,6 @@
         }
     }
 
-    // ============================================================
-    // 4. ФАБРИКА LEAF'ОВ
-    // ============================================================
-
     function leafFromWindow(w) {
         return new LayoutNode({
             type: NodeType.LEAF,
@@ -191,10 +175,6 @@
             slotId: w.slotId || null
         };
     }
-
-    // ============================================================
-    // 5. ОСНОВНОЙ КЛАСС
-    // ============================================================
 
     class LayoutManager {
         constructor(options) {
@@ -227,17 +207,9 @@
             this._activeDividerDrag = null;
         }
 
-        // ============================================================
-        // 5.1. РЕГИСТРАЦИЯ
-        // ============================================================
-
         registerContentRenderer(typeId, renderer) {
             this._contentRenderers.set(typeId, renderer);
         }
-
-        // ============================================================
-        // 5.2. ИНИЦИАЛИЗАЦИЯ / DESTROY
-        // ============================================================
 
         init() {
             if (!this.workspace) {
@@ -308,10 +280,6 @@
             this.root = null;
         }
 
-        // ============================================================
-        // 5.3. DIVIDER DRAG — ОТМЕНА
-        // ============================================================
-
         _cancelActiveDividerDrag() {
             if (!this._activeDividerDrag) return;
 
@@ -327,10 +295,6 @@
 
             this._activeDividerDrag = null;
         }
-
-        // ============================================================
-        // 6. ПУБЛИЧНЫЕ ГЕТТЕРЫ
-        // ============================================================
 
         getWindows() {
             var result = [];
@@ -438,10 +402,6 @@
             return this.getWindows().filter(function(w) { return w.type === typeId; });
         }
 
-        // ============================================================
-        // 7. ФОКУС
-        // ============================================================
-
         setFocusedWindow(windowId) {
             var wid = windowId != null ? String(windowId) : null;
             if (wid === this._focusedWindowId) return;
@@ -473,10 +433,6 @@
         getFocusedWindow() {
             return this._focusedWindowId;
         }
-
-        // ============================================================
-        // 8. MINIMIZE / RESTORE
-        // ============================================================
 
         minimizeWindow(windowId) {
             var sid = String(windowId);
@@ -592,10 +548,6 @@
         isMinimized(windowId) {
             return this._minimizedWindowsData.has(String(windowId));
         }
-
-        // ============================================================
-        // 9. FULLSCREEN
-        // ============================================================
 
         setFullscreen(windowId) {
             var sid = String(windowId);
@@ -732,10 +684,6 @@
             return this._fullscreenWindowId === String(windowId);
         }
 
-        // ============================================================
-        // 10. SLOTS
-        // ============================================================
-
         _resolveSlotForType(typeId) {
             if (!this._dataBus) return null;
 
@@ -751,10 +699,6 @@
 
             return this._dataBus.createSlot(typeId);
         }
-
-        // ============================================================
-        // 11. ДОБАВЛЕНИЕ ОКНА
-        // ============================================================
 
         addWindow(type, title, icon) {
             if (this.getVisibleWindowCount() >= this.maxWindows) {
@@ -843,10 +787,6 @@
 
             return created;
         }
-
-        // ============================================================
-        // 12. ЗАКРЫТИЕ
-        // ============================================================
 
         closeWindow(id) {
             var sid = String(id);
@@ -969,10 +909,6 @@
             return true;
         }
 
-        // ============================================================
-        // 13. SWAP
-        // ============================================================
-
         swapWindows(windowId1, windowId2) {
             var s1 = String(windowId1);
             var s2 = String(windowId2);
@@ -1019,10 +955,6 @@
             });
             return true;
         }
-
-        // ============================================================
-        // 14. СТИЛИ
-        // ============================================================
 
         getAvailableStyles() {
             return this._getAvailableStylesForCount(this.getVisibleWindowCount());
@@ -1078,10 +1010,6 @@
 
         getCurrentStyle() { return this.currentLayoutStyle; }
 
-        // ============================================================
-        // 15. РАСЧЁТ ДОЛЕЙ SPLIT
-        // ============================================================
-
         _computeSplitRatios(node) {
             var n = node.children.length;
             if (n === 0) return [];
@@ -1096,10 +1024,6 @@
             for (var i = 0; i < n; i++) out.push(equal);
             return out;
         }
-
-        // ============================================================
-        // 16. СБОР ВИДИМЫХ ОКОН
-        // ============================================================
 
         _collectVisibleAsPlain() {
             var visible = this.getVisibleWindows();
@@ -1117,10 +1041,6 @@
             }
             return out;
         }
-
-        // ============================================================
-        // 17. ДЕДУПЛИКАЦИЯ
-        // ============================================================
 
         _dedupRootLeafIds() {
             if (!this.root) return false;
@@ -1160,10 +1080,6 @@
             return changed;
         }
 
-        // ============================================================
-        // 18. СИНХРОНИЗАЦИЯ СТРУКТУРЫ
-        // ============================================================
-
         _ensureRootStructureMatches(visibleWindows) {
             var count = visibleWindows.length;
 
@@ -1187,7 +1103,6 @@
                 return;
             }
 
-            // Стиль подходит под количество?
             var styles = this._getAvailableStylesForCount(count);
             var styleOk = false;
             for (var i = 0; i < styles.length; i++) {
@@ -1198,7 +1113,6 @@
                     || LayoutStyle.FOUR_GRID_2X2;
             }
 
-            // Структура правильная? (split, ровно count leaf'ов, все заполнены)
             var leaves = (this.root && this.root.isSplit()) ? this.root.getLeaves() : [];
             var allFilled = leaves.length === count;
             if (allFilled) {
@@ -1211,10 +1125,6 @@
 
             this.root = this._buildLayoutForStyle(this.currentLayoutStyle, visibleWindows);
         }
-
-        // ============================================================
-        // 19. ПЕРЕСТРОЙКА ИЗ ВИДИМЫХ
-        // ============================================================
 
         _rebuildFromVisible(visibleWindows) {
             var count = visibleWindows.length;
@@ -1259,10 +1169,6 @@
             var newRoot = this._buildLayoutForStyle(this.currentLayoutStyle, cleaned);
             if (newRoot) this.root = newRoot;
         }
-
-        // ============================================================
-        // 20. ПОСТРОЕНИЕ ДЕРЕВЬЕВ
-        // ============================================================
 
         _buildLayoutForStyle(style, windows) {
             var count = windows.length;
@@ -1458,10 +1364,6 @@
             return root;
         }
 
-        // ============================================================
-        // 21. РЕНДЕРИНГ
-        // ============================================================
-
         render() {
             this._cancelActiveDividerDrag();
             if (!this.workspace) return;
@@ -1556,10 +1458,6 @@
         resizeAll() {
             this._doResizeAll();
         }
-
-        // ============================================================
-        // 22. ПОСТРОЕНИЕ DOM
-        // ============================================================
 
         _buildDOM(node) {
             if (node.isLeaf()) return this._buildLeafDOM(node);
@@ -1892,10 +1790,6 @@
             return divider;
         }
 
-        // ============================================================
-        // 23. WINDOW MAP
-        // ============================================================
-
         _updateWindowMap() {
             this._windowMap.clear();
             var windows = this.getVisibleWindows();
@@ -1905,10 +1799,6 @@
                 if (el) this._windowMap.set(w.id, { node: w.node, element: el });
             }
         }
-
-        // ============================================================
-        // 24. НОТИФИКАЦИИ
-        // ============================================================
 
         _notifyChange() {
             var detail = {
@@ -1949,10 +1839,6 @@
             }
         }
 
-        // ============================================================
-        // 25. СОСТОЯНИЕ ПО УМОЛЧАНИЮ
-        // ============================================================
-
         loadDefaultState() {
             this.closeAll();
             this.root = new LayoutNode({ type: NodeType.LEAF, windowData: null });
@@ -1963,10 +1849,6 @@
             this.render();
             this._notifyChange();
         }
-
-        // ============================================================
-        // 26. СЕРИАЛИЗАЦИЯ
-        // ============================================================
 
         getProjectData() {
             if (!this.root) return null;
@@ -2066,10 +1948,6 @@
             this._windowInstances.clear();
         }
     }
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {

@@ -113,10 +113,6 @@
             }
         }
 
-        // ============================================================
-        // ЖИЗНЕННЫЙ ЦИКЛ
-        // ============================================================
-
         async loadAll() {
             if (this._isLoaded && !this._isLoading) {
                 return;
@@ -152,9 +148,6 @@
                     console.warn('[PluginSystem] load from folder failed:', err);
                 }
             } else if (this._folderState === 'prompt' && this._loader) {
-                // Папка сохранена, но нужно разрешение.
-                // Пробуем «мягко» достучаться: read-попытка часто триггерит
-                // нативный запрос без явного requestPermission.
                 try {
                     var soft = await this._trySoftRestoreFolder();
                     if (soft) {
@@ -191,10 +184,6 @@
             this._emit('plugins:reloaded', { plugins: this.getAllPlugins() });
         }
 
-        // ============================================================
-        // ПЕРЕСБОРКА СПИСКА ПЛАГИНОВ
-        // ============================================================
-
         _refreshPluginsFromRegistry() {
             if (!this._loader || !this._registry) return;
 
@@ -227,10 +216,6 @@
                 });
             }
         }
-
-        // ============================================================
-        // РАБОЧАЯ ПАПКА
-        // ============================================================
 
         async _tryRestoreFolder() {
             if (!this._folderSource) return;
@@ -268,7 +253,6 @@
         async _trySoftRestoreFolder() {
             if (!this._folderSource || !this._loader) return false;
 
-            // Пробуем разрешение без модалки (браузер сам решит).
             var ok = await this._folderSource.requestPermission();
             if (!ok) return false;
 
@@ -432,10 +416,6 @@
             return this._folderSource;
         }
 
-        // ============================================================
-        // ПЛАГИНЫ — список
-        // ============================================================
-
         getAllPlugins() {
             this._lazySyncFromLoader();
 
@@ -532,10 +512,6 @@
             return this.getAllPlugins().filter(function(p) { return !p.enabled; });
         }
 
-        // ============================================================
-        // ПЛАГИНЫ — управление
-        // ============================================================
-
         async enablePlugin(id) {
             var plugin = this._plugins.get(id);
             if (!plugin) return false;
@@ -630,10 +606,6 @@
 
             return false;
         }
-
-        // ============================================================
-        // URL-ПЛАГИНЫ
-        // ============================================================
 
         async _loadUrlPlugins() {
             if (!this._urlStorage) return;
@@ -803,10 +775,6 @@
             return Object.assign({}, p);
         }
 
-        // ============================================================
-        // ФАЙЛЫ / АССЕТЫ
-        // ============================================================
-
         listFolder(folderName) {
             if (!this._loader) return [];
             return this._loader.listFolder(folderName);
@@ -837,10 +805,6 @@
             return this._loader.getAssetIndex();
         }
 
-        // ============================================================
-        // РЕЕСТР — утилиты
-        // ============================================================
-
         _snapshotRegistry() {
             if (!this._registry || typeof this._registry.getAllTypes !== 'function') {
                 return new Set();
@@ -862,10 +826,6 @@
             return diff;
         }
 
-        // ============================================================
-        // СОБЫТИЯ
-        // ============================================================
-
         _emit(name, data) {
             if (this._eventBus && typeof this._eventBus.emit === 'function') {
                 try { this._eventBus.emit(name, data); } catch (e) {}
@@ -877,10 +837,6 @@
             }
         }
 
-        // ============================================================
-        // УНИЧТОЖЕНИЕ
-        // ============================================================
-
         destroy() {
             this._plugins.clear();
             this._isLoaded = false;
@@ -889,10 +845,6 @@
             this._loader = null;
         }
     }
-
-    // ================================================================
-    // ЭКСПОРТ
-    // ================================================================
 
     if (typeof window !== 'undefined') {
         window.PluginSystem = PluginSystem;

@@ -11,8 +11,6 @@
 (function() {
     'use strict';
 
-    console.log('[PluginDB] Loading v1.1.0...');
-
     var DB_NAME = 'lsystem-plugins';
 
     var STORE_FOLDER      = 'folder-handles';
@@ -37,15 +35,11 @@
     };
 
     var MAX_RECOVERY_ATTEMPTS = 5;
-    var OPEN_TIMEOUT_MS = 5000;      // сколько ждём open/onblocked
+    var OPEN_TIMEOUT_MS = 5000;
     var BLOCKED_RETRY_DELAY_MS = 200;
 
     var _dbPromise = null;
     var _recoveryAttempts = 0;
-
-    // ────────────────────────────────────────────────────────────
-    // SCHEMA
-    // ────────────────────────────────────────────────────────────
 
     function _applySchema(db) {
         for (var storeName in SCHEMA.stores) {
@@ -86,19 +80,6 @@
         return missing;
     }
 
-    // ────────────────────────────────────────────────────────────
-    // OPEN С ТАЙМАУТОМ
-    // ────────────────────────────────────────────────────────────
-    //
-    // Резолвит промис в трёх случаях:
-    //   1) onsuccess — БД открыта.
-    //   2) onerror   — reject.
-    //   3) таймаут   — reject (защита от «залипшего» onblocked).
-    //
-    // onblocked: не резолвит и не reject'ит сразу — ждём таймаут.
-    // Если старый коннект закроется сам (onversionchange), open
-    // продолжит работу и вызовет onupgradeneeded → onsuccess.
-
     function _openRaw(version) {
         return new Promise(function(resolve, reject) {
             if (typeof indexedDB === 'undefined') {
@@ -118,7 +99,6 @@
                     '[PluginDB] open timeout (' + OPEN_TIMEOUT_MS + 'ms), version=' +
                     (version != null ? version : 'default')
                 );
-                // Пытаемся закрыть «полуоткрытое» соединение, если оно уже есть.
                 try {
                     if (req.result) req.result.close();
                 } catch (e) {}
@@ -133,8 +113,6 @@
             };
 
             req.onblocked = function() {
-                // Другая вкладка или старый коннект держит БД открытой.
-                // Ничего не делаем — ждём либо onsuccess, либо таймаут.
                 console.warn(
                     '[PluginDB] open blocked by another connection; waiting…'
                 );
@@ -142,7 +120,6 @@
 
             req.onsuccess = function() {
                 if (settled) {
-                    // Уже сработал таймаут — закрываем «опоздавшее» соединение.
                     try { req.result.close(); } catch (e) {}
                     return;
                 }
@@ -157,10 +134,6 @@
             };
         });
     }
-
-    // ────────────────────────────────────────────────────────────
-    // OPEN С АВТОВОССТАНОВЛЕНИЕМ
-    // ────────────────────────────────────────────────────────────
 
     function _delay(ms) {
         return new Promise(function(resolve) { setTimeout(resolve, ms); });
@@ -193,8 +166,6 @@
                 );
             }
 
-            // Даём IDB-транзакциям корректно завершиться и отпустить БД.
-            // Без этой паузы повторный open(version+1) часто получает onblocked.
             return _delay(BLOCKED_RETRY_DELAY_MS)
                 .then(function() {
                     return _openRaw(nextVersion);
@@ -212,10 +183,6 @@
         });
     }
 
-    // ────────────────────────────────────────────────────────────
-    // PUBLIC OPEN
-    // ────────────────────────────────────────────────────────────
-
     function getDB() {
         if (_dbPromise) return _dbPromise;
 
@@ -232,10 +199,6 @@
 
         return _dbPromise;
     }
-
-    // ────────────────────────────────────────────────────────────
-    // WITH STORE
-    // ────────────────────────────────────────────────────────────
 
     function withStore(storeName, mode, fn) {
         if (!SCHEMA.stores[storeName]) {
@@ -297,10 +260,6 @@
         return wrapper;
     }
 
-    // ────────────────────────────────────────────────────────────
-    // ЭКСПОРТ
-    // ────────────────────────────────────────────────────────────
-
     var PluginDB = {
         DB_NAME: DB_NAME,
         SCHEMA: SCHEMA,
@@ -320,7 +279,6 @@
 
     if (typeof window !== 'undefined') {
         window.PluginDB = PluginDB;
-        console.log('[PluginDB] Registered globally v1.1.0');
     }
 
     if (typeof module !== 'undefined' && module.exports) {

@@ -1,18 +1,8 @@
 // core/MessageBus.js
-// Версия 2.4.0 - Fix: защита от рекурсии в _deliverToAll / _deliverToTarget
-// - _deliveryDepth / MAX_DELIVERY_DEPTH = 16
-// - warn + стоп при превышении
-// - onRequest/send/sendToType/sendToTypeAndSlot — без изменений
-// - v2.3.1: onRequest handler (без изменений)
+// Версия 2.4.0
 
 (function() {
     'use strict';
-
-    console.log('[MessageBus] Loading v2.4.0...');
-
-    // ============================================================
-    // КОНСТАНТЫ
-    // ============================================================
 
     var DEFAULT_REQUEST_TIMEOUT = 10000;
     var REQUEST_SUFFIX = ':request';
@@ -22,10 +12,6 @@
     function generateId() {
         return Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
     }
-
-    // ============================================================
-    // КЛАСС
-    // ============================================================
 
     class MessageBus {
         constructor(options = {}) {
@@ -48,15 +34,8 @@
 
             this._requestHandlers = new Set();
 
-            // ✅ FIX: глубина синхронной доставки
             this._deliveryDepth = 0;
-
-            console.log('[MessageBus] Initialized v2.4.0');
         }
-
-        // ============================================================
-        // 0. ПРИВЯЗКА LAYOUTMANAGER
-        // ============================================================
 
         setLayoutManager(layoutManager) {
             if (this._layoutListener) {
@@ -74,10 +53,6 @@
             };
             if (typeof document !== 'undefined') {
                 document.addEventListener('layout-changed', this._layoutListener);
-            }
-
-            if (this._debug) {
-                console.log('[MessageBus] LayoutManager set, registries rebuilt');
             }
 
             return () => {
@@ -115,17 +90,7 @@
                     this._slotRegistry.get(slotId).add(wid);
                 }
             }
-
-            if (this._debug) {
-                console.log('[MessageBus] Registries rebuilt:',
-                    'types:', this._typeRegistry.size,
-                    'slots:', this._slotRegistry.size);
-            }
         }
-
-        // ============================================================
-        // 0.1. ПОИСК ОКОН ПО ТИПУ / СЛОТУ
-        // ============================================================
 
         _getWindowsByType(typeId) {
             if (!this._layoutManager) {
@@ -181,10 +146,6 @@
                 .map(w => w.id);
         }
 
-        // ============================================================
-        // 1. ОТПРАВКА (LOW-LEVEL)
-        // ============================================================
-
         send(senderId, channel, data, targetId = null) {
             if (!senderId) {
                 console.error('[MessageBus] senderId is required');
@@ -197,9 +158,6 @@
             }
 
             if (targetId !== null && String(targetId) === String(senderId)) {
-                if (this._debug) {
-                    console.warn('[MessageBus] send: targetId === senderId, ignored');
-                }
                 return false;
             }
 
@@ -213,10 +171,6 @@
             };
 
             this._pushToHistory(message);
-
-            if (this._debug) {
-                console.log(`[MessageBus] 📤 ${senderId} -> ${targetId || 'all'} [${channel}]:`, data);
-            }
 
             if (targetId !== null) {
                 this._deliverToTarget(targetId, message);
@@ -254,11 +208,6 @@
             this._pushToHistory(message);
 
             const targetIds = this._getWindowsByType(typeId);
-
-            if (this._debug) {
-                console.log(`[MessageBus] 📤 ${senderId} -> type:${typeId} [${channel}]:`,
-                    data, '→ targets:', targetIds);
-            }
 
             let delivered = 0;
             for (const targetId of targetIds) {
@@ -303,11 +252,6 @@
 
             const targetIds = this._getWindowsByTypeAndSlot(typeId, slotId);
 
-            if (this._debug) {
-                console.log(`[MessageBus] 📤 ${senderId} -> type:${typeId} slot:${slotId} [${channel}]:`,
-                    data, '→ targets:', targetIds);
-            }
-
             let delivered = 0;
             for (const targetId of targetIds) {
                 if (String(targetId) === String(senderId)) continue;
@@ -321,10 +265,6 @@
         sendToAll(senderId, channel, data) {
             return this.send(senderId, channel, data, null);
         }
-
-        // ============================================================
-        // 1.1. RPC — ЗАПРОС
-        // ============================================================
 
         request(senderId, targetId, channel, data = {}, options = {}) {
             return new Promise((resolve, reject) => {
@@ -418,18 +358,8 @@
                     reject(err);
                     return;
                 }
-
-                if (this._debug) {
-                    console.log(
-                        `[MessageBus] ⏳ RPC request ${requestId}: ${senderId} → ${targetId} [${channel}]`
-                    );
-                }
             });
         }
-
-        // ============================================================
-        // 1.2. RPC — ОТВЕТ
-        // ============================================================
 
         respond(senderId, requestId, channel, response, targetId = null) {
             if (!senderId) {
@@ -451,12 +381,6 @@
                 ok: true,
                 result: response
             };
-
-            if (this._debug) {
-                console.log(
-                    `[MessageBus] ✅ RPC respond ${requestId}: ${senderId} → ${targetId || '?'} [${channel}]`
-                );
-            }
 
             return this.send(senderId, responseChannel, payload, targetId);
         }
@@ -482,18 +406,8 @@
                 error: (error == null) ? 'Unknown RPC error' : String(error)
             };
 
-            if (this._debug) {
-                console.warn(
-                    `[MessageBus] ❌ RPC respondError ${requestId}: ${senderId} -> ${targetId || '?'} [${channel}] — ${payload.error}`
-                );
-            }
-
             return this.send(senderId, responseChannel, payload, targetId);
         }
-
-        // ============================================================
-        // 1.3. RPC — ОБРАБОТЧИК
-        // ============================================================
 
         onRequest(senderId, channel, handler) {
             if (!senderId) {
@@ -565,22 +479,11 @@
             };
             this._requestHandlers.add(handle);
 
-            if (this._debug) {
-                console.log(`[MessageBus] 🎧 onRequest: ${senderId} listening on [${channel}]`);
-            }
-
             return () => {
                 this._requestHandlers.delete(handle);
                 try { unsub(); } catch (e) {}
-                if (this._debug) {
-                    console.log(`[MessageBus] 🔴 onRequest off: ${senderId} [${channel}]`);
-                }
             };
         }
-
-        // ============================================================
-        // 1.4. RPC — CLEANUP
-        // ============================================================
 
         _cleanupRequest(requestId) {
             const pending = this._pendingRequests.get(requestId);
@@ -602,17 +505,6 @@
             return this._pendingRequests.size;
         }
 
-        // ============================================================
-        // 2. ДОСТАВКА
-        // ============================================================
-
-        /**
-         * ✅ FIX v2.4.0: защита от рекурсии.
-         * Счётчик живёт в синхронном стеке. Если подписчик вызовет send()
-         * синхронно — глубина вырастет. Если превысит MAX — warn + стоп.
-         * Асинхронные вызовы (через Promise.then, setTimeout) не считаются —
-         * счётчик уже сброшен.
-         */
         _enterDelivery() {
             this._deliveryDepth++;
             if (this._deliveryDepth > MAX_DELIVERY_DEPTH) {
@@ -709,10 +601,6 @@
             }
         }
 
-        // ============================================================
-        // 3. ПОДПИСКИ
-        // ============================================================
-
         subscribe(windowId, channel, callback) {
             if (!windowId) {
                 console.error('[MessageBus] windowId is required');
@@ -743,10 +631,6 @@
             const callbacks = subscriptions.get(channel);
             callbacks.push(callback);
 
-            if (this._debug) {
-                console.log(`[MessageBus] ✅ ${wid} subscribed to [${channel}]`);
-            }
-
             return () => {
                 const subs = this._subscribers.get(wid);
                 if (!subs) return;
@@ -765,10 +649,6 @@
 
                 if (subs.size === 0) {
                     this._subscribers.delete(wid);
-                }
-
-                if (this._debug) {
-                    console.log(`[MessageBus] 🔴 ${wid} unsubscribed from [${channel}]`);
                 }
             };
         }
@@ -793,10 +673,6 @@
             const callbacks = this._globalSubscribers.get(wid);
             callbacks.push(callback);
 
-            if (this._debug) {
-                console.log(`[MessageBus] ✅ ${wid} subscribed to all messages`);
-            }
-
             return () => {
                 const cbs = this._globalSubscribers.get(wid);
                 if (!cbs) return;
@@ -809,10 +685,6 @@
                 if (cbs.length === 0) {
                     this._globalSubscribers.delete(wid);
                 }
-
-                if (this._debug) {
-                    console.log(`[MessageBus] 🔴 ${wid} unsubscribed from all messages`);
-                }
             };
         }
 
@@ -820,15 +692,7 @@
             const wid = String(windowId);
             this._subscribers.delete(wid);
             this._globalSubscribers.delete(wid);
-
-            if (this._debug) {
-                console.log(`[MessageBus] 🔴 ${wid} unsubscribed from everything`);
-            }
         }
-
-        // ============================================================
-        // 4. ИСТОРИЯ
-        // ============================================================
 
         getHistory(channel = null, senderId = null, targetId = null) {
             let history = this._history;
@@ -849,10 +713,6 @@
         clearHistory() {
             this._history = [];
         }
-
-        // ============================================================
-        // 5. СТАТИСТИКА
-        // ============================================================
 
         getStats() {
             let totalSubscriptions = 0;
@@ -902,23 +762,13 @@
             return Array.from(this._slotRegistry.keys());
         }
 
-        // ============================================================
-        // 6. ОТЛАДКА
-        // ============================================================
-
         enableDebug() {
             this._debug = true;
-            console.log('[MessageBus] Debug mode enabled');
         }
 
         disableDebug() {
             this._debug = false;
-            console.log('[MessageBus] Debug mode disabled');
         }
-
-        // ============================================================
-        // 7. УНИЧТОЖЕНИЕ
-        // ============================================================
 
         destroy() {
             if (this._layoutListener) {
@@ -956,13 +806,8 @@
             this._layoutManager = null;
             this._debug = false;
             this._deliveryDepth = 0;
-            console.log('[MessageBus] Destroyed');
         }
     }
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { MessageBus };
@@ -970,7 +815,6 @@
 
     if (typeof window !== 'undefined') {
         window.MessageBus = MessageBus;
-        console.log('[MessageBus] Registered globally v2.4.0');
     }
 
 })();

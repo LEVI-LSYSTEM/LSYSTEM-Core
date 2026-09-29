@@ -1,14 +1,8 @@
 // core/WindowRegistry.js
 // Версия 6.0.1
-// - Fix: register override — orphan вместо destroy (LayoutManager сам пересоздаст)
-// - Feature: strict mode (config.strict === true) → запрет override
-// - Feature: forceUnregister(id) — принудительное уничтожение
-// - v6.0.0: headerItems only (без изменений)
 
 (function() {
     'use strict';
-
-    console.log('[WindowRegistry] Loading v6.0.1...');
 
     function filterItems(arr) {
         if (!Array.isArray(arr)) return [];
@@ -24,17 +18,11 @@
             this._typeDropTarget = new Map();
             this._typeHeaderItems = new Map();
 
-            // ✅ FIX: id окон, чей тип был переопределён, но инстансы ещё живы
-            // LayoutManager при следующем render() увидит рассинхрон type и пересоздаст.
             this._orphanedInstances = new Set();
 
             this._listeners = [];
             this._initialized = false;
         }
-
-        // ============================================================
-        // 1. РЕГИСТРАЦИЯ
-        // ============================================================
 
         register(config) {
             if (!config || !config.id) {
@@ -43,7 +31,6 @@
             }
 
             if (this._types.has(config.id)) {
-                // ✅ FIX: strict по умолчанию — для registerFromClass
                 if (config.strict === true) {
                     console.error('[WindowRegistry] Type "' + config.id + '" already registered (strict)');
                     return false;
@@ -51,10 +38,6 @@
 
                 console.warn('[WindowRegistry] ⚠️ Type "' + config.id + '" already registered — overriding');
 
-                // ✅ FIX: не уничтожаем инстансы. Помечаем orphaned.
-                // LayoutManager при следующем render() увидит, что type изменился,
-                // и пересоздаст окно. Если это reload плагина — просто перезапишутся
-                // headerItems/hotkeys, а открытые окна продолжат работать.
                 const oldInstances = this.getInstancesByType(config.id);
                 for (const inst of oldInstances) {
                     this._orphanedInstances.add(String(inst.id));
@@ -108,10 +91,6 @@
                 this._typeHeaderItems.set(config.id, headerItems.slice());
             }
 
-            console.log('[WindowRegistry] ✅ Registered: "' + config.id + '"',
-                '(group:', fullConfig.group + ')',
-                '(hotkeys:', Object.keys(fullConfig.hotkeys).length + ')',
-                '(headerItems:', headerItems.length + ')');
             this._notify('register', config.id, fullConfig);
             return true;
         }
@@ -124,10 +103,6 @@
             }
             return count;
         }
-
-        // ============================================================
-        // 1.1. РЕГИСТРАЦИЯ ИЗ КЛАССА
-        // ============================================================
 
         registerFromClass(Class) {
             if (typeof Class !== 'function') {
@@ -157,9 +132,6 @@
 
             const headerItems = filterItems(menu.headerItems);
 
-            // ✅ FIX: strict по умолчанию для registerFromClass — повторная загрузка
-            // того же типа не должна молча уничтожать окна.
-            // Разрешаем override только если meta.allowOverride === true.
             const strict = meta.allowOverride !== true;
 
             const registered = this.register({
@@ -213,22 +185,9 @@
                 this._typeHeaderItems.set(typeId, headerItems.slice());
             }
 
-            console.log('[WindowRegistry] ✅ Registered from class: "' + typeId + '"',
-                '(headerItems:', headerItems.length + ')',
-                '(channels:', channels.length + ')',
-                '(dropTarget:', dropTarget ? 'yes' : 'no' + ')');
             return true;
         }
 
-        // ============================================================
-        // 1.2. ✅ FIX: forceUnregister — принудительное уничтожение
-        // ============================================================
-
-        /**
-         * Принудительно снять тип и уничтожить все его инстансы.
-         * Используй, когда точно знаешь, что делаешь (например, при полной
-         * перезагрузке плагина с несовместимыми изменениями).
-         */
         forceUnregister(id) {
             if (!this._types.has(id)) {
                 console.warn('[WindowRegistry] forceUnregister: type not found:', id);
@@ -258,18 +217,12 @@
             this._typeHeaderItems.delete(id);
 
             this._notify('unregister', id);
-            console.log('[WindowRegistry] 🗑️ forceUnregistered: "' + id + '"');
             return true;
         }
 
         unregister(id) {
-            // ✅ FIX: unregister теперь = forceUnregister (для обратной совместимости)
             return this.forceUnregister(id);
         }
-
-        // ============================================================
-        // 2. ПОЛУЧЕНИЕ ТИПА
-        // ============================================================
 
         getType(id) {
             return this._types.get(id) || null;
@@ -324,10 +277,6 @@
             return type ? (type.group || 'Other') : null;
         }
 
-        // ============================================================
-        // 2.2. ХОТКЕИ ТИПА
-        // ============================================================
-
         getTypeHotkeys(typeId) {
             const type = this._types.get(typeId);
             if (!type || !type.hotkeys) return {};
@@ -343,10 +292,6 @@
             }
             return result;
         }
-
-        // ============================================================
-        // 2.3. CHANNELS / DROP TARGET
-        // ============================================================
 
         getTypeChannels(typeId) {
             const arr = this._typeChannels.get(typeId);
@@ -374,10 +319,6 @@
             return result;
         }
 
-        // ============================================================
-        // 2.4. HEADER ITEMS
-        // ============================================================
-
         getTypeHeaderItems(typeId) {
             const arr = this._typeHeaderItems.get(typeId);
             return arr ? arr.slice() : [];
@@ -395,10 +336,6 @@
             const arr = this._typeHeaderItems.get(typeId);
             return !!(arr && arr.length > 0);
         }
-
-        // ============================================================
-        // 3. СОЗДАНИЕ ЭКЗЕМПЛЯРА
-        // ============================================================
 
         createInstance(typeId, container, options = {}) {
             const type = this.getType(typeId);
@@ -484,7 +421,6 @@
             });
 
             this._notify('create', typeId, windowData, instance);
-            console.log('[WindowRegistry] Window created: "' + typeId + '" (' + instanceId + ')');
             return instance;
         }
 
@@ -511,7 +447,6 @@
                 created: Date.now()
             });
 
-            // ✅ FIX: окно заново привязано — снимаем orphan-флаг
             this._orphanedInstances.delete(sid);
 
             this._notify('attach', sid, instance);
@@ -553,7 +488,6 @@
             this._instances.delete(sid);
             this._orphanedInstances.delete(sid);
             this._notify('destroy', sid, record);
-            console.log('[WindowRegistry] Window destroyed: ' + sid);
             return true;
         }
 
@@ -571,9 +505,6 @@
             return this._instances.has(String(id));
         }
 
-        /**
-         * ✅ FIX: узнать, является ли инстанс orphaned (его тип был переопределён).
-         */
         isOrphaned(id) {
             return this._orphanedInstances.has(String(id));
         }
@@ -616,10 +547,6 @@
             return this._instances.size;
         }
 
-        // ============================================================
-        // 6. СОБЫТИЯ
-        // ============================================================
-
         addListener(callback) {
             if (typeof callback === 'function') {
                 this._listeners.push(callback);
@@ -640,10 +567,6 @@
                 }
             }
         }
-
-        // ============================================================
-        // 7. СЕРИАЛИЗАЦИЯ / СТАТИСТИКА
-        // ============================================================
 
         exportConfig() {
             const config = {};
@@ -698,7 +621,6 @@
 
         init() {
             this._initialized = true;
-            console.log('[WindowRegistry] Initialized v6.0.1');
             return this;
         }
 
@@ -715,7 +637,6 @@
             this._orphanedInstances.clear();
             this._listeners = [];
             this._initialized = false;
-            console.log('[WindowRegistry] Destroyed');
         }
     }
 
@@ -725,7 +646,6 @@
 
     if (typeof window !== 'undefined') {
         window.WindowRegistry = WindowRegistry;
-        console.log('[WindowRegistry] Registered globally v6.0.1');
     }
 
 })();

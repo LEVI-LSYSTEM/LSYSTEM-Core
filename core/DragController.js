@@ -1,8 +1,5 @@
 // core/DragController.js
 // Версия 2.0.0
-// - Единый обработчик drag & drop: internal payload'ы и файлы из ОС.
-// - Native file drag (dragenter/dragover/dragleave/drop) живёт здесь.
-// - session.kind: 'internal' | 'files'.
 
 (function() {
     'use strict';
@@ -69,13 +66,7 @@
         this._debug = !!options.debug;
 
         this._installDocumentListeners();
-
-        console.log('[DragController] Initialized v2.0.0');
     }
-
-    // ============================================================
-    // 1. РЕГИСТРАЦИЯ
-    // ============================================================
 
     DragController.prototype.registerSource = function(element, descriptor) {
         if (!element || element.nodeType !== 1) {
@@ -140,10 +131,6 @@
         };
     };
 
-    // ============================================================
-    // 2. ПУБЛИЧНОЕ СОСТОЯНИЕ
-    // ============================================================
-
     DragController.prototype.isDragging = function() {
         return this._state === 'dragging' && this._session !== null;
     };
@@ -156,10 +143,6 @@
         if (this._state !== 'dragging' || !this._session) return;
         this._finishSession(false, reason || 'cancelled');
     };
-
-    // ============================================================
-    // 3. СОБЫТИЯ
-    // ============================================================
 
     DragController.prototype.on = function(event, cb) {
         if (typeof cb !== 'function') return function() {};
@@ -186,10 +169,6 @@
             }
         }
     };
-
-    // ============================================================
-    // 4. ДОКУМЕНТ-СЛУШАТЕЛИ
-    // ============================================================
 
     DragController.prototype._installDocumentListeners = function() {
         var self = this;
@@ -221,10 +200,6 @@
         document.addEventListener('dragleave', this._onDocDragLeave, true);
         document.addEventListener('drop',      this._onDocDrop,      true);
     };
-
-    // ============================================================
-    // 5. INTERNAL DRAG — ARM
-    // ============================================================
 
     DragController.prototype._handleMouseDown = function(e) {
         if (this._state !== 'idle') return;
@@ -270,10 +245,6 @@
         }
         return null;
     };
-
-    // ============================================================
-    // 6. INTERNAL DRAG — DRAGGING
-    // ============================================================
 
     DragController.prototype._handleMouseMove = function(e) {
         if (this._state === 'armed') {
@@ -354,10 +325,6 @@
         }
     };
 
-    // ============================================================
-    // 7. INTERNAL DRAG — СТАРТ СЕССИИ
-    // ============================================================
-
     DragController.prototype._startSession = function(e) {
         var armed = this._armed;
         if (!armed) return;
@@ -421,10 +388,6 @@
         this._emit('drag:start', { session: session });
         this._updateCurrentTarget(e.clientX, e.clientY);
     };
-
-    // ============================================================
-    // 8. FILE DRAG — NATIVE
-    // ============================================================
 
     DragController.prototype._isFileDrag = function(e) {
         var dt = e.dataTransfer;
@@ -527,10 +490,6 @@
         this._finishSession(true, 'file-drop');
     };
 
-    // ============================================================
-    // 9. СЕССИЯ — ЗАВЕРШЕНИЕ
-    // ============================================================
-
     DragController.prototype._finishSession = function(allowDrop, reason) {
         var session = this._session;
         if (!session) return;
@@ -596,10 +555,6 @@
         this._state = 'idle';
     };
 
-    // ============================================================
-    // 10. GHOST
-    // ============================================================
-
     DragController.prototype._createGhost = function(session, ghostHTML) {
         var ghost = document.createElement('div');
         ghost.className = 'ls-drag-ghost';
@@ -660,10 +615,6 @@
         }
         session.ghost = null;
     };
-
-    // ============================================================
-    // 11. TARGET — HIT-TEST
-    // ============================================================
 
     DragController.prototype._updateCurrentTarget = function(x, y) {
         var session = this._session;
@@ -751,10 +702,6 @@
         }
     };
 
-    // ============================================================
-    // 12. HIGHLIGHT
-    // ============================================================
-
     DragController.prototype._applyTargetHighlight = function(record) {
         var el = record.descriptor.element;
         if (!el) return;
@@ -766,10 +713,6 @@
         if (!el) return;
         el.classList.remove('ls-drop-hover');
     };
-
-    // ============================================================
-    // 13. УНИЧТОЖЕНИЕ
-    // ============================================================
 
     DragController.prototype.destroy = function() {
         if (this._state === 'dragging') {
@@ -791,13 +734,7 @@
         document.removeEventListener('dragover',  this._onDocDragOver,  true);
         document.removeEventListener('dragleave', this._onDocDragLeave, true);
         document.removeEventListener('drop',      this._onDocDrop,      true);
-
-        console.log('[DragController] Destroyed');
     };
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { DragController: DragController };
@@ -806,7 +743,6 @@
     if (typeof window !== 'undefined') {
         window.DragController = DragController;
         window.dragController = new DragController({ debug: false });
-        console.log('[DragController] Registered globally v2.0.0');
     }
 
 })();

@@ -18,7 +18,7 @@
     <link rel="stylesheet" href="core/assets/index.css" />
     <link rel="stylesheet" href="core/settingsModal/SettingsModal.css" />
 
-    <!-- ===== SVG SPRITES (с Promise-обёрткой) ===== -->
+    <!-- ===== SVG SPRITES ===== -->
     <script>
         (function() {
             'use strict';
@@ -50,8 +50,6 @@
                         if (svg && document.body) {
                             document.body.insertBefore(svg, document.body.firstChild);
                         }
-
-                        console.log('[SVG Sprites] Loaded');
                         _resolve(true);
                     })
                     .catch(function(error) {
@@ -60,7 +58,6 @@
                     });
             }
 
-            // ✅ Ждём <body> прежде чем вставлять SVG
             if (document.readyState === 'loading') {
                 document.addEventListener('DOMContentLoaded', insertSprites);
             } else {
@@ -82,7 +79,7 @@
     <script src="core/DataBus.js"></script>
     <script src="core/MessageBus.js"></script>
     <script src="core/ProjectManager.js"></script>
-    <script src="core/WindowRegistry.js"></script>
+    <script src="core/window/WindowRegistry.js"></script>
     <script src="core/plugins/PluginDB.js"></script>
     <script src="core/plugins/PluginFolderSource.js"></script>
     <script src="core/plugins/PluginUrlStorage.js"></script>
@@ -111,7 +108,6 @@
                      onerror="this.style.display='none'" />
                 <span class="logo-text">LSYSTEM</span>
                 <span class="logo-sub">Core</span>
-                <!-- ✅ Пункт 1.3: имя проекта -->
                 <span id="projectNameDisplay" class="logo-project-name">Untitled</span>
             </div>
 

@@ -63,10 +63,6 @@
         });
     };
 
-    // ============================================================
-    // 1. ТЕМА
-    // ============================================================
-
     AppState.prototype.getTheme = function() {
         return this._theme;
     };
@@ -196,10 +192,6 @@
         }, 60000);
     };
 
-    // ============================================================
-    // 2. АККАУНТ
-    // ============================================================
-
     AppState.prototype.getAccount = function() {
         if (!this._account) return null;
         return {
@@ -232,10 +224,6 @@
         this._saveAccount();
         this._notify('account', null);
     };
-
-    // ============================================================
-    // 3. ХОТКЕИ — ДЕФОЛТЫ
-    // ============================================================
 
     AppState.prototype.ensureGlobalHotkeyDefaults = function(defaults) {
         if (!defaults || typeof defaults !== 'object') return;
@@ -366,10 +354,6 @@
         }
     };
 
-    // ============================================================
-    // 4. ХОТКЕИ — ЧТЕНИЕ
-    // ============================================================
-
     AppState.prototype.getGlobalHotkeys = function() {
         var result = {};
         for (var key in this._hotkeyOverrides.global) {
@@ -434,10 +418,6 @@
 
         return !!(record && record.overridden);
     };
-
-    // ============================================================
-    // 5. ХОТКЕИ — ЗАПИСЬ
-    // ============================================================
 
     AppState.prototype.setHotkeyOverride = function(scope, typeId, originalCombo, newCombo) {
         if (!originalCombo || !newCombo) return false;
@@ -528,10 +508,6 @@
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
 
-    // ============================================================
-    // 6. СВЁРНУТОСТЬ ГРУПП
-    // ============================================================
-
     AppState.prototype.getCollapsedGroups = function() {
         return deepCopy(this._windowGroupCollapsed);
     };
@@ -564,10 +540,6 @@
         this._saveGroupCollapsed();
         this._notify('windowGroupCollapsed', this._windowGroupCollapsed);
     };
-
-    // ============================================================
-    // 7. ПОДПИСКИ
-    // ============================================================
 
     AppState.prototype.subscribe = function(key, callback) {
         var self = this;
@@ -608,10 +580,6 @@
             }
         }
     };
-
-    // ============================================================
-    // 8. ПЕРСИСТЕНТНОСТЬ
-    // ============================================================
 
     AppState.prototype._loadFromStorage = function() {
         if (typeof localStorage === 'undefined') return;
@@ -767,10 +735,6 @@
         } catch (e) {}
     };
 
-    // ============================================================
-    // 9. JSON
-    // ============================================================
-
     AppState.prototype.toJSON = function() {
         return {
             themeMode: this._themeMode,
@@ -793,10 +757,6 @@
         }
     };
 
-    // ============================================================
-    // 10. УНИЧТОЖЕНИЕ
-    // ============================================================
-
     AppState.prototype.destroy = function() {
         if (this._themeTimer) {
             clearInterval(this._themeTimer);
@@ -814,15 +774,6 @@
         this._account = null;
     };
 
-    // ============================================================
-    // 11. ПРОФИЛЬ — ЭКСПОРТ / ИМПОРТ
-    // ============================================================
-
-    /**
-     * Собирает полный снапшот состояния приложения (профиль).
-     * @param {Object} [meta] — произвольные метаданные (appVersion и т.п.)
-     * @returns {Object}
-     */
     AppState.prototype.exportProfile = function(meta) {
         var profile = {
             _format: 'lsystem-profile',
@@ -841,16 +792,6 @@
         return profile;
     };
 
-    /**
-     * Применяет профиль к текущему состоянию.
-     * Возвращает { ok: Boolean, applied: Object, errors: Array }.
-     *
-     * @param {Object} data — результат exportProfile() (или совместимый объект).
-     * @param {Object} [opts]
-     * @param {Boolean} [opts.merge=false] — если true, объединяет хоткеи/группы
-     *                                       с текущими, а не заменяет.
-     * @returns {{ok: boolean, applied: Object, errors: string[]}}
-     */
     AppState.prototype.importProfile = function(data, opts) {
         opts = opts || {};
         var merge = !!opts.merge;
@@ -1012,10 +953,6 @@
         this._saveHotkeyOverrides();
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
-
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {

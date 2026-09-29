@@ -7,16 +7,9 @@
 (function() {
     'use strict';
 
-    console.log('[ExtendedAPIInjector] Loading v1.0.1...');
-
-    // ============================================================
-    // РЕЕСТР
-    // ============================================================
-
     const _registry = Object.create(null);
     const _versions = Object.create(null);
 
-    // Зарезервированные имена, которые нельзя использовать как category
     const RESERVED_NAMES = new Set([
         '__proto__',
         'prototype',
@@ -31,10 +24,6 @@
         'catch',
         'finally'
     ]);
-
-    // ============================================================
-    // УТИЛИТЫ
-    // ============================================================
 
     function _isPlainObject(v) {
         return v !== null
@@ -56,10 +45,6 @@
         style.textContent = css;
         document.head.appendChild(style);
     }
-
-    // ============================================================
-    // REGISTER COMPONENT
-    // ============================================================
 
     function registerComponent(category, name, config) {
         if (!category || typeof category !== 'string') {
@@ -109,20 +94,8 @@
 
         _installCategoryGetter(category);
 
-        const methodCount = Object.keys(config)
-            .filter(k => typeof config[k] === 'function' && !k.startsWith('_'))
-            .length;
-
-        console.log(`[ExtendedAPIInjector] ✅ registerComponent: "${category}.${name}"`,
-            `(${methodCount} methods)`,
-            config.version ? `v${config.version}` : '');
-
         return true;
     }
-
-    // ============================================================
-    // INSTALL CATEGORY GETTER
-    // ============================================================
 
     function _installCategoryGetter(category) {
         if (!window.BaseWindowInstance) {
@@ -136,12 +109,9 @@
 
         const proto = window.BaseWindowInstance.prototype;
 
-        // ✅ FIX: getOwnPropertyDescriptor вместо `in`
-        // `in` ловит Object.prototype.constructor/toString/etc.
         const descriptor = Object.getOwnPropertyDescriptor(proto, category);
         if (descriptor) {
             if (typeof descriptor.get === 'function') {
-                // Уже установлен — ок
                 return;
             }
             console.warn(
@@ -179,10 +149,6 @@
         pending.clear();
     }
 
-    // ============================================================
-    // NAMESPACE PROXY (this.ui / this.chart / ...)
-    // ============================================================
-
     function _makeNamespaceProxy(category, windowInstance) {
         const componentCache = Object.create(null);
 
@@ -190,7 +156,6 @@
             get(target, name) {
                 if (typeof name !== 'string') return undefined;
 
-                // ✅ FIX: не быть thenable
                 if (name === 'then' || name === 'catch' || name === 'finally') {
                     return undefined;
                 }
@@ -238,10 +203,6 @@
             }
         });
     }
-
-    // ============================================================
-    // COMPONENT PROXY (this.ui.button)
-    // ============================================================
 
     function _makeComponentProxy(category, name, config, windowInstance) {
         const target = function() {};
@@ -326,10 +287,6 @@
         });
     }
 
-    // ============================================================
-    // УПРАВЛЕНИЕ РЕЕСТРОМ
-    // ============================================================
-
     function hasCategory(category) {
         return !!_registry[category];
     }
@@ -363,10 +320,6 @@
         return out;
     }
 
-    // ============================================================
-    // ЭКСПОРТ
-    // ============================================================
-
     window.registerComponent = registerComponent;
 
     window.ExtendedAPI = {
@@ -387,8 +340,5 @@
             ExtendedAPI: window.ExtendedAPI
         };
     }
-
-    console.log('[ExtendedAPIInjector] Registered globally v1.0.1');
-    console.log('[ExtendedAPIInjector] Use: window.registerComponent(category, name, config)');
 
 })();

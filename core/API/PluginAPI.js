@@ -8,8 +8,6 @@
 (function() {
     'use strict';
 
-    console.log('[PluginAPI] Loading v1.0.1...');
-
     var DEFAULT_PATH = 'core/assets/UserAPI.js';
 
     class PluginAPI {
@@ -28,7 +26,6 @@
 
             this._cacheBust = 0;
 
-            // ✅ FIX: реестр pending-резолверов для одного и того же URL
             this._pendingResolvers = new Map();
         }
 
@@ -75,7 +72,7 @@
 
             if (this._loaded && !opts.reload) {
                 if (this._debug) {
-                    console.log('[PluginAPI] Already loaded, skipping');
+                    console.warn('[PluginAPI] Already loaded, skipping');
                 }
                 return Promise.resolve(true);
             }
@@ -119,17 +116,9 @@
             });
         }
 
-        /**
-         * ✅ FIX v1.0.1:
-         * - Если script уже в DOM и уже загружен — сразу resolve(true).
-         * - Если script уже в DOM, но ещё грузится — добавляем свой резолвер
-         *   в _pendingResolvers и не перезаписываем onload/onerror.
-         * - Если script новый — создаём, вешаем addEventListener('load'/'error').
-         */
         _appendScript(url, resolve) {
             const self = this;
 
-            // Если скрипт уже есть в DOM по этому URL — не создаём дубликат
             const existing = document.querySelector('script[data-extapi="true"][data-src="' + url + '"]');
 
             if (existing) {
@@ -138,7 +127,6 @@
                     return;
                 }
 
-                // Уже грузится — ставим в очередь резолверов
                 if (!this._pendingResolvers.has(url)) {
                     this._pendingResolvers.set(url, []);
                 }
@@ -189,11 +177,8 @@
                 const total = Object.keys(registry)
                     .reduce((sum, cat) => sum + registry[cat].length, 0);
 
-                console.log('[PluginAPI] ✅ UserAPI.js loaded',
-                    '(' + Object.keys(registry).length + ' categories, ' + total + ' components)');
-
                 if (self._debug) {
-                    console.log('[PluginAPI] Registry:', registry);
+                    console.warn('[PluginAPI] Registry:', registry);
                 }
 
                 const resolvers = self._pendingResolvers.get(url) || [];
@@ -223,7 +208,6 @@
                 self._fireError(new Error('Script load failed'));
             };
 
-            // ✅ FIX: addEventListener вместо onload = (не затирает чужие)
             script.addEventListener('load', finishOk);
             script.addEventListener('error', finishErr);
 
@@ -266,7 +250,6 @@
             this._onLoadCallbacks = [];
             this._onErrorCallbacks = [];
             this._pendingResolvers.clear();
-            console.log('[PluginAPI] Destroyed');
         }
     }
 
@@ -276,7 +259,5 @@
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = { PluginAPI };
     }
-
-    console.log('[PluginAPI] Registered globally v1.0.1');
 
 })();

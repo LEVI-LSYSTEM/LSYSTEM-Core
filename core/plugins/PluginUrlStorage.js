@@ -5,15 +5,9 @@
 (function() {
     'use strict';
 
-    console.log('[PluginUrlStorage] Loading v2.0.0...');
-
     var STORE = window.PluginDB
         ? window.PluginDB.STORE_URL_PLUGINS
         : 'url-plugins';
-
-    // ────────────────────────────────────────────────────────────
-    // НОРМАЛИЗАЦИЯ ЗАПИСИ
-    // ────────────────────────────────────────────────────────────
 
     function _normalize(record) {
         if (!record || typeof record !== 'object') return null;
@@ -36,10 +30,6 @@
         };
     }
 
-    // ────────────────────────────────────────────────────────────
-    // ОБЁРТКА НАД PluginDB
-    // ────────────────────────────────────────────────────────────
-
     function _withStore(mode, fn) {
         if (!window.PluginDB) {
             return Promise.reject(new Error('PluginDB not available'));
@@ -50,10 +40,6 @@
     function _wrap(req) {
         return window.PluginDB.wrapRequest(req);
     }
-
-    // ────────────────────────────────────────────────────────────
-    // КЛАСС
-    // ────────────────────────────────────────────────────────────
 
     class PluginUrlStorage {
 
@@ -239,7 +225,6 @@
 
     if (typeof window !== 'undefined') {
         window.PluginUrlStorage = PluginUrlStorage;
-        console.log('[PluginUrlStorage] Registered globally v2.0.0');
     }
 
     if (typeof module !== 'undefined' && module.exports) {

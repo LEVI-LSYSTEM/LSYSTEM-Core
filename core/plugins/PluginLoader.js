@@ -35,10 +35,6 @@
     var DISABLED_KEY = 'lsystem-plugin-disabled';
     var MAX_SCAN_DEPTH = 32;
 
-    // ================================================================
-    // УТИЛИТЫ
-    // ================================================================
-
     function _endsWithJs(name) {
         return /\.js$/i.test(name);
     }
@@ -95,10 +91,6 @@
         return true;
     }
 
-    // ================================================================
-    // ЗАГРУЗЧИК
-    // ================================================================
-
     class PluginLoader {
         constructor(opts) {
             opts = opts || {};
@@ -119,10 +111,6 @@
             this._moduleCache = new Map();
             this._loading = new Map();
         }
-
-        // ============================================================
-        // ВЫКЛЮЧЕННЫЕ ПЛАГИНЫ
-        // ============================================================
 
         _readDisabledIds() {
             try {
@@ -152,10 +140,6 @@
             else this._disabledIds.delete(id);
             this._writeDisabledIds();
         }
-
-        // ============================================================
-        // СКАН
-        // ============================================================
 
         async scan() {
             this._sortedFiles = [];
@@ -252,10 +236,6 @@
             }
         }
 
-        // ============================================================
-        // ЗАГРУЗКА
-        // ============================================================
-
         async loadAll() {
             if (!this._scanned) {
                 var ok = await this.scan();
@@ -300,15 +280,9 @@
             return ids.length > 0;
         }
 
-        // ============================================================
-        // ВЫПОЛНЕНИЕ ФАЙЛА
-        // ============================================================
-
         async _executeFile(path) {
             if (!this.folderSource) return [];
 
-            // Уже выполнен (через require или предыдущий loadAll).
-            // Возвращаем id классов, которые этот модуль регистрирует.
             if (this._moduleCache.has(path)) {
                 var cached = this._moduleCache.get(path);
                 var cachedClasses = this._discoverClasses(cached);
@@ -388,10 +362,6 @@
             }
         }
 
-        // ============================================================
-        // REQUIRE
-        // ============================================================
-
         _resolveRequire(fromDir, reqPath) {
             if (!reqPath || typeof reqPath !== 'string') {
                 throw new Error('require: path must be a string');
@@ -457,10 +427,6 @@
             return moduleRef.exports;
         }
 
-        // ============================================================
-        // ДИСКАВЕРИНГ КЛАССОВ
-        // ============================================================
-
         _discoverClasses(moduleRef) {
             var out = [];
             var seen = new Set();
@@ -488,10 +454,6 @@
             return out;
         }
 
-        // ============================================================
-        // РЕГИСТРАЦИЯ КЛАССА
-        // ============================================================
-
         _registerClass(Class, path) {
             if (!this.registry || typeof this.registry.registerFromClass !== 'function') {
                 console.warn('[PluginLoader] registerFromClass not available — cannot register '
@@ -513,10 +475,6 @@
                 return false;
             }
         }
-
-        // ============================================================
-        // РЕЕСТР
-        // ============================================================
 
         _snapshotRegistry() {
             if (!this.registry || typeof this.registry.getAllTypes !== 'function') {
@@ -543,10 +501,6 @@
             if (!this.registry || typeof this.registry.unregister !== 'function') return;
             try { this.registry.unregister(id); } catch (e) {}
         }
-
-        // ============================================================
-        // ФАЙЛЫ / АССЕТЫ
-        // ============================================================
 
         listFolder(folderName) {
             var out = [];
@@ -618,10 +572,6 @@
             });
         }
 
-        // ============================================================
-        // МЕТАДАННЫЕ
-        // ============================================================
-
         getSortedFiles() {
             return this._sortedFiles.map(function(f) { return f.path; });
         }
@@ -654,10 +604,6 @@
             return Array.from(this._disabledIds);
         }
 
-        // ============================================================
-        // СБРОС
-        // ============================================================
-
         reset() {
             this._sortedFiles = [];
             this._assetIndex.clear();
@@ -676,10 +622,6 @@
             this._disabledIds = this._readDisabledIds();
         }
     }
-
-    // ================================================================
-    // ЭКСПОРТ
-    // ================================================================
 
     if (typeof window !== 'undefined') {
         window.PluginLoader = PluginLoader;
