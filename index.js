@@ -1539,6 +1539,7 @@
         menu.style.right = '';
         menu.style.top = '';
         menu.style.bottom = '';
+        menu.style.maxHeight = '';
 
         const prevVisibility = menu.style.visibility;
         const prevOpacity = menu.style.opacity;
@@ -1570,10 +1571,15 @@
         left = Math.max(margin, Math.min(left, viewportW - menuRect.width - margin));
         menu.style.left = (left - wrapperRect.left) + 'px';
 
-        const spaceBelow = viewportH - wrapperRect.bottom - margin;
-        const spaceAbove = wrapperRect.top - margin;
+        const spaceBelow = viewportH - wrapperRect.bottom - margin - 6;
+        const spaceAbove = wrapperRect.top - margin - 6;
 
-        if (menuRect.height > spaceBelow && spaceAbove > spaceBelow) {
+        const openUp = menuRect.height > spaceBelow && spaceAbove > spaceBelow;
+        const available = openUp ? spaceAbove : spaceBelow;
+
+        menu.style.maxHeight = Math.max(120, available) + 'px';
+
+        if (openUp) {
             menu.style.top = 'auto';
             menu.style.bottom = 'calc(100% + 6px)';
             menu.style.transformOrigin = 'bottom ' + (menu.classList.contains('is-align-right') ? 'right' : 'left');
@@ -2122,7 +2128,7 @@
 
         if (recent.length === 0) {
             el.recentList.innerHTML =
-                '<div class="window-menu__empty">Нет недавних проектов</div>';
+                '<div class="recent-empty">Нет недавних проектов</div>';
             return;
         }
 
@@ -2133,14 +2139,14 @@
             const iconId = isActive ? 'icon-circle-filled' : 'icon-data';
 
             html += `
-                <button class="recent-item" data-path="${escapeHtml(path)}" style="${isActive ? 'border-left-color:var(--accent-red);background:var(--bg-hover);' : ''}">
-                    <span class="recent-icon">${makeSvgIconString(iconId, 14)}</span>
+                <div class="recent-item" data-path="${escapeHtml(path)}" data-active="${isActive ? '1' : '0'}" role="button" tabindex="0">
+                    <span class="recent-icon">${makeSvgIconString(iconId, 13)}</span>
                     <span class="recent-name" title="${escapeHtml(path)}">${escapeHtml(name)}</span>
                     <span class="recent-path">${escapeHtml(path)}</span>
-                    <button class="recent-remove" data-path="${escapeHtml(path)}" title="Удалить">${
-                        makeSvgIconString('icon-close', 12)
-                    }</button>
-                </button>
+                    <button type="button" class="recent-remove" data-path="${escapeHtml(path)}" title="Удалить из недавних" aria-label="Удалить">
+                        ${makeSvgIconString('icon-close', 10)}
+                    </button>
+                </div>
             `;
         }
 
@@ -2157,11 +2163,19 @@
                     showNotification('Этот проект уже открыт', 'info', 1500);
                 }
             });
-        });
 
+            item.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    item.click();
+                }
+            });
+        });
+        
         el.recentList.querySelectorAll('.recent-remove').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 const path = btn.dataset.path;
                 if (path && window.projectManager) {
                     window.projectManager.removeRecentProject(path);
