@@ -1,17 +1,5 @@
 // core/LayoutManager.js
-// Версия 8.0.0
-//
-// Архитектура:
-//   - Единственный источник истины — this.root (LayoutNode).
-//   - render() синхронизирует DOM с this.root.
-//   - _ensureRootStructureMatches гарантирует: нет пустых leaf'ов, структура
-//     соответствует currentLayoutStyle и количеству окон.
-//   - Split-ratio хранится в dataset.splitR на каждом ребёнке. flex-basis
-//     считается напрямую, БЕЗ CSS-переменных — чтобы избежать конфликта
-//     одноимённых переменных между вложенными split'ами.
-//   - _dedupRootLeafIds чинит конфликты leaf.id и подсвечивает конфликты
-//     windowData.id.
-//   - setIdFloor синхронизирует счётчик leaf.id с загруженным проектом.
+// Версия 10.1.0
 
 (function() {
     'use strict';
@@ -52,6 +40,29 @@
         if (typeof v === 'number' && v >= _idCounter) _idCounter = v + 1;
     }
 
+    function isPositiveNumber(v) {
+        return typeof v === 'number' && isFinite(v) && v > 0;
+    }
+
+    function normalizeRatios(arr) {
+        if (!Array.isArray(arr)) return null;
+        if (arr.length === 0) return null;
+
+        var cleaned = [];
+        for (var i = 0; i < arr.length; i++) {
+            if (!isPositiveNumber(arr[i])) return null;
+            cleaned.push(arr[i]);
+        }
+
+        var sum = 0;
+        for (var j = 0; j < cleaned.length; j++) sum += cleaned[j];
+        if (sum <= 0) return null;
+
+        var out = [];
+        for (var k = 0; k < cleaned.length; k++) out.push(cleaned[k] / sum);
+        return out;
+    }
+
     class LayoutNode {
         constructor(opts) {
             opts = opts || {};
@@ -59,6 +70,7 @@
             this.type = opts.type || NodeType.LEAF;
             this.direction = opts.direction || null;
             this.ratio = opts.ratio || 0.5;
+            this.ratios = Array.isArray(opts.ratios) ? opts.ratios.slice() : null;
             this.children = opts.children || [];
             this.windowData = opts.windowData || null;
             this.parent = null;
@@ -123,6 +135,7 @@
                 type: this.type,
                 direction: this.direction,
                 ratio: this.ratio,
+                ratios: this.ratios ? this.ratios.slice() : null,
                 windowData: this.windowData ? {
                     id: this.windowData.id,
                     type: this.windowData.type,
@@ -135,19 +148,49 @@
         }
 
         static fromJSON(data) {
-            const node = new LayoutNode({
-                type: data.type,
-                id: data.id,
-                direction: data.direction,
-                ratio: data.ratio,
-                windowData: data.windowData
+            if (!data || typeof data !== 'object' || Array.isArray(data)) {
+                return new LayoutNode({ type: NodeType.LEAF, windowData: null });
+            }
+
+            var type = (data.type === NodeType.SPLIT) ? NodeType.SPLIT : NodeType.LEAF;
+            var id = (typeof data.id === 'number' && isFinite(data.id)) ? data.id : undefined;
+
+            var direction = null;
+            if (data.direction === SplitDirection.HORIZONTAL ||
+                data.direction === SplitDirection.VERTICAL) {
+                direction = data.direction;
+            }
+
+            var ratio = (isPositiveNumber(data.ratio) && data.ratio < 1) ? data.ratio : 0.5;
+            var ratios = normalizeRatios(data.ratios);
+
+            var windowData = null;
+            if (type === NodeType.LEAF && data.windowData && typeof data.windowData === 'object') {
+                windowData = {
+                    id: data.windowData.id,
+                    type: data.windowData.type,
+                    title: data.windowData.title,
+                    icon: data.windowData.icon,
+                    slotId: data.windowData.slotId || null
+                };
+            }
+
+            var node = new LayoutNode({
+                type: type,
+                id: id,
+                direction: direction,
+                ratio: ratio,
+                ratios: ratios,
+                windowData: windowData
             });
-            const children = data.children || [];
-            for (let i = 0; i < children.length; i++) {
-                const child = LayoutNode.fromJSON(children[i]);
+
+            var children = Array.isArray(data.children) ? data.children : [];
+            for (var i = 0; i < children.length; i++) {
+                var child = LayoutNode.fromJSON(children[i]);
                 child.parent = node;
                 node.children.push(child);
             }
+
             return node;
         }
     }
@@ -199,17 +242,37 @@
             this._minimizedWindowsData = new Map();
             this._fullscreenWindowId = null;
 
-            this._resizeTimer = null;
             this._resizeRAF = null;
+            this._resizeFallbackTimer = null;
 
             this._contentRenderers = new Map();
 
             this._activeDividerDrag = null;
+
+            this._projectListeners = [];
         }
+
+        // ============================================================
+        // 1. EVENT BUS HELPERS
+        // ============================================================
+
+        _busEmit(event, detail) {
+            if (window.eventBus && typeof window.eventBus.emit === 'function') {
+                try { window.eventBus.emit(event, detail); } catch (e) {}
+            }
+        }
+
+        // ============================================================
+        // 2. REGISTER CONTENT RENDERER
+        // ============================================================
 
         registerContentRenderer(typeId, renderer) {
             this._contentRenderers.set(typeId, renderer);
         }
+
+        // ============================================================
+        // 3. INIT
+        // ============================================================
 
         init() {
             if (!this.workspace) {
@@ -226,19 +289,19 @@
         _setupProjectListeners() {
             var self = this;
 
-            document.addEventListener('project-get-layout', function(e) {
+            var onGetLayout = function(e) {
                 if (e.detail && typeof e.detail.respond === 'function') {
                     e.detail.respond(self.getProjectData());
                 }
-            });
+            };
 
-            document.addEventListener('project-get-layout-style', function(e) {
+            var onGetStyle = function(e) {
                 if (e.detail && typeof e.detail.respond === 'function') {
                     e.detail.respond(self.getCurrentStyle());
                 }
-            });
+            };
 
-            document.addEventListener('project-restore-layout', function(e) {
+            var onRestore = function(e) {
                 if (!e.detail) return;
                 var layoutData = e.detail.layoutData;
                 var layoutStyle = e.detail.layoutStyle;
@@ -252,21 +315,40 @@
                 } else {
                     self.render();
                 }
+            };
+
+            document.addEventListener('project-get-layout', onGetLayout);
+            document.addEventListener('project-get-layout-style', onGetStyle);
+            document.addEventListener('project-restore-layout', onRestore);
+
+            this._projectListeners.push(function() {
+                document.removeEventListener('project-get-layout', onGetLayout);
+                document.removeEventListener('project-get-layout-style', onGetStyle);
+                document.removeEventListener('project-restore-layout', onRestore);
             });
         }
+
+        // ============================================================
+        // 4. DESTROY
+        // ============================================================
 
         destroy() {
             this._cancelActiveDividerDrag();
             this.exitFullscreen(true);
 
-            if (this._resizeTimer) {
-                clearTimeout(this._resizeTimer);
-                this._resizeTimer = null;
-            }
             if (this._resizeRAF) {
                 cancelAnimationFrame(this._resizeRAF);
                 this._resizeRAF = null;
             }
+            if (this._resizeFallbackTimer) {
+                clearTimeout(this._resizeFallbackTimer);
+                this._resizeFallbackTimer = null;
+            }
+
+            for (var i = 0; i < this._projectListeners.length; i++) {
+                try { this._projectListeners[i](); } catch (e) {}
+            }
+            this._projectListeners = [];
 
             this._windowInstances.forEach(function(instance) {
                 if (instance && typeof instance.destroy === 'function') {
@@ -295,6 +377,10 @@
 
             this._activeDividerDrag = null;
         }
+
+        // ============================================================
+        // 5. QUERIES — WINDOWS
+        // ============================================================
 
         getWindows() {
             var result = [];
@@ -395,12 +481,30 @@
         }
 
         getInstance(id) {
+            var bw = this._windowInstances.get(String(id)) || null;
+            if (!bw) return null;
+            return typeof bw.getRealInstance === 'function' ? bw.getRealInstance() : null;
+        }
+
+        getBaseWindow(id) {
             return this._windowInstances.get(String(id)) || null;
+        }
+
+        hasInstance(id) {
+            return this._windowInstances.has(String(id));
+        }
+
+        getWindowElement(nodeId) {
+            return this._domMap.get(nodeId) || null;
         }
 
         getWindowsByType(typeId) {
             return this.getWindows().filter(function(w) { return w.type === typeId; });
         }
+
+        // ============================================================
+        // 6. FOCUS
+        // ============================================================
 
         setFocusedWindow(windowId) {
             var wid = windowId != null ? String(windowId) : null;
@@ -433,6 +537,10 @@
         getFocusedWindow() {
             return this._focusedWindowId;
         }
+
+        // ============================================================
+        // 7. MINIMIZE
+        // ============================================================
 
         minimizeWindow(windowId) {
             var sid = String(windowId);
@@ -548,6 +656,10 @@
         isMinimized(windowId) {
             return this._minimizedWindowsData.has(String(windowId));
         }
+
+        // ============================================================
+        // 8. FULLSCREEN
+        // ============================================================
 
         setFullscreen(windowId) {
             var sid = String(windowId);
@@ -684,6 +796,10 @@
             return this._fullscreenWindowId === String(windowId);
         }
 
+        // ============================================================
+        // 9. SLOT RESOLUTION
+        // ============================================================
+
         _resolveSlotForType(typeId) {
             if (!this._dataBus) return null;
 
@@ -699,6 +815,30 @@
 
             return this._dataBus.createSlot(typeId);
         }
+
+        _ensureSlotForWindow(windowData) {
+            if (!this._dataBus) return;
+            if (!windowData || windowData.slotId == null) return;
+
+            var sid = String(windowData.slotId);
+            if (this._dataBus.hasSlot(sid)) return;
+
+            var recovered = this._dataBus.ensureSlotForWindow(sid, windowData.type);
+            if (!recovered) {
+                windowData.slotId = null;
+            }
+        }
+
+        _ensureSlotsForVisible(visibleWindows) {
+            if (!this._dataBus) return;
+            for (var i = 0; i < visibleWindows.length; i++) {
+                this._ensureSlotForWindow(visibleWindows[i]);
+            }
+        }
+
+        // ============================================================
+        // 10. ADD / CREATE
+        // ============================================================
 
         addWindow(type, title, icon) {
             if (this.getVisibleWindowCount() >= this.maxWindows) {
@@ -787,6 +927,10 @@
 
             return created;
         }
+
+        // ============================================================
+        // 11. CLOSE
+        // ============================================================
 
         closeWindow(id) {
             var sid = String(id);
@@ -909,6 +1053,10 @@
             return true;
         }
 
+        // ============================================================
+        // 12. SWAP
+        // ============================================================
+
         swapWindows(windowId1, windowId2) {
             var s1 = String(windowId1);
             var s2 = String(windowId2);
@@ -955,6 +1103,10 @@
             });
             return true;
         }
+
+        // ============================================================
+        // 13. LAYOUT STYLES
+        // ============================================================
 
         getAvailableStyles() {
             return this._getAvailableStylesForCount(this.getVisibleWindowCount());
@@ -1010,20 +1162,45 @@
 
         getCurrentStyle() { return this.currentLayoutStyle; }
 
+        // ============================================================
+        // 14. RATIOS / SPLIT COMPUTATION
+        // ============================================================
+
         _computeSplitRatios(node) {
             var n = node.children.length;
             if (n === 0) return [];
             if (n === 1) return [1];
-            if (n === 2) {
-                var r = node.ratio;
-                if (r <= 0 || r >= 1) r = 0.5;
-                return [r, 1 - r];
+
+            if (Array.isArray(node.ratios) && node.ratios.length === n) {
+                var sum = 0;
+                var valid = true;
+                for (var i = 0; i < n; i++) {
+                    var r = node.ratios[i];
+                    if (!isPositiveNumber(r)) { valid = false; break; }
+                    sum += r;
+                }
+                if (valid && sum > 0) {
+                    var out = [];
+                    for (var j = 0; j < n; j++) out.push(node.ratios[j] / sum);
+                    return out;
+                }
             }
+
+            if (n === 2) {
+                var rr = node.ratio;
+                if (rr <= 0 || rr >= 1) rr = 0.5;
+                return [rr, 1 - rr];
+            }
+
             var equal = 1 / n;
-            var out = [];
-            for (var i = 0; i < n; i++) out.push(equal);
-            return out;
+            var out2 = [];
+            for (var k = 0; k < n; k++) out2.push(equal);
+            return out2;
         }
+
+        // ============================================================
+        // 15. VISIBLE PLAIN COLLECTION
+        // ============================================================
 
         _collectVisibleAsPlain() {
             var visible = this.getVisibleWindows();
@@ -1041,6 +1218,10 @@
             }
             return out;
         }
+
+        // ============================================================
+        // 16. DEDUP
+        // ============================================================
 
         _dedupRootLeafIds() {
             if (!this.root) return false;
@@ -1079,6 +1260,10 @@
 
             return changed;
         }
+
+        // ============================================================
+        // 17. ROOT STRUCTURE
+        // ============================================================
 
         _ensureRootStructureMatches(visibleWindows) {
             var count = visibleWindows.length;
@@ -1127,6 +1312,8 @@
         }
 
         _rebuildFromVisible(visibleWindows) {
+            this._ensureSlotsForVisible(visibleWindows);
+
             var count = visibleWindows.length;
 
             if (count === 0) {
@@ -1169,6 +1356,10 @@
             var newRoot = this._buildLayoutForStyle(this.currentLayoutStyle, cleaned);
             if (newRoot) this.root = newRoot;
         }
+
+        // ============================================================
+        // 18. LAYOUT BUILDERS
+        // ============================================================
 
         _buildLayoutForStyle(style, windows) {
             var count = windows.length;
@@ -1364,6 +1555,10 @@
             return root;
         }
 
+        // ============================================================
+        // 19. RENDER — FULL
+        // ============================================================
+
         render() {
             this._cancelActiveDividerDrag();
             if (!this.workspace) return;
@@ -1376,6 +1571,7 @@
 
             var visible = this.getVisibleWindows();
             this._ensureRootStructureMatches(visible);
+            this._ensureSlotsForVisible(visible);
             this._dedupRootLeafIds();
 
             this.workspace.innerHTML = '';
@@ -1386,6 +1582,8 @@
                 this._renderEmptyWorkspace();
                 this._updateWindowMap();
                 this._scheduleResize();
+
+                this._busEmit('layout-rendered', { count: 0 });
                 return;
             }
 
@@ -1394,7 +1592,59 @@
 
             this._updateWindowMap();
             this._scheduleResize();
+
+            this._busEmit('layout-rendered', {
+                count: this.getVisibleWindowCount()
+            });
         }
+
+        // ============================================================
+        // 20. RENDER — RESIZE ONLY
+        // ============================================================
+
+        resizeRenderedDOM() {
+            if (!this.workspace) return false;
+            if (!this.root) return false;
+
+            var element = this.workspace.firstElementChild;
+            if (!element) return false;
+
+            this._reflowSplitRatios(this.root, element);
+            this._scheduleResize();
+            return true;
+        }
+
+        _reflowSplitRatios(node, el) {
+            if (!node || !el) return;
+
+            if (node.isSplit()) {
+                var isHorizontal = node.direction === SplitDirection.HORIZONTAL;
+                var childCount = node.children.length;
+                var dividerTotalPx = DIVIDER_SIZE * (childCount - 1);
+                var ratios = this._computeSplitRatios(node);
+
+                var childElements = [];
+                for (var i = 0; i < el.children.length; i++) {
+                    var child = el.children[i];
+                    if (!child.classList || !child.classList.contains('split-divider')) {
+                        childElements.push(child);
+                    }
+                }
+
+                for (var k = 0; k < childElements.length && k < node.children.length; k++) {
+                    var cEl = childElements[k];
+                    var percent = (ratios[k] * 100).toFixed(6);
+                    cEl.style.flex = '0 0 calc((100% - ' + dividerTotalPx + 'px) * ' + percent + ' / 100)';
+                    cEl.dataset.splitR = String(ratios[k]);
+
+                    this._reflowSplitRatios(node.children[k], cEl);
+                }
+            }
+        }
+
+        // ============================================================
+        // 21. RENDER — EMPTY
+        // ============================================================
 
         _renderEmptyWorkspace() {
             var existing = this.workspace.querySelector('.workspace-empty');
@@ -1425,25 +1675,44 @@
             this.workspace.appendChild(placeholder);
         }
 
+        // ============================================================
+        // 22. RESIZE SCHEDULING
+        // ============================================================
+
         _scheduleResize() {
             if (this._resizeRAF) {
                 cancelAnimationFrame(this._resizeRAF);
                 this._resizeRAF = null;
             }
-            if (this._resizeTimer) {
-                clearTimeout(this._resizeTimer);
-                this._resizeTimer = null;
+            if (this._resizeFallbackTimer) {
+                clearTimeout(this._resizeFallbackTimer);
+                this._resizeFallbackTimer = null;
             }
 
             var self = this;
+
             this._resizeRAF = requestAnimationFrame(function() {
                 self._resizeRAF = null;
+
+                var anyVisible = false;
+                self._windowInstances.forEach(function(bw) {
+                    if (!bw || typeof bw.isDestroyed !== 'function') return;
+                    if (bw.isDestroyed()) return;
+                    var el = bw.getRoot && bw.getRoot();
+                    if (!el) return;
+                    if (el.clientWidth > 0 && el.clientHeight > 0) {
+                        anyVisible = true;
+                    }
+                });
+
                 self._doResizeAll();
 
-                self._resizeTimer = setTimeout(function() {
-                    self._resizeTimer = null;
-                    self._doResizeAll();
-                }, 200);
+                if (!anyVisible) {
+                    self._resizeFallbackTimer = setTimeout(function() {
+                        self._resizeFallbackTimer = null;
+                        self._doResizeAll();
+                    }, 200);
+                }
             });
         }
 
@@ -1459,6 +1728,10 @@
             this._doResizeAll();
         }
 
+        // ============================================================
+        // 23. DOM BUILD
+        // ============================================================
+
         _buildDOM(node) {
             if (node.isLeaf()) return this._buildLeafDOM(node);
             if (node.isSplit()) return this._buildSplitDOM(node);
@@ -1471,6 +1744,8 @@
                 empty.style.cssText = 'flex:1 1 auto;min-width:0;min-height:0;background:transparent;';
                 return empty;
             }
+
+            this._ensureSlotForWindow(node.windowData);
 
             var container = document.createElement('div');
             container.className = 'window-container';
@@ -1520,15 +1795,19 @@
 
             if (existing && !existing.isDestroyed()) {
                 if (existing.type === node.windowData.type) {
+                    var oldSlotId = existing.getSlotId ? existing.getSlotId() : null;
+
+                    if (slotId && oldSlotId !== slotId) {
+                        if (typeof existing.attachTo === 'function') {
+                            existing.attachTo(slotId);
+                        }
+                    }
+
                     var rw = existing.getRenderWindow();
                     if (rw && rw._root) {
                         existing.container = container;
                         rw.container = container;
                         container.appendChild(rw._root);
-
-                        if (slotId && existing.getSlotId() !== slotId) {
-                            existing.attachTo(slotId);
-                        }
                         return container;
                     }
                 }
@@ -1751,10 +2030,6 @@
                     if (newLeft < minRatio) { newLeft = minRatio; newRight = sumStart - minRatio; }
                     if (newRight < minRatio) { newRight = minRatio; newLeft = sumStart - minRatio; }
 
-                    if (total === 2 && sumStart > 0) {
-                        node.ratio = newLeft / sumStart;
-                    }
-
                     leftEl.dataset.splitR = String(newLeft);
                     rightEl.dataset.splitR = String(newRight);
 
@@ -1775,6 +2050,21 @@
                     document.body.style.cursor = '';
                     document.body.style.userSelect = '';
 
+                    var collected = [];
+                    for (var i = 0; i < total; i++) {
+                        var r = parseFloat(childElements[i].dataset.splitR);
+                        if (!isPositiveNumber(r)) r = 1 / total;
+                        collected.push(r);
+                    }
+
+                    var normalized = normalizeRatios(collected);
+                    if (normalized) {
+                        node.ratios = normalized;
+                        if (normalized.length === 2) {
+                            node.ratio = normalized[0];
+                        }
+                    }
+
                     self._activeDividerDrag = null;
                     self._notifyChange();
                 };
@@ -1790,6 +2080,10 @@
             return divider;
         }
 
+        // ============================================================
+        // 24. WINDOW MAP
+        // ============================================================
+
         _updateWindowMap() {
             this._windowMap.clear();
             var windows = this.getVisibleWindows();
@@ -1800,6 +2094,10 @@
             }
         }
 
+        // ============================================================
+        // 25. EMIT HELPERS
+        // ============================================================
+
         _notifyChange() {
             var detail = {
                 windows: this.getWindows(),
@@ -1809,8 +2107,7 @@
                 style: this.currentLayoutStyle
             };
 
-            document.dispatchEvent(new CustomEvent('layout-changed', { detail: detail }));
-            if (this._eventBus) this._eventBus.emit('layout-changed', detail);
+            this._busEmit('layout-changed', detail);
         }
 
         _emitLayoutAction(action, data) {
@@ -1820,10 +2117,7 @@
             }
             detail.timestamp = Date.now();
 
-            document.dispatchEvent(new CustomEvent('layout-action', { detail: detail }));
-            if (this._eventBus) {
-                try { this._eventBus.emit('layout-action', detail); } catch (e) {}
-            }
+            this._busEmit('layout-action', detail);
         }
 
         _emitVisibilityChanged(windowId, visible) {
@@ -1833,11 +2127,12 @@
                 timestamp: Date.now()
             };
 
-            document.dispatchEvent(new CustomEvent('window-visibility-changed', { detail: detail }));
-            if (this._eventBus) {
-                try { this._eventBus.emit('window-visibility-changed', detail); } catch (e) {}
-            }
+            this._busEmit('window-visibility-changed', detail);
         }
+
+        // ============================================================
+        // 26. DEFAULT STATE
+        // ============================================================
 
         loadDefaultState() {
             this.closeAll();
@@ -1849,6 +2144,10 @@
             this.render();
             this._notifyChange();
         }
+
+        // ============================================================
+        // 27. PROJECT DATA
+        // ============================================================
 
         getProjectData() {
             if (!this.root) return null;
@@ -1865,7 +2164,7 @@
             });
 
             return {
-                version: '1.3.0',
+                version: '1.5.0',
                 layout: this.root.toJSON(),
                 windowCounter: this._windowIdCounter,
                 layoutStyle: this.currentLayoutStyle,
@@ -1927,12 +2226,23 @@
                 this._fullscreenWindowId = null;
             }
 
+            var allVisible = this.getVisibleWindows();
+            this._ensureSlotsForVisible(allVisible);
+
+            var minimizedList = [];
+            this._minimizedWindowsData.forEach(function(v) { minimizedList.push(v); });
+            this._ensureSlotsForVisible(minimizedList);
+
             return true;
         }
 
         renderLayout() { this.render(); }
         getLayoutData() { return this.getProjectData(); }
         loadLayoutData(data) { return this.loadProjectData(data); }
+
+        // ============================================================
+        // 28. CLEAR INSTANCES
+        // ============================================================
 
         _clearInstances() {
             this._cancelActiveDividerDrag();

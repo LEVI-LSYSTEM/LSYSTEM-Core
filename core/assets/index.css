@@ -3496,3 +3496,70 @@ body.header-collapsed[data-theme="light"] .header {
         height: 12px;
     }
 }
+
+/* ================================================================
+   DISABLED BUTTONS
+   ================================================================ */
+
+.btn:disabled,
+.btn[disabled] {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.btn:disabled::before,
+.btn:disabled::after,
+.btn[disabled]::before,
+.btn[disabled]::after {
+    display: none !important;
+}
+
+.btn:disabled:hover,
+.btn[disabled]:hover {
+    background: var(--bg-card);
+    border-color: var(--border-color);
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-primary:disabled,
+.btn-primary[disabled] {
+    background: var(--accent-red);
+    border-color: var(--accent-red);
+    opacity: 0.4;
+}
+
+.btn-outline:disabled,
+.btn-outline[disabled] {
+    background: transparent;
+    border-color: var(--border-color);
+}
+
+body.header-collapsed .btn:disabled {
+    opacity: 0.25;
+    pointer-events: none;
+}
+
+.header.is-compact .btn:disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
+
+[data-theme="light"] .btn:disabled,
+[data-theme="light"] .btn[disabled] {
+    background: #c8baa8;
+    border-color: #baaa98;
+    color: #4a3f35;
+    opacity: 0.4;
+}
+
+[data-theme="light"] .btn-primary:disabled,
+[data-theme="light"] .btn-primary[disabled] {
+    background: #b81f2e;
+    border-color: #b81f2e;
+    color: #fff;
+    opacity: 0.4;
+}

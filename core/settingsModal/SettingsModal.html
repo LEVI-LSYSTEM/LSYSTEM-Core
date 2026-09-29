@@ -1,0 +1,227 @@
+<div class="settings-modal-overlay" id="settingsModalOverlay">
+    <div class="settings-modal" id="settingsModal" role="dialog" aria-modal="true">
+        <div class="settings-modal__header">
+            <div class="settings-modal__title-wrap">
+                <svg class="icon-svg settings-modal__title-icon"><use href="#icon-settings"></use></svg>
+                <h2 class="settings-modal__title">Настройки</h2>
+            </div>
+            <button class="settings-modal__close" id="settingsCloseBtn" type="button" title="Закрыть (Esc)">
+                <svg class="icon-svg"><use href="#icon-close"></use></svg>
+            </button>
+        </div>
+        <div class="settings-modal__body">
+
+            <section class="settings-group">
+                <header class="settings-group__header">
+                    <svg class="icon-svg settings-group__icon"><use href="#icon-user"></use></svg>
+                    <span class="settings-group__title">Профиль</span>
+                </header>
+                <div class="settings-group__body">
+
+                    <div class="settings-row">
+                        <label class="settings-row__label" for="profileName">Имя / Организация</label>
+                        <div class="settings-row__control">
+                            <input class="settings-input" id="profileName" type="text" placeholder="Введите имя или организацию..." autocomplete="off" />
+                        </div>
+                    </div>
+
+                    <div class="settings-nda" id="eulaBlock">
+                        <div class="settings-nda__text">
+                            <div class="settings-nda__title">Соглашение о неразглашении (EULA)</div>
+                            <div class="settings-nda__desc">Ознакомьтесь с условиями использования приложения. Используя приложение, вы принимаете соглашение.</div>
+                            <div class="settings-actions-row">
+                                <button class="settings-btn settings-btn--ghost" id="eulaDownloadBtn" type="button">
+                                    <svg class="icon-svg"><use href="#icon-download"></use></svg>
+                                    <span>Скачать .md</span>
+                                </button>
+                                <button class="settings-btn settings-btn--ghost" id="eulaOpenBtn" type="button">
+                                    <svg class="icon-svg"><use href="#icon-data"></use></svg>
+                                    <span>Открыть EULA</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-group__actions">
+                        <button class="settings-btn settings-btn--ghost" id="profileExportBtn" type="button" title="Экспорт профиля">
+                            <svg class="icon-svg"><use href="#icon-download"></use></svg>
+                            <span>Экспорт</span>
+                        </button>
+                        <button class="settings-btn settings-btn--ghost" id="profileImportBtn" type="button" title="Импорт профиля">
+                            <svg class="icon-svg"><use href="#icon-load"></use></svg>
+                            <span>Импорт</span>
+                        </button>
+                        <button class="settings-btn settings-btn--ghost" id="profileClearBtn" type="button">
+                            <svg class="icon-svg"><use href="#icon-trash"></use></svg>
+                            <span>Сбросить</span>
+                        </button>
+                        <button class="settings-btn settings-btn--primary" id="profileSaveBtn" type="button">
+                            <svg class="icon-svg"><use href="#icon-save"></use></svg>
+                            <span>Сохранить</span>
+                        </button>
+                    </div>
+
+                </div>
+            </section>
+
+            <section class="settings-group">
+                <header class="settings-group__header">
+                    <svg class="icon-svg settings-group__icon"><use href="#icon-layout"></use></svg>
+                    <span class="settings-group__title">Тема</span>
+                </header>
+                <div class="settings-group__body">
+
+                    <div class="theme-switch" id="themeSwitch" data-mode="auto" tabindex="0">
+                        <span class="theme-switch__thumb" aria-hidden="true"></span>
+                        <button class="theme-switch__opt" data-mode="auto" type="button" title="Авто">
+                            <svg class="icon-svg"><use href="#icon-history"></use></svg>
+                            <span>Авто</span>
+                        </button>
+                        <button class="theme-switch__opt" data-mode="dark" type="button" title="Тёмная">
+                            <svg class="icon-svg"><use href="#icon-eye-off"></use></svg>
+                            <span>Тёмная</span>
+                        </button>
+                        <button class="theme-switch__opt" data-mode="light" type="button" title="Светлая">
+                            <svg class="icon-svg"><use href="#icon-eye"></use></svg>
+                            <span>Светлая</span>
+                        </button>
+                    </div>
+
+                    <div class="theme-auto" id="themeAutoPanel">
+                        <div class="theme-auto__inner">
+                            <div class="theme-auto__row">
+                                <span class="theme-auto__caption">Тёмная тема с</span>
+                                <div class="time-field">
+                                    <input type="number" min="0" max="23" id="themeDarkStart" class="time-field__input" />
+                                    <span class="time-field__suffix">:00</span>
+                                </div>
+                                <span class="theme-auto__caption">до</span>
+                                <div class="time-field">
+                                    <input type="number" min="0" max="23" id="themeDarkEnd" class="time-field__input" />
+                                    <span class="time-field__suffix">:00</span>
+                                </div>
+                            </div>
+                            <div class="theme-auto__timeline" id="themeTimeline">
+                                <div class="theme-auto__bar"></div>
+                                <div class="theme-auto__night" id="themeNightBand"></div>
+                                <div class="theme-auto__ticks">
+                                    <span>0</span><span>6</span><span>12</span><span>18</span><span>24</span>
+                                </div>
+                            </div>
+                            <div class="theme-auto__now" id="themeNowHint">Сейчас: —</div>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            <section class="settings-group">
+                <header class="settings-group__header">
+                    <svg class="icon-svg settings-group__icon"><use href="#icon-window-type"></use></svg>
+                    <span class="settings-group__title">Плагины</span>
+                </header>
+                <div class="settings-group__body">
+
+                    <div class="settings-folder-banner" id="pluginsFolderBanner" style="display:none;">
+                        <svg class="icon-svg settings-folder-banner__icon"><use href="#icon-warning"></use></svg>
+                        <div class="settings-folder-banner__text">
+                            <div class="settings-folder-banner__title">Требуется доступ к папке плагинов</div>
+                            <div class="settings-folder-banner__desc">Разрешите чтение файлов, чтобы загрузить установленные плагины.</div>
+                        </div>
+                        <button class="settings-btn settings-btn--primary" id="pluginsGrantAccessBtn" type="button">
+                            <span>Разрешить</span>
+                        </button>
+                    </div>
+
+                    <div class="settings-row">
+                        <span class="settings-row__label">Рабочая папка</span>
+                        <div class="settings-row__control">
+                            <code class="settings-path" id="pluginsWorkingFolder">— не выбрана —</code>
+                            <button class="settings-btn settings-btn--ghost" id="pluginsChooseFolderBtn" type="button" title="Выбрать директорию">
+                                <svg class="icon-svg"><use href="#icon-folder"></use></svg>
+                            </button>
+                            <button class="settings-btn settings-btn--ghost" id="pluginsScanFolderBtn" type="button" title="Пересканировать папку">
+                                <svg class="icon-svg"><use href="#icon-refresh"></use></svg>
+                            </button>
+                            <button class="settings-btn settings-btn--ghost" id="pluginsForgetFolderBtn" type="button" title="Забыть папку">
+                                <svg class="icon-svg"><use href="#icon-close"></use></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="plugins-tabs" id="pluginsTabs">
+                        <button type="button" class="plugins-tab is-active" data-tab="active">
+                            <span>Активные</span>
+                            <span class="plugins-tab__count" id="pluginsActiveCount">0</span>
+                        </button>
+                        <button type="button" class="plugins-tab" data-tab="hidden">
+                            <span>Скрытые</span>
+                            <span class="plugins-tab__count" id="pluginsHiddenCount">0</span>
+                        </button>
+                    </div>
+
+                    <div class="plugins-toolbar">
+                        <div class="plugins-search">
+                            <svg class="plugins-search__icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                            <input type="text" class="plugins-search__input" id="pluginsSearchInput" placeholder="Поиск плагинов..." autocomplete="off" />
+                        </div>
+                        <button class="settings-btn settings-btn--ghost" id="pluginsInstallUrlBtn" type="button" title="Установить по URL">
+                            <svg class="icon-svg"><use href="#icon-plus"></use></svg>
+                            <span>+ URL</span>
+                        </button>
+                    </div>
+
+                    <div class="plugins-list" id="pluginsList"></div>
+
+                    <div class="settings-group__actions">
+                        <button class="settings-btn settings-btn--ghost" id="pluginsCheckUpdatesBtn" type="button" title="Проверить обновления URL-плагинов">
+                            <svg class="icon-svg"><use href="#icon-download"></use></svg>
+                            <span>Проверить обновления</span>
+                        </button>
+                        <button class="settings-btn settings-btn--primary" id="pluginsReloadBtn" type="button">
+                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>
+                            <span>Перезагрузить</span>
+                        </button>
+                    </div>
+
+                </div>
+            </section>
+
+            <section class="settings-group">
+                <header class="settings-group__header">
+                    <svg class="icon-svg settings-group__icon"><use href="#icon-settings"></use></svg>
+                    <span class="settings-group__title">Горячие клавиши</span>
+                </header>
+                <div class="settings-group__body">
+                    <div class="settings-hotkeys__hint">
+                        Кликните по комбинации, чтобы изменить. <kbd>Esc</kbd> отменяет ввод.
+                    </div>
+                    <div class="settings-subgroup">
+                        <div class="settings-subgroup__title">Глобальные</div>
+                        <div class="settings-hotkeys" id="hotkeysGlobalList"></div>
+                    </div>
+                    <div class="settings-subgroup">
+                        <div class="settings-subgroup__title">Оконные</div>
+                        <div class="settings-hotkeys" id="hotkeysWindowList"></div>
+                    </div>
+                    <div class="settings-group__actions">
+                        <button class="settings-btn settings-btn--ghost" id="hotkeysResetBtn" type="button">
+                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>
+                            <span>Сбросить все</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+        <div class="settings-modal__footer">
+            <span class="settings-modal__brand">
+                LSYSTEM <span class="settings-modal__sep">|</span> Core
+            </span>
+            <button class="settings-btn settings-btn--primary" id="settingsApplyBtn" type="button">
+                <svg class="icon-svg"><use href="#icon-success"></use></svg>
+                <span>Готово</span>
+            </button>
+        </div>
+    </div>
+</div>

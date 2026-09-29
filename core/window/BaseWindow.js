@@ -1,5 +1,5 @@
 // core/window/BaseWindow.js
-// Версия 12.0.0
+// Версия 14.0.0
 
 (function() {
     'use strict';
@@ -13,7 +13,6 @@
         this.options = config.options || {};
 
         this._themeObserver = null;
-        this._themeUnsubscribe = null;
 
         this._dataBus = this.options.dataBus || null;
         this._registry = this.options.registry || null;
@@ -38,9 +37,8 @@
         this._isVisible = true;
 
         this._visibilityObserver = null;
-        this._visibilityUnsub = null;
 
-        this._requestUnsubs = [];
+        this._cleanups = [];
 
         this._metadata = {};
         this._data = null;
@@ -54,25 +52,52 @@
         this._chrome = null;
         this._header = null;
 
-        this._subscriptions = [];
         this._slotUnsubscribe = null;
-        this._messageUnsubscribe = null;
-        this._layoutUnsubscribe = null;
-        this._hotkeyUnsub = null;
-
-        this._headerUnsubs = [];
 
         this._init();
     }
 
     // ============================================================
-    // 1. HEADER ITEMS RESOLVER
+    // 1. CLEANUP HELPERS
+    // ============================================================
+
+    BaseWindow.prototype._addCleanup = function(fn) {
+        if (typeof fn === 'function') {
+            this._cleanups.push(fn);
+        }
+    };
+
+    BaseWindow.prototype._runCleanups = function() {
+        var list = this._cleanups;
+        this._cleanups = [];
+        for (var i = 0; i < list.length; i++) {
+            try { list[i](); } catch (e) {}
+        }
+    };
+
+    // ============================================================
+    // 2. EVENT BUS HELPERS
+    // ============================================================
+
+    BaseWindow.prototype._busEmit = function(event, data) {
+        if (!window.eventBus || typeof window.eventBus.emit !== 'function') return;
+        try { window.eventBus.emit(event, data); } catch (e) {}
+    };
+
+    BaseWindow.prototype._busOnWindow = function(event, handler) {
+        if (!window.eventBus || typeof window.eventBus.onWindow !== 'function') {
+            return function() {};
+        }
+        return window.eventBus.onWindow(this.id, event, handler);
+    };
+
+    // ============================================================
+    // 3. HEADER ITEMS RESOLVER
     // ============================================================
 
     BaseWindow.prototype._resolveHeaderItems = function() {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.getHeaderItems === 'function') {
+        if (realInstance && typeof realInstance.getHeaderItems === 'function') {
             try {
                 var items = realInstance.getHeaderItems();
                 if (Array.isArray(items)) {
@@ -98,7 +123,7 @@
     };
 
     // ============================================================
-    // 2. ИНИЦИАЛИЗАЦИЯ
+    // 4. ИНИЦИАЛИЗАЦИЯ
     // ============================================================
 
     BaseWindow.prototype._init = function() {
@@ -141,7 +166,8 @@
 
         this._bindHeaderEvents();
 
-        this._chrome.on('resize', this._onRenderResize.bind(this));
+        var resizeUnsub = this._chrome.on('resize', this._onRenderResize.bind(this));
+        this._addCleanup(resizeUnsub);
 
         this._subscribeToSlot();
         this._subscribeToMessages();
@@ -160,7 +186,7 @@
 
         var self = this;
         setTimeout(function() {
-            if (self._chrome) self._chrome.resize();
+            if (self._chrome && !self._isDestroyed) self._chrome.resize();
         }, 50);
 
         this._emit('window-ready', {
@@ -177,7 +203,7 @@
 
         var bind = function(event, handler) {
             var unsub = header.on(event, handler);
-            self._headerUnsubs.push(unsub);
+            self._addCleanup(unsub);
         };
 
         bind('menu-action', function(d) { self._onRenderMenuAction(d); });
@@ -195,7 +221,7 @@
     };
 
     // ============================================================
-    // 3. SLOT MANAGEMENT
+    // 5. SLOT MANAGEMENT
     // ============================================================
 
     BaseWindow.prototype.getSlotId = function() {
@@ -230,12 +256,15 @@
             this._slotUnsubscribe = null;
         }
 
-        if (this._slotId && this._slotId !== sid) {
-            this._dataBus.detachWindowFromSlot(this._slotId, this.id);
+        var wid = String(this.id);
+        var currentSlotId = this._dataBus.getWindowSlot(wid);
+
+        if (currentSlotId && currentSlotId !== sid) {
+            this._dataBus.detachWindowFromSlot(currentSlotId, wid);
         }
 
         this._slotId = sid;
-        this._dataBus.attachWindowToSlot(sid, this.id);
+        this._dataBus.attachWindowToSlot(sid, wid);
 
         this._subscribeToSlot();
         this._loadFromSlot();
@@ -249,8 +278,7 @@
         });
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onSlotChange === 'function') {
+        if (realInstance && typeof realInstance.onSlotChange === 'function') {
             try { realInstance.onSlotChange(sid); } catch (e) {
                 console.error('[BaseWindow] onSlotChange error:', e);
             }
@@ -271,23 +299,24 @@
         }
 
         var oldSlotId = this._slotId;
+        var wid = String(this.id);
 
         if (oldSlotId) {
-            this._dataBus.detachWindowFromSlot(oldSlotId, this.id);
+            this._dataBus.detachWindowFromSlot(oldSlotId, wid);
         }
 
         var newSlotId = this._dataBus.createSlot(this.type);
         if (!newSlotId) {
             console.error('[BaseWindow] createEmptySlot: failed');
             if (oldSlotId) {
-                this._dataBus.attachWindowToSlot(oldSlotId, this.id);
+                this._dataBus.attachWindowToSlot(oldSlotId, wid);
                 this._subscribeToSlot();
             }
             return this;
         }
 
         this._slotId = newSlotId;
-        this._dataBus.attachWindowToSlot(newSlotId, this.id);
+        this._dataBus.attachWindowToSlot(newSlotId, wid);
 
         if (oldSlotId) {
             var oldSlot = this._dataBus.getSlot(oldSlotId);
@@ -313,8 +342,7 @@
         });
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onSlotChange === 'function') {
+        if (realInstance && typeof realInstance.onSlotChange === 'function') {
             try { realInstance.onSlotChange(newSlotId); } catch (e) {
                 console.error('[BaseWindow] onSlotChange error:', e);
             }
@@ -324,7 +352,7 @@
     };
 
     // ============================================================
-    // 4. MINIMIZE / FULLSCREEN / CLOSE
+    // 6. MINIMIZE / FULLSCREEN / CLOSE
     // ============================================================
 
     BaseWindow.prototype.minimize = function() {
@@ -362,7 +390,7 @@
     };
 
     // ============================================================
-    // 5. VISIBILITY
+    // 7. VISIBILITY
     // ============================================================
 
     BaseWindow.prototype.isVisible = function() {
@@ -370,20 +398,14 @@
     };
 
     BaseWindow.prototype._setupVisibilityEventListener = function() {
-        if (typeof document === 'undefined') return;
-
         var self = this;
-        var handler = function(e) {
-            if (!e || !e.detail) return;
-            if (String(e.detail.windowId) !== String(self.id)) return;
-            self._handleVisibilityChanged(!!e.detail.visible);
-        };
 
-        document.addEventListener('window-visibility-changed', handler);
+        var unsub = this._busOnWindow('window-visibility-changed', function(detail) {
+            if (!detail) return;
+            self._handleVisibilityChanged(!!detail.visible);
+        });
 
-        this._visibilityUnsub = function() {
-            document.removeEventListener('window-visibility-changed', handler);
-        };
+        this._addCleanup(unsub);
     };
 
     BaseWindow.prototype._handleVisibilityChanged = function(visible) {
@@ -395,8 +417,7 @@
         this._isVisible = next;
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onVisibilityChange === 'function') {
+        if (realInstance && typeof realInstance.onVisibilityChange === 'function') {
             try { realInstance.onVisibilityChange(next); } catch (e) {
                 console.error('[BaseWindow] onVisibilityChange error:', e);
             }
@@ -410,7 +431,7 @@
     };
 
     // ============================================================
-    // 6. KEYBOARD CAPTURE
+    // 8. KEYBOARD CAPTURE
     // ============================================================
 
     BaseWindow.prototype.captureKeyboard = function() {
@@ -429,7 +450,7 @@
     };
 
     // ============================================================
-    // 7. FIND WINDOW BY TYPE
+    // 9. FIND WINDOW BY TYPE
     // ============================================================
 
     BaseWindow.prototype.findWindowByType = function(typeId) {
@@ -521,7 +542,7 @@
     };
 
     // ============================================================
-    // 8. РЕАЛЬНЫЙ ЭКЗЕМПЛЯР
+    // 10. РЕАЛЬНЫЙ ЭКЗЕМПЛЯР
     // ============================================================
 
     BaseWindow.prototype.setRealInstance = function(instance) {
@@ -535,7 +556,7 @@
 
         if (instance) instance._baseWindow = this;
 
-        if (this._isReady && this._chrome) {
+        if (this._isReady && this._chrome && !this._isDestroyed) {
             this.refreshHeaderItems();
             this._updateContent();
             this._chrome.resize();
@@ -546,15 +567,19 @@
 
     BaseWindow.prototype.getRealInstance = function() {
         if (this._realInstance && this._realInstanceSet) return this._realInstance;
-        return this;
+        return null;
     };
 
     BaseWindow.prototype.hasRealInstance = function() {
         return this._realInstanceSet && !!this._realInstance;
     };
 
+    BaseWindow.prototype.isBaseOnly = function() {
+        return !this.hasRealInstance();
+    };
+
     // ============================================================
-    // 9. HEADER ITEMS
+    // 11. HEADER ITEMS
     // ============================================================
 
     BaseWindow.prototype.refreshHeaderItems = function() {
@@ -579,13 +604,17 @@
     };
 
     // ============================================================
-    // 10. ЖИЗНЕННЫЙ ЦИКЛ
+    // 12. ЖИЗНЕННЫЙ ЦИКЛ
     // ============================================================
 
     BaseWindow.prototype.destroy = function() {
         if (this._isDestroyed) return;
         this._isDestroyed = true;
         this._isReady = false;
+
+        if (window.eventBus && typeof window.eventBus.clearWindow === 'function') {
+            try { window.eventBus.clearWindow(this.id); } catch (e) {}
+        }
 
         if (window.hotkeyRegistry
             && window.hotkeyRegistry.getCapturedWindow() === String(this.id)) {
@@ -596,18 +625,14 @@
             try { this.exitFullscreen(); } catch (e) {}
         }
 
-        if (this._realInstance && typeof this._realInstance.destroy === 'function') {
-            try { this._realInstance.destroy(); } catch (e) {
+        var realInstance = this.getRealInstance();
+        if (realInstance && typeof realInstance.destroy === 'function') {
+            try { realInstance.destroy(); } catch (e) {
                 console.warn('[BaseWindow] Error destroying real instance:', e);
             }
         }
         this._realInstance = null;
         this._realInstanceSet = false;
-
-        for (var i = 0; i < this._headerUnsubs.length; i++) {
-            try { this._headerUnsubs[i](); } catch (e) {}
-        }
-        this._headerUnsubs = [];
 
         if (this._header) {
             this._header.destroy();
@@ -630,38 +655,12 @@
             this._dataBus.detachWindowFromSlot(this._slotId, this.id);
         }
 
-        if (this._messageUnsubscribe) {
-            this._messageUnsubscribe();
-            this._messageUnsubscribe = null;
-        }
-        if (this._themeUnsubscribe) {
-            this._themeUnsubscribe();
-            this._themeUnsubscribe = null;
-        }
-        if (this._layoutUnsubscribe) {
-            this._layoutUnsubscribe();
-            this._layoutUnsubscribe = null;
-        }
-
-        if (this._visibilityUnsub) {
-            try { this._visibilityUnsub(); } catch (e) {}
-            this._visibilityUnsub = null;
-        }
-
         if (this._visibilityObserver) {
             this._visibilityObserver.disconnect();
             this._visibilityObserver = null;
         }
 
-        for (var j = 0; j < this._requestUnsubs.length; j++) {
-            try { this._requestUnsubs[j](); } catch (e) {}
-        }
-        this._requestUnsubs = [];
-
-        for (var k = 0; k < this._subscriptions.length; k++) {
-            try { this._subscriptions[k](); } catch (e) {}
-        }
-        this._subscriptions = [];
+        this._runCleanups();
 
         this._emit('window-destroyed', {
             id: this.id,
@@ -671,7 +670,7 @@
     };
 
     // ============================================================
-    // 11. RESIZE
+    // 13. RESIZE
     // ============================================================
 
     BaseWindow.prototype.resize = function() {
@@ -680,7 +679,7 @@
         if (this._chrome) this._chrome.resize();
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.resize === 'function') {
+        if (realInstance && typeof realInstance.resize === 'function') {
             try { realInstance.resize(); } catch (e) {}
         }
     };
@@ -693,7 +692,7 @@
 
         if (w !== prev.w || h !== prev.h) {
             this.__lastRealResize = { w: w, h: h };
-            if (realInstance && realInstance !== this && typeof realInstance.resize === 'function') {
+            if (realInstance && typeof realInstance.resize === 'function') {
                 try { realInstance.resize(); } catch (e) {
                     console.warn('[BaseWindow] Error in real instance resize:', e);
                 }
@@ -711,7 +710,7 @@
     };
 
     // ============================================================
-    // 12. ОБНОВЛЕНИЕ КОНТЕНТА
+    // 14. ОБНОВЛЕНИЕ КОНТЕНТА
     // ============================================================
 
     BaseWindow.prototype._updateContent = function() {
@@ -720,7 +719,7 @@
         var realInstance = this.getRealInstance();
 
         var root = null;
-        if (realInstance && realInstance !== this) {
+        if (realInstance) {
             if (realInstance._root) root = realInstance._root;
             else if (typeof realInstance.getRoot === 'function') {
                 try { root = realInstance.getRoot(); } catch (e) {}
@@ -801,7 +800,7 @@
             if (self._isDestroyed) return;
 
             var realInstance = self.getRealInstance();
-            if (!realInstance || realInstance === self) return;
+            if (!realInstance) return;
 
             if (typeof realInstance.onThemeChange === 'function') {
                 var theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -817,12 +816,12 @@
             attributeFilter: ['data-theme']
         });
 
-        this._themeUnsubscribe = function() {
+        this._addCleanup(function() {
             if (self._themeObserver) {
                 self._themeObserver.disconnect();
                 self._themeObserver = null;
             }
-        };
+        });
     };
 
     BaseWindow.prototype._setupVisibilityObserver = function() {
@@ -845,14 +844,14 @@
     };
 
     // ============================================================
-    // 13. ХОТКЕИ ОКНА
+    // 15. ХОТКЕИ ОКНА
     // ============================================================
 
     BaseWindow.prototype._registerHotkeys = function() {
         if (!window.hotkeyRegistry) return;
 
         var realInstance = this.getRealInstance();
-        if (!realInstance || realInstance === this) return;
+        if (!realInstance) return;
 
         if (typeof realInstance.getHotkeys !== 'function') return;
 
@@ -893,7 +892,7 @@
     };
 
     // ============================================================
-    // 14. DRAG SOURCE
+    // 16. DRAG SOURCE
     // ============================================================
 
     BaseWindow.prototype.registerDragSource = function(element, options) {
@@ -927,12 +926,12 @@
     };
 
     // ============================================================
-    // 15. РАБОТА С ДАННЫМИ
+    // 17. РАБОТА С ДАННЫМИ
     // ============================================================
 
     BaseWindow.prototype.getAllData = function() {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.getAllData === 'function') {
+        if (realInstance && typeof realInstance.getAllData === 'function') {
             return realInstance.getAllData();
         }
         return {
@@ -943,7 +942,7 @@
 
     BaseWindow.prototype.setAllData = function(data) {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.setAllData === 'function') {
+        if (realInstance && typeof realInstance.setAllData === 'function') {
             return realInstance.setAllData(data);
         }
 
@@ -975,7 +974,7 @@
 
     BaseWindow.prototype.getMetadata = function() {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.getMetadata === 'function') {
+        if (realInstance && typeof realInstance.getMetadata === 'function') {
             return realInstance.getMetadata();
         }
         var out = {};
@@ -989,7 +988,7 @@
 
     BaseWindow.prototype.getData = function() {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.getData === 'function') {
+        if (realInstance && typeof realInstance.getData === 'function') {
             return realInstance.getData();
         }
         return this._data;
@@ -997,7 +996,7 @@
 
     BaseWindow.prototype.setData = function(data) {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.setData === 'function') {
+        if (realInstance && typeof realInstance.setData === 'function') {
             return realInstance.setData(data);
         }
 
@@ -1012,7 +1011,7 @@
 
     BaseWindow.prototype.getState = function() {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.getState === 'function') {
+        if (realInstance && typeof realInstance.getState === 'function') {
             return realInstance.getState();
         }
         var out = {};
@@ -1026,7 +1025,7 @@
 
     BaseWindow.prototype.setState = function(state) {
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this && typeof realInstance.setState === 'function') {
+        if (realInstance && typeof realInstance.setState === 'function') {
             return realInstance.setState(state);
         }
 
@@ -1047,7 +1046,7 @@
     };
 
     // ============================================================
-    // 16. SLOT SUBSCRIPTION + LOAD/SAVE
+    // 18. SLOT SUBSCRIPTION + LOAD/SAVE
     // ============================================================
 
     BaseWindow.prototype._subscribeToSlot = function() {
@@ -1081,7 +1080,7 @@
             }
 
             var realInstance = this.getRealInstance();
-            if (realInstance && realInstance !== this && typeof realInstance.setAllData === 'function') {
+            if (realInstance && typeof realInstance.setAllData === 'function') {
                 try {
                     realInstance.setAllData({
                         metadata: this._metadata,
@@ -1092,7 +1091,7 @@
                 }
             }
 
-            if (realInstance && realInstance !== this && typeof realInstance.setState === 'function') {
+            if (realInstance && typeof realInstance.setState === 'function') {
                 try { realInstance.setState(this._uiState); } catch (e) {}
             }
 
@@ -1110,10 +1109,20 @@
         var realInstance = this.getRealInstance();
         var metadata = this._metadata;
         var data = this._data;
+        var uiState = this.getState();
 
-        if (realInstance && realInstance !== this) {
-            if (typeof realInstance.getMetadata === 'function') metadata = realInstance.getMetadata();
-            if (typeof realInstance.getData === 'function') data = realInstance.getData();
+        if (realInstance) {
+            if (typeof realInstance.getAllData === 'function') {
+                var allData = realInstance.getAllData();
+                if (allData && typeof allData === 'object') {
+                    if (allData.metadata !== undefined) metadata = allData.metadata;
+                    if (allData.data !== undefined) data = allData.data;
+                    if (allData.uiState !== undefined) uiState = allData.uiState;
+                }
+            } else {
+                if (typeof realInstance.getMetadata === 'function') metadata = realInstance.getMetadata();
+                if (typeof realInstance.getData === 'function') data = realInstance.getData();
+            }
         }
 
         var meta = {};
@@ -1128,7 +1137,7 @@
         var ok = this._dataBus.setSlotData(this._slotId, {
             metadata: meta,
             data: data,
-            uiState: this.getState()
+            uiState: uiState
         });
 
         this._isSaving = false;
@@ -1147,7 +1156,7 @@
 
         var realInstance = this.getRealInstance();
 
-        if (realInstance && realInstance !== this && typeof realInstance.onDataUpdate === 'function') {
+        if (realInstance && typeof realInstance.onDataUpdate === 'function') {
             try {
                 realInstance.onDataUpdate(payload);
                 return;
@@ -1179,7 +1188,7 @@
     };
 
     // ============================================================
-    // 17. ИМПОРТ / ЭКСПОРТ
+    // 19. ИМПОРТ / ЭКСПОРТ
     // ============================================================
 
     BaseWindow.prototype._onDataImport = function() {
@@ -1222,9 +1231,11 @@
                             var label = typeName + ' — импорт из файла';
                             try {
                                 window.historyManager.record(label);
-                                document.dispatchEvent(new CustomEvent('history-recorded', {
-                                    detail: { label: label }
-                                }));
+                                self._busEmit('history-recorded', {
+                                    label: label,
+                                    windowId: self.id,
+                                    type: self.type
+                                });
                             } catch (e) {}
                         }
                     } else {
@@ -1304,9 +1315,11 @@
             var label = typeName + ' — новый слот';
             try {
                 window.historyManager.record(label);
-                document.dispatchEvent(new CustomEvent('history-recorded', {
-                    detail: { label: label }
-                }));
+                this._busEmit('history-recorded', {
+                    label: label,
+                    windowId: this.id,
+                    type: this.type
+                });
             } catch (e) {}
         }
     };
@@ -1320,22 +1333,24 @@
             var label = typeName + ' — привязка к слоту ' + data.slotId;
             try {
                 window.historyManager.record(label);
-                document.dispatchEvent(new CustomEvent('history-recorded', {
-                    detail: { label: label }
-                }));
+                this._busEmit('history-recorded', {
+                    label: label,
+                    windowId: this.id,
+                    type: this.type
+                });
             } catch (e) {}
         }
     };
 
     // ============================================================
-    // 18. MESSAGE BUS
+    // 20. MESSAGE BUS
     // ============================================================
 
     BaseWindow.prototype._subscribeToMessages = function() {
         if (!this._messageBus) return;
 
         var self = this;
-        this._messageUnsubscribe = this._messageBus.subscribeAll(
+        var unsub = this._messageBus.subscribeAll(
             this.id,
             function(senderId, channel, data) {
                 if (self._isReady && !self._isDestroyed) {
@@ -1343,6 +1358,8 @@
                 }
             }
         );
+
+        this._addCleanup(unsub);
     };
 
     BaseWindow.prototype.sendMessage = function(channel, data, targetId) {
@@ -1364,7 +1381,9 @@
 
     BaseWindow.prototype.subscribeToMessage = function(channel, callback) {
         if (!this._messageBus) return function() {};
-        return this._messageBus.subscribe(this.id, channel, callback);
+        var unsub = this._messageBus.subscribe(this.id, channel, callback);
+        this._addCleanup(unsub);
+        return unsub;
     };
 
     BaseWindow.prototype.request = function(channel, data, targetId, options) {
@@ -1377,37 +1396,25 @@
     BaseWindow.prototype.onRequest = function(channel, handler) {
         if (!this._messageBus) return function() {};
         var unsub = this._messageBus.onRequest(this.id, channel, handler);
-        var self = this;
-
-        var wrapped = function() {
-            var idx = self._requestUnsubs.indexOf(wrapped);
-            if (idx !== -1) self._requestUnsubs.splice(idx, 1);
-            try { unsub(); } catch (e) {}
-        };
-
-        this._requestUnsubs.push(wrapped);
-        return wrapped;
+        this._addCleanup(unsub);
+        return unsub;
     };
 
     // ============================================================
-    // 19. LAYOUT
+    // 21. LAYOUT
     // ============================================================
 
     BaseWindow.prototype._setupLayoutListener = function() {
         var self = this;
 
-        var changeHandler = function() {
+        var changeUnsub = this._busOnWindow('layout-changed', function() {
             if (!self._isDestroyed && self._isReady) {
                 if (self._chrome) self._chrome.updateWindowCount();
             }
-        };
-
-        document.addEventListener('layout-changed', changeHandler);
-        this._subscriptions.push(function() {
-            document.removeEventListener('layout-changed', changeHandler);
         });
+        this._addCleanup(changeUnsub);
 
-        var renderedHandler = function() {
+        var renderedUnsub = this._busOnWindow('layout-rendered', function() {
             if (self._isDestroyed || !self._isReady) return;
 
             if (self._chrome && typeof self._chrome.resize === 'function') {
@@ -1415,15 +1422,11 @@
             }
 
             var realInstance = self.getRealInstance();
-            if (realInstance && realInstance !== self && typeof realInstance.resize === 'function') {
+            if (realInstance && typeof realInstance.resize === 'function') {
                 try { realInstance.resize(); } catch (e) {}
             }
-        };
-
-        document.addEventListener('layout-rendered', renderedHandler);
-        this._subscriptions.push(function() {
-            document.removeEventListener('layout-rendered', renderedHandler);
         });
+        this._addCleanup(renderedUnsub);
     };
 
     BaseWindow.prototype.refreshHeader = function() {
@@ -1433,7 +1436,7 @@
     };
 
     // ============================================================
-    // 20. СМЕНА ТИПА
+    // 22. СМЕНА ТИПА
     // ============================================================
 
     BaseWindow.prototype._changeType = function(newType) {
@@ -1453,12 +1456,11 @@
         var oldType = this.type;
         var oldSlotId = this._slotId;
 
-        var currentData = this.getData();
-        var currentState = this.getState();
         var currentMetadata = this.getMetadata();
 
-        if (this._realInstance && typeof this._realInstance.destroy === 'function') {
-            try { this._realInstance.destroy(); } catch (e) {}
+        var oldReal = this.getRealInstance();
+        if (oldReal && typeof oldReal.destroy === 'function') {
+            try { oldReal.destroy(); } catch (e) {}
         }
         this._realInstance = null;
         this._realInstanceSet = false;
@@ -1610,9 +1612,11 @@
 
             try {
                 window.historyManager.record(label);
-                document.dispatchEvent(new CustomEvent('history-recorded', {
-                    detail: { label: label }
-                }));
+                this._busEmit('history-recorded', {
+                    label: label,
+                    windowId: this.id,
+                    type: newType
+                });
             } catch (e) {
                 console.error('[BaseWindow] historyManager.record error:', e);
             }
@@ -1620,7 +1624,7 @@
     };
 
     // ============================================================
-    // 21. ЗАКРЫТИЕ / SWAP
+    // 23. ЗАКРЫТИЕ / SWAP
     // ============================================================
 
     BaseWindow.prototype._close = function() {
@@ -1639,7 +1643,7 @@
     };
 
     // ============================================================
-    // 22. EVENTS ОТ HEADER
+    // 24. EVENTS ОТ HEADER
     // ============================================================
 
     BaseWindow.prototype._onRenderClose = function() {
@@ -1665,8 +1669,7 @@
         var item = data.item;
         var payload = data.payload;
 
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onHeaderItemClick === 'function') {
+        if (realInstance && typeof realInstance.onHeaderItemClick === 'function') {
             try {
                 var handled = realInstance.onHeaderItemClick(
                     item || { action: action, value: value },
@@ -1684,7 +1687,7 @@
             }
         }
 
-        if (realInstance && realInstance !== this) {
+        if (realInstance) {
             if (action && typeof realInstance[action] === 'function') {
                 try {
                     realInstance[action](value, payload, item);
@@ -1726,7 +1729,7 @@
     };
 
     // ============================================================
-    // 23. ХУКИ
+    // 25. ХУКИ
     // ============================================================
 
     BaseWindow.prototype._onReady = function() {};
@@ -1741,8 +1744,7 @@
         this._isFocused = true;
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onFocus === 'function') {
+        if (realInstance && typeof realInstance.onFocus === 'function') {
             try { realInstance.onFocus(); } catch (e) {
                 console.error('[BaseWindow] onFocus error:', e);
             }
@@ -1760,8 +1762,7 @@
         this._isFocused = false;
 
         var realInstance = this.getRealInstance();
-        if (realInstance && realInstance !== this
-            && typeof realInstance.onBlur === 'function') {
+        if (realInstance && typeof realInstance.onBlur === 'function') {
             try { realInstance.onBlur(); } catch (e) {
                 console.error('[BaseWindow] onBlur error:', e);
             }
@@ -1779,7 +1780,7 @@
     };
 
     // ============================================================
-    // 24. ПУБЛИЧНЫЕ МЕТОДЫ
+    // 26. ПУБЛИЧНЫЕ МЕТОДЫ
     // ============================================================
 
     BaseWindow.prototype.setTitle = function(title) {
@@ -1813,7 +1814,7 @@
     };
 
     // ============================================================
-    // 25. СОБЫТИЯ
+    // 27. СОБЫТИЯ
     // ============================================================
 
     BaseWindow.prototype._emit = function(event, data) {
@@ -1823,24 +1824,20 @@
         }
         detail.windowId = this.id;
 
-        if (this._eventBus) {
-            this._eventBus.emit(event, detail);
-        }
-        document.dispatchEvent(new CustomEvent(event, { detail: detail }));
+        this._busEmit(event, detail);
     };
 
     BaseWindow.prototype._on = function(event, callback) {
-        if (this._eventBus) {
-            var self = this;
-            var unsubscribe = this._eventBus.on(event, function(data) {
-                if (data.windowId === self.id || !data.windowId) {
-                    callback(data);
-                }
-            });
-            this._subscriptions.push(unsubscribe);
-            return unsubscribe;
-        }
-        return function() {};
+        if (!window.eventBus) return function() {};
+
+        var unsub = this._busOnWindow(event, function(data) {
+            try { callback(data); } catch (e) {
+                console.error('[BaseWindow] _on listener error:', e);
+            }
+        });
+
+        this._addCleanup(unsub);
+        return unsub;
     };
 
     BaseWindow.prototype.notify = function(title, message, type) {
@@ -1868,26 +1865,15 @@
             }
         }
 
-        if (this._eventBus && typeof this._eventBus.emit === 'function') {
-            try {
-                this._eventBus.emit('notification', {
-                    title: titleStr,
-                    message: messageStr,
-                    type: typeSafe
-                });
-            } catch (e) {}
-        }
-
-        try {
-            document.dispatchEvent(new CustomEvent('notification', {
-                detail: { title: titleStr, message: messageStr, type: typeSafe },
-                bubbles: true
-            }));
-        } catch (e) {}
+        this._busEmit('notification', {
+            title: titleStr,
+            message: messageStr,
+            type: typeSafe
+        });
     };
 
     // ============================================================
-    // 26. СТАТИЧЕСКИЙ МЕТОД
+    // 28. СТАТИЧЕСКИЙ МЕТОД
     // ============================================================
 
     BaseWindow.create = function(config) {

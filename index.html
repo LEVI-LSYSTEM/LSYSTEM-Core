@@ -5,20 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LSYSTEM | Core</title>
 
-    <!-- ===== FAVICON ===== -->
     <link rel="icon" type="image/png" href="core/assets/logo.ico" />
     <link rel="shortcut icon" type="image/png" href="core/assets/logo.ico" />
 
-    <!-- ✅ PWA ===== -->
     <link rel="manifest" href="manifest.webmanifest" />
     <meta name="theme-color" content="#0d0d0d" />
     <meta name="msapplication-TileImage" content="core/assets/logo.ico" />
 
-    <!-- ===== СТИЛИ ===== -->
     <link rel="stylesheet" href="core/assets/index.css" />
     <link rel="stylesheet" href="core/settingsModal/SettingsModal.css" />
 
-    <!-- ===== SVG SPRITES ===== -->
     <script>
         (function() {
             'use strict';
@@ -39,13 +35,11 @@
                         var div = document.createElement('div');
                         div.innerHTML = html;
 
-                        // Стили — в <head>
                         var styles = div.querySelectorAll('style');
                         styles.forEach(function(style) {
                             document.head.appendChild(style.cloneNode(true));
                         });
 
-                        // SVG-спрайты — в начало <body>
                         var svg = div.querySelector('svg');
                         if (svg && document.body) {
                             document.body.insertBefore(svg, document.body.firstChild);
@@ -66,41 +60,67 @@
         })();
     </script>
 
-    <!-- ===== CORE ===== -->
-    <script src="core/HistoryManager.js"></script>
-    <script src="core/window/HeaderController.js"></script>
-    <script src="core/window/WindowChrome.js"></script>
-    <script src="core/window/BaseWindow.js"></script>
-    <script src="core/DragController.js"></script>
-    <script src="core/API/ExtendedAPIInjector.js"></script>
-    <script src="core/API/BaseWindowInstance.js"></script>
-    <script src="core/API/PluginAPI.js"></script>
-    <script src="core/assets/UserAPI.js"></script>
-    <script src="core/DataBus.js"></script>
+    <!-- ===== UTILS ===== -->
+    <script src="core/utils/deepClone.js"></script>
+    <script src="core/utils/fileTypes.js"></script>
+
+    <!-- ===== INFRASTRUCTURE ===== -->
+    <script src="core/EventBus.js"></script>
+    <script src="core/AppState.js"></script>
+    <script src="core/HotkeyRegistry.js"></script>
     <script src="core/MessageBus.js"></script>
-    <script src="core/ProjectManager.js"></script>
+    <script src="core/DataBus.js"></script>
+    <script src="core/HistoryManager.js"></script>
     <script src="core/window/WindowRegistry.js"></script>
+
+    <!-- ===== DRAG / DROP ===== -->
+    <script src="core/DragController.js"></script>
+
+    <!-- ===== WINDOW LAYER ===== -->
+    <script src="core/window/WindowChrome.js"></script>
+    <script src="core/window/WindowSwapController.js"></script>
+    <script src="core/window/HeaderController.js"></script>
+    <script src="core/window/BaseWindow.js"></script>
+
+    <!-- ===== EXTENDED API ===== -->
+    <script src="core/API/ExtendedAPIInjector.js"></script>
+    <script src="core/API/PluginAPI.js"></script>
+    <script src="core/API/BaseWindowInstance.js"></script>
+
+    <!-- ===== USER API ===== -->
+    <script src="core/assets/UserAPI.js"></script>
+
+    <!-- ===== PLUGINS ===== -->
     <script src="core/plugins/PluginDB.js"></script>
     <script src="core/plugins/PluginFolderSource.js"></script>
     <script src="core/plugins/PluginUrlStorage.js"></script>
     <script src="core/plugins/PluginLoader.js"></script>
     <script src="core/plugins/PluginSystem.js"></script>
+
+    <!-- ===== LAYOUT + PROJECT ===== -->
     <script src="core/LayoutManager.js"></script>
-    <script src="core/AppState.js"></script>
-    <script src="core/HotkeyRegistry.js"></script>
+    <script src="core/ProjectManager.js"></script>
+
+    <!-- ===== SETTINGS MODAL ===== -->
+    <script src="core/settingsModal/EulaModal.js"></script>
     <script src="core/settingsModal/SettingsModal.js"></script>
 
-    <!-- ===== MAIN APP ===== -->
-    <script src="index.js"></script>
+    <!-- ===== MAIN APP — UI MODULES ===== -->
+    <script src="core/main/ui.js"></script>
+    <script src="core/main/dropdowns.js"></script>
+    <script src="core/main/header.js"></script>
+    <script src="core/main/menu.js"></script>
+    <script src="core/main/projects.js"></script>
+
+    <!-- ===== MAIN APP — BOOTSTRAP ===== -->
+    <script src="core/main/index.js"></script>
 
 </head>
 <body>
     <div class="app-container">
 
-        <!-- ===== HEADER ===== -->
         <header class="header" id="appHeader">
 
-            <!-- LOGO + PROJECT NAME -->
             <div class="logo">
                 <img src="core/assets/logo.ico"
                      alt="LSYSTEM"
@@ -111,7 +131,6 @@
                 <span id="projectNameDisplay" class="logo-project-name">Untitled</span>
             </div>
 
-            <!-- MAIN MENU -->
             <div class="main-menu">
 
                 <button class="btn btn-primary btn-sm" id="saveBtn" title="Save Project (Ctrl+S)">
@@ -124,7 +143,6 @@
                     <span class="btn-label">New Project</span>
                 </button>
 
-                <!-- Load Dropdown -->
                 <div class="dropdown-wrapper" id="loadDropdown">
                     <button class="btn btn-outline btn-sm dropdown-toggle" id="loadBtn" title="Load Project (Ctrl+O)">
                         <svg class="icon-svg"><use href="#icon-load"></use></svg>
@@ -169,7 +187,6 @@
             </div>
         </header>
 
-        <!-- ===== WORKSPACE ===== -->
         <div class="workspace" id="workspace"></div>
 
     </div>

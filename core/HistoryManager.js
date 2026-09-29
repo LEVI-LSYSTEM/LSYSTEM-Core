@@ -1,5 +1,5 @@
 // core/HistoryManager.js
-// Версия 3.3.0
+// Версия 3.4.0
 
 (function() {
     'use strict';
@@ -67,7 +67,7 @@
             this._entries.push({
                 label: label,
                 timestamp: Date.now(),
-                snapshot: this._deepCopy(snapshot)
+                snapshot: deepClone(snapshot)
             });
 
             this._index = this._entries.length - 1;
@@ -99,7 +99,7 @@
             try {
                 const result = {
                     action: 'undo',
-                    entry: this._deepCopy(prev),
+                    entry: deepClone(prev),
                     index: this._index - 1
                 };
                 this._index--;
@@ -120,7 +120,7 @@
             try {
                 const result = {
                     action: 'redo',
-                    entry: this._deepCopy(next),
+                    entry: deepClone(next),
                     index: this._index + 1
                 };
                 this._index++;
@@ -142,7 +142,7 @@
             try {
                 const result = {
                     action: 'jump',
-                    entry: this._deepCopy(entry),
+                    entry: deepClone(entry),
                     index: index
                 };
                 this._index = index;
@@ -180,7 +180,7 @@
 
         getCurrentEntry() {
             if (this._index < 0 || this._index >= this._entries.length) return null;
-            return this._deepCopy(this._entries[this._index]);
+            return deepClone(this._entries[this._index]);
         }
 
         subscribe(cb) {
@@ -199,49 +199,6 @@
                     console.error('[HistoryManager] listener error:', e);
                 }
             }
-        }
-
-        _deepCopy(obj, seen) {
-            if (obj === null || obj === undefined) return obj;
-            if (typeof obj !== 'object') return obj;
-
-            if (ArrayBuffer.isView(obj)) return obj;
-            if (obj instanceof ArrayBuffer) return obj;
-
-            if (!seen) seen = new WeakSet();
-            if (seen.has(obj)) {
-                return null;
-            }
-            seen.add(obj);
-
-            if (obj instanceof Map) {
-                const m = new Map();
-                for (const [k, v] of obj) {
-                    m.set(this._deepCopy(k, seen), this._deepCopy(v, seen));
-                }
-                return m;
-            }
-            if (obj instanceof Set) {
-                const s = new Set();
-                for (const v of obj) s.add(this._deepCopy(v, seen));
-                return s;
-            }
-            if (Array.isArray(obj)) {
-                return obj.map(x => this._deepCopy(x, seen));
-            }
-            if (obj instanceof Date) return new Date(obj.getTime());
-            if (obj instanceof RegExp) return new RegExp(obj.source, obj.flags);
-
-            const proto = Object.getPrototypeOf(obj);
-            if (proto === Object.prototype || proto === null) {
-                const result = {};
-                for (const [k, v] of Object.entries(obj)) {
-                    result[k] = this._deepCopy(v, seen);
-                }
-                return result;
-            }
-
-            return obj;
         }
 
         enableDebug() { this._debug = true; }

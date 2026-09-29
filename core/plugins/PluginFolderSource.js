@@ -1,24 +1,5 @@
 // core/plugins/PluginFolderSource.js
-// Версия 2.0.0 — использует единый PluginDB.
-//
-// Абстракция рабочей папки плагинов.
-//
-// Три бэкенда:
-//   - ChromiumFolderSource — FileSystemAccess API (Chrome, Edge, Opera, Brave)
-//   - InputFolderSource    — <input webkitdirectory> (Firefox, Safari, старые)
-//   - DesktopFolderSource  — заглушка под Electron/Tauri (Tauri v2+)
-//
-// Общий интерфейс:
-//   pick, restore, queryPermission, requestPermission,
-//   listDir, readFile, exists, isDirectory,
-//   persist, forget, getDisplayName, isAvailable, destroy
-//
-// Фабрика PluginFolderSource.create() выбирает бэкенд по возможностям.
-//
-// Изменения относительно 1.0.0:
-//   - Убраны локальные _openDB / _idbGet / _idbSet / _idbDel.
-//   - Все обращения к IndexedDB идут через window.PluginDB.
-//   - Хранилище 'folder-handles' теперь описано в PluginDB.SCHEMA.
+// Версия 2.1.0
 
 (function() {
     'use strict';
@@ -72,6 +53,18 @@
         return p.split('/').filter(Boolean);
     }
 
+    function _isDirectoryName(name) {
+        if (window.LsFileTypes && typeof window.LsFileTypes.isDirectoryName === 'function') {
+            return window.LsFileTypes.isDirectoryName(name);
+        }
+        if (!name) return false;
+        var s = String(name);
+        if (!s) return false;
+        if (s.charAt(0) === '.') return false;
+        if (s.charAt(0) === '_') return false;
+        return s.indexOf('.') === -1;
+    }
+
     class PluginFolderSourceBase {
         constructor() {
             this._displayName = '';
@@ -91,10 +84,7 @@
         async exists() { throw new Error('exists() not implemented'); }
 
         isDirectory(name) {
-            if (!name) return false;
-            var s = String(name);
-            if (s.indexOf('.') === -1) return true;
-            return /\.(js|json|css|html|svg|md|txt|lsp|lsu)$/i.test(s) ? false : true;
+            return _isDirectoryName(name);
         }
 
         async persist() { return false; }
@@ -406,6 +396,7 @@
             this._available = false;
             this._basePath = null;
             this._displayName = '';
+            this._mode = null;
 
             if (window.__TAURI__ && window.__TAURI__.dialog && window.__TAURI__.fs) {
                 this._available = true;

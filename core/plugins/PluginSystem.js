@@ -1,39 +1,5 @@
 // core/PluginSystem.js
-// Версия 14.0.0 — без манифеста.
-//
-// Модель:
-//   - Один рабочий каталог плагинов. Никакого manifest.json.
-//   - Все .js из папки выполняются по алфавиту (см. PluginLoader).
-//   - Плагин = окно (класс с static meta.id в module.exports).
-//   - Выключенные плагины — снимаются из реестра, но остаются в списке.
-//   - URL-плагины живут отдельно (IndexedDB, .lsu).
-//
-// Изменения относительно 13.0.0:
-//   - _doLoadAll: при state === 'prompt' пытается «мягко» восстановить папку.
-//   - _tryRestoreFolder: сохраняет _folderName даже при state === 'none'.
-//   - Добавлен _trySoftRestoreFolder() — requestPermission без модалки + scan/load.
-//   - Добавлен _reloadFolderPlugins() — единая точка scan/load/refresh/emit.
-//   - getAllPlugins: добавлен _lazySyncFromLoader() — подтягивает folder-плагины,
-//     даже если _refreshPluginsFromRegistry по какой-то причине не отработал.
-//
-// API:
-//   loadAll / reload
-//   pickFolder / restoreFolder / forgetFolder / rescanFolder
-//   requestFolderPermission
-//   getFolderName / getFolderState / getPluginSource
-//   getAllPlugins / getActivePlugins / getHiddenPlugins
-//   enablePlugin / disablePlugin / uninstallPlugin
-//   installFromUrl / checkUpdates
-//   getUrlPlugins / getUrlPlugin(id)
-//   listFolder(folderName) / listFolderByRelPath(folderName)
-//   readFile(path)
-//   readAsset(name) / resolveAsset(name) / getAssetIndex()
-//
-// События:
-//   'plugins:changed'
-//   'plugins:folder-changed'
-//   'plugins:folder-permission-needed'
-//   'plugins:reloaded'
+// Версия 15.1.0
 
 (function() {
     'use strict';
@@ -86,6 +52,8 @@
             this._lastReloadAt = 0;
 
             this._debug = !!options.debug;
+
+            this._busUnsubs = [];
 
             this._ensureBackends();
         }
@@ -198,7 +166,7 @@
 
                 var name = typeConfig ? typeConfig.name : id;
                 var icon = typeConfig ? typeConfig.icon : 'icon-layout';
-                var meta = typeConfig ? (typeConfig.metadata || {}) : {};
+                var meta = (typeConfig && typeConfig.metadata) ? typeConfig.metadata : {};
                 var description = typeConfig ? (typeConfig.description || '') : '';
 
                 this._plugins.set(id, {
@@ -253,8 +221,16 @@
         async _trySoftRestoreFolder() {
             if (!this._folderSource || !this._loader) return false;
 
-            var ok = await this._folderSource.requestPermission();
-            if (!ok) return false;
+            var perm = null;
+            try {
+                perm = await this._folderSource.queryPermission();
+            } catch (e) {
+                return false;
+            }
+
+            if (perm !== 'granted') {
+                return false;
+            }
 
             this._folderState = 'granted';
             this._folderName = this._folderSource.getDisplayName() || this._folderName;
@@ -450,7 +426,6 @@
                 }
             }
 
-            var self = this;
             this._plugins.forEach(function(p, id) {
                 if (seen[id]) return;
                 seen[id] = true;
@@ -827,17 +802,20 @@
         }
 
         _emit(name, data) {
-            if (this._eventBus && typeof this._eventBus.emit === 'function') {
-                try { this._eventBus.emit(name, data); } catch (e) {}
+            if (window.eventBus && typeof window.eventBus.emit === 'function') {
+                try { window.eventBus.emit(name, data); } catch (e) {}
             }
-            if (typeof document !== 'undefined') {
-                try {
-                    document.dispatchEvent(new CustomEvent(name, { detail: data }));
-                } catch (e) {}
+            if (this._eventBus && this._eventBus !== window.eventBus) {
+                try { this._eventBus.emit(name, data); } catch (e) {}
             }
         }
 
         destroy() {
+            for (var i = 0; i < this._busUnsubs.length; i++) {
+                try { this._busUnsubs[i](); } catch (e) {}
+            }
+            this._busUnsubs = [];
+
             this._plugins.clear();
             this._isLoaded = false;
             this._folderSource = null;

@@ -1,5 +1,5 @@
 // core/AppState.js
-// Версия 6.1.0
+// Версия 7.0.0
 
 (function() {
     'use strict';
@@ -13,15 +13,6 @@
     };
 
     var HOTKEY_OVERRIDES_VERSION = 2;
-
-    function deepCopy(obj) {
-        if (obj === null || obj === undefined) return obj;
-        try {
-            return JSON.parse(JSON.stringify(obj));
-        } catch (e) {
-            return {};
-        }
-    }
 
     var AppState = function(options) {
         options = options || {};
@@ -62,6 +53,10 @@
             self._notify('theme', self._theme);
         });
     };
+
+    // ============================================================
+    // 1. THEME
+    // ============================================================
 
     AppState.prototype.getTheme = function() {
         return this._theme;
@@ -192,6 +187,10 @@
         }, 60000);
     };
 
+    // ============================================================
+    // 2. ACCOUNT
+    // ============================================================
+
     AppState.prototype.getAccount = function() {
         if (!this._account) return null;
         return {
@@ -225,11 +224,35 @@
         this._notify('account', null);
     };
 
-    AppState.prototype.ensureGlobalHotkeyDefaults = function(defaults) {
-        if (!defaults || typeof defaults !== 'object') return;
+    // ============================================================
+    // 3. HOTKEY BUCKETS — ОБЩИЕ HELPERS
+    // ============================================================
 
+    AppState.prototype._getHotkeyBucket = function(scope, typeId) {
+        if (scope === 'global') {
+            return this._hotkeyOverrides.global;
+        }
+        if (scope === 'window' && typeId) {
+            if (!this._hotkeyOverrides.windows[typeId]) {
+                this._hotkeyOverrides.windows[typeId] = {};
+            }
+            return this._hotkeyOverrides.windows[typeId];
+        }
+        return null;
+    };
+
+    AppState.prototype._peekHotkeyBucket = function(scope, typeId) {
+        if (scope === 'global') {
+            return this._hotkeyOverrides.global;
+        }
+        if (scope === 'window' && typeId) {
+            return this._hotkeyOverrides.windows[typeId] || null;
+        }
+        return null;
+    };
+
+    AppState.prototype._ensureHotkeyBucket = function(bucket, defaults) {
         var changed = false;
-        var bucket = this._hotkeyOverrides.global;
         var seen = Object.create(null);
 
         for (var combo in defaults) {
@@ -248,26 +271,27 @@
                     overridden: false
                 };
                 changed = true;
-            } else {
-                var nextLabel = def.label || combo;
-                var nextAction = def.action || null;
+                continue;
+            }
 
-                if (existing.label !== nextLabel) {
-                    existing.label = nextLabel;
-                    changed = true;
-                }
-                if (existing.action !== nextAction) {
-                    existing.action = nextAction;
-                    changed = true;
-                }
-                if (existing.original !== combo) {
-                    existing.original = combo;
-                    changed = true;
-                }
-                if (existing.overridden === undefined) {
-                    existing.overridden = existing.combo !== existing.original;
-                    changed = true;
-                }
+            var nextLabel = def.label || combo;
+            var nextAction = def.action || null;
+
+            if (existing.label !== nextLabel) {
+                existing.label = nextLabel;
+                changed = true;
+            }
+            if (existing.action !== nextAction) {
+                existing.action = nextAction;
+                changed = true;
+            }
+            if (existing.original !== combo) {
+                existing.original = combo;
+                changed = true;
+            }
+            if (existing.overridden === undefined) {
+                existing.overridden = existing.combo !== existing.original;
+                changed = true;
             }
         }
 
@@ -279,102 +303,13 @@
             }
         }
 
-        if (changed) {
-            this._saveHotkeyOverrides();
-            this._notify('hotkeyOverrides', this._hotkeyOverrides);
-        }
+        return changed;
     };
 
-    AppState.prototype.ensureHotkeyDefaults = function(typeId, defaults) {
-        if (!typeId || !defaults || typeof defaults !== 'object') return;
-
-        if (!this._hotkeyOverrides.windows[typeId]) {
-            this._hotkeyOverrides.windows[typeId] = {};
-        }
-
-        var bucket = this._hotkeyOverrides.windows[typeId];
-        var seen = Object.create(null);
-        var changed = false;
-
-        for (var combo in defaults) {
-            if (!Object.prototype.hasOwnProperty.call(defaults, combo)) continue;
-            seen[combo] = true;
-
-            var def = defaults[combo] || {};
-            var existing = bucket[combo];
-
-            if (!existing) {
-                bucket[combo] = {
-                    combo: combo,
-                    original: combo,
-                    label: def.label || combo,
-                    action: def.action || null,
-                    overridden: false
-                };
-                changed = true;
-            } else {
-                var nextLabel = def.label || combo;
-                var nextAction = def.action || null;
-
-                if (existing.label !== nextLabel) {
-                    existing.label = nextLabel;
-                    changed = true;
-                }
-                if (existing.action !== nextAction) {
-                    existing.action = nextAction;
-                    changed = true;
-                }
-                if (existing.original !== combo) {
-                    existing.original = combo;
-                    changed = true;
-                }
-                if (existing.overridden === undefined) {
-                    existing.overridden = existing.combo !== existing.original;
-                    changed = true;
-                }
-            }
-        }
-
-        for (var key in bucket) {
-            if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
-            if (!seen[key]) {
-                delete bucket[key];
-                changed = true;
-            }
-        }
-
-        if (Object.keys(bucket).length === 0) {
-            delete this._hotkeyOverrides.windows[typeId];
-            changed = true;
-        }
-
-        if (changed) {
-            this._saveHotkeyOverrides();
-            this._notify('hotkeyOverrides', this._hotkeyOverrides);
-        }
-    };
-
-    AppState.prototype.getGlobalHotkeys = function() {
+    AppState.prototype._collectHotkeys = function(bucket) {
         var result = {};
-        for (var key in this._hotkeyOverrides.global) {
-            if (!Object.prototype.hasOwnProperty.call(this._hotkeyOverrides.global, key)) continue;
-            var val = this._hotkeyOverrides.global[key];
-            result[key] = {
-                combo: val.combo,
-                original: val.original || key,
-                label: val.label,
-                action: val.action,
-                overridden: !!val.overridden
-            };
-        }
-        return result;
-    };
+        if (!bucket) return result;
 
-    AppState.prototype.getWindowHotkeys = function(typeId) {
-        var bucket = this._hotkeyOverrides.windows[typeId];
-        if (!bucket) return {};
-
-        var result = {};
         for (var key in bucket) {
             if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
             var val = bucket[key];
@@ -389,35 +324,102 @@
         return result;
     };
 
+    AppState.prototype._mutateHotkeyRecord = function(scope, typeId, originalCombo, mutator) {
+        if (!originalCombo) return false;
+
+        var bucket = this._peekHotkeyBucket(scope, typeId);
+        if (!bucket) return false;
+
+        var record = bucket[originalCombo];
+        if (!record) return false;
+
+        mutator(record);
+
+        this._saveHotkeyOverrides();
+        this._notify('hotkeyOverrides', this._hotkeyOverrides);
+        return true;
+    };
+
+    AppState.prototype._findHotkeyConflict = function(scope, typeId, originalCombo, newCombo) {
+        var bucket = this._peekHotkeyBucket(scope, typeId);
+        if (!bucket) return null;
+
+        for (var key in bucket) {
+            if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
+            var rec = bucket[key];
+            if (!rec) continue;
+            if ((rec.original || key) === originalCombo) continue;
+            if (rec.combo === newCombo) {
+                return rec.label || key;
+            }
+        }
+        return null;
+    };
+
+    // ============================================================
+    // 4. HOTKEY DEFAULTS
+    // ============================================================
+
+    AppState.prototype.ensureGlobalHotkeyDefaults = function(defaults) {
+        if (!defaults || typeof defaults !== 'object') return;
+
+        var bucket = this._hotkeyOverrides.global;
+        var changed = this._ensureHotkeyBucket(bucket, defaults);
+
+        if (changed) {
+            this._saveHotkeyOverrides();
+            this._notify('hotkeyOverrides', this._hotkeyOverrides);
+        }
+    };
+
+    AppState.prototype.ensureHotkeyDefaults = function(typeId, defaults) {
+        if (!typeId || !defaults || typeof defaults !== 'object') return;
+
+        var bucket = this._getHotkeyBucket('window', typeId);
+        var changed = this._ensureHotkeyBucket(bucket, defaults);
+
+        if (Object.keys(bucket).length === 0) {
+            delete this._hotkeyOverrides.windows[typeId];
+            changed = true;
+        }
+
+        if (changed) {
+            this._saveHotkeyOverrides();
+            this._notify('hotkeyOverrides', this._hotkeyOverrides);
+        }
+    };
+
+    // ============================================================
+    // 5. HOTKEY READ
+    // ============================================================
+
+    AppState.prototype.getGlobalHotkeys = function() {
+        return this._collectHotkeys(this._hotkeyOverrides.global);
+    };
+
+    AppState.prototype.getWindowHotkeys = function(typeId) {
+        return this._collectHotkeys(this._peekHotkeyBucket('window', typeId));
+    };
+
     AppState.prototype.getHotkeyOverrides = function() {
-        return deepCopy(this._hotkeyOverrides);
+        return deepClone(this._hotkeyOverrides);
     };
 
     AppState.prototype.getEffectiveCombo = function(scope, typeId, originalCombo) {
-        var record = null;
-
-        if (scope === 'global') {
-            record = this._hotkeyOverrides.global[originalCombo];
-        } else if (scope === 'window' && typeId) {
-            var bucketW = this._hotkeyOverrides.windows[typeId];
-            if (bucketW) record = bucketW[originalCombo];
-        }
-
+        var bucket = this._peekHotkeyBucket(scope, typeId);
+        var record = bucket ? bucket[originalCombo] : null;
         return record ? record.combo : originalCombo;
     };
 
     AppState.prototype.isHotkeyOverridden = function(scope, typeId, originalCombo) {
-        var record = null;
-
-        if (scope === 'global') {
-            record = this._hotkeyOverrides.global[originalCombo];
-        } else if (scope === 'window' && typeId) {
-            var bucketW = this._hotkeyOverrides.windows[typeId];
-            if (bucketW) record = bucketW[originalCombo];
-        }
-
+        var bucket = this._peekHotkeyBucket(scope, typeId);
+        var record = bucket ? bucket[originalCombo] : null;
         return !!(record && record.overridden);
     };
+
+    // ============================================================
+    // 6. HOTKEY WRITE
+    // ============================================================
 
     AppState.prototype.setHotkeyOverride = function(scope, typeId, originalCombo, newCombo) {
         if (!originalCombo || !newCombo) return false;
@@ -425,47 +427,27 @@
             return this.resetHotkeyOverride(scope, typeId, originalCombo);
         }
 
-        var record = null;
-
-        if (scope === 'global') {
-            record = this._hotkeyOverrides.global[originalCombo];
-        } else if (scope === 'window' && typeId) {
-            var bucketW = this._hotkeyOverrides.windows[typeId];
-            if (bucketW) record = bucketW[originalCombo];
-        } else {
+        if (scope !== 'global' && !(scope === 'window' && typeId)) {
             return false;
         }
 
-        if (!record) return false;
-
-        record.combo = newCombo;
-        record.overridden = true;
-
-        this._saveHotkeyOverrides();
-        this._notify('hotkeyOverrides', this._hotkeyOverrides);
-        return true;
+        var self = this;
+        return this._mutateHotkeyRecord(scope, typeId, originalCombo, function(record) {
+            record.combo = newCombo;
+            record.overridden = true;
+        });
     };
 
     AppState.prototype.resetHotkeyOverride = function(scope, typeId, originalCombo) {
-        var record = null;
-
-        if (scope === 'global') {
-            record = this._hotkeyOverrides.global[originalCombo];
-        } else if (scope === 'window' && typeId) {
-            var bucketW = this._hotkeyOverrides.windows[typeId];
-            if (bucketW) record = bucketW[originalCombo];
-        } else {
+        if (!originalCombo) return false;
+        if (scope !== 'global' && !(scope === 'window' && typeId)) {
             return false;
         }
 
-        if (!record) return false;
-
-        record.combo = record.original || originalCombo;
-        record.overridden = false;
-
-        this._saveHotkeyOverrides();
-        this._notify('hotkeyOverrides', this._hotkeyOverrides);
-        return true;
+        return this._mutateHotkeyRecord(scope, typeId, originalCombo, function(record) {
+            record.combo = record.original || originalCombo;
+            record.overridden = false;
+        });
     };
 
     AppState.prototype.resetAllHotkeyOverrides = function() {
@@ -508,8 +490,12 @@
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
 
+    // ============================================================
+    // 7. GROUP COLLAPSE
+    // ============================================================
+
     AppState.prototype.getCollapsedGroups = function() {
-        return deepCopy(this._windowGroupCollapsed);
+        return deepClone(this._windowGroupCollapsed);
     };
 
     AppState.prototype.isGroupCollapsed = function(groupName) {
@@ -540,6 +526,10 @@
         this._saveGroupCollapsed();
         this._notify('windowGroupCollapsed', this._windowGroupCollapsed);
     };
+
+    // ============================================================
+    // 8. SUBSCRIBE
+    // ============================================================
 
     AppState.prototype.subscribe = function(key, callback) {
         var self = this;
@@ -580,6 +570,10 @@
             }
         }
     };
+
+    // ============================================================
+    // 9. STORAGE — LOAD
+    // ============================================================
 
     AppState.prototype._loadFromStorage = function() {
         if (typeof localStorage === 'undefined') return;
@@ -686,6 +680,10 @@
         return result;
     };
 
+    // ============================================================
+    // 10. STORAGE — SAVE
+    // ============================================================
+
     AppState.prototype._saveThemeMode = function() {
         if (typeof localStorage === 'undefined') return;
         try {
@@ -735,6 +733,10 @@
         } catch (e) {}
     };
 
+    // ============================================================
+    // 11. JSON
+    // ============================================================
+
     AppState.prototype.toJSON = function() {
         return {
             themeMode: this._themeMode,
@@ -757,36 +759,64 @@
         }
     };
 
-    AppState.prototype.destroy = function() {
-        if (this._themeTimer) {
-            clearInterval(this._themeTimer);
-            this._themeTimer = null;
-        }
+    // ============================================================
+    // 12. SNAPSHOT / RESTORE
+    // ============================================================
 
-        this._listeners = {};
-        this._globalListeners = [];
-        this._hotkeyOverrides = {
-            _version: HOTKEY_OVERRIDES_VERSION,
-            global: {},
-            windows: {}
+    AppState.prototype._snapshotState = function() {
+        return {
+            account: this._account ? deepClone(this._account) : null,
+            themeMode: this._themeMode,
+            theme: this._theme,
+            autoHours: deepClone(this._autoHours),
+            hotkeyOverrides: deepClone(this._hotkeyOverrides),
+            windowGroupCollapsed: deepClone(this._windowGroupCollapsed)
         };
-        this._windowGroupCollapsed = {};
-        this._account = null;
     };
+
+    AppState.prototype._restoreState = function(snapshot) {
+        if (!snapshot) return;
+
+        this._account = snapshot.account;
+        this._themeMode = snapshot.themeMode;
+        this._theme = snapshot.theme;
+        this._autoHours = snapshot.autoHours;
+        this._hotkeyOverrides = snapshot.hotkeyOverrides;
+        this._windowGroupCollapsed = snapshot.windowGroupCollapsed;
+
+        this._saveThemeMode();
+        this._saveThemeAutoHours();
+        this._saveAccount();
+        this._saveHotkeyOverrides();
+        this._saveGroupCollapsed();
+
+        this._applyTheme();
+
+        this._notify('theme', this._theme);
+        this._notify('themeMode', this._themeMode);
+        this._notify('themeAutoHours', this.getAutoThemeHours());
+        this._notify('account', this.getAccount());
+        this._notify('hotkeyOverrides', this._hotkeyOverrides);
+        this._notify('windowGroupCollapsed', this._windowGroupCollapsed);
+    };
+
+    // ============================================================
+    // 13. PROFILE
+    // ============================================================
 
     AppState.prototype.exportProfile = function(meta) {
         var profile = {
             _format: 'lsystem-profile',
             _version: 1,
             exportedAt: new Date().toISOString(),
-            app: (meta && typeof meta === 'object') ? deepCopy(meta) : {},
+            app: (meta && typeof meta === 'object') ? deepClone(meta) : {},
             account: this.getAccount(),
             theme: {
                 mode: this._themeMode,
                 autoHours: this.getAutoThemeHours()
             },
-            hotkeys: deepCopy(this._hotkeyOverrides),
-            windowGroupCollapsed: deepCopy(this._windowGroupCollapsed)
+            hotkeys: deepClone(this._hotkeyOverrides),
+            windowGroupCollapsed: deepClone(this._windowGroupCollapsed)
         };
 
         return profile;
@@ -817,8 +847,10 @@
             return result;
         }
 
-        if (data.account && typeof data.account === 'object') {
-            try {
+        var backup = this._snapshotState();
+
+        try {
+            if (data.account && typeof data.account === 'object') {
                 var acc = {
                     id: String(data.account.id || 'u_' + Date.now().toString(36)),
                     name: String(data.account.name || '')
@@ -827,13 +859,9 @@
                 this._saveAccount();
                 this._notify('account', this.getAccount());
                 result.applied.account = true;
-            } catch (e) {
-                result.errors.push('account: ' + e.message);
             }
-        }
 
-        if (data.theme && typeof data.theme === 'object') {
-            try {
+            if (data.theme && typeof data.theme === 'object') {
                 var mode = data.theme.mode;
                 if (mode === 'auto' || mode === 'dark' || mode === 'light') {
                     this.setThemeMode(mode);
@@ -844,40 +872,41 @@
                     this.setAutoThemeHours(data.theme.autoHours);
                     result.applied.theme = true;
                 }
-            } catch (e) {
-                result.errors.push('theme: ' + e.message);
             }
-        }
 
-        if (data.hotkeys && typeof data.hotkeys === 'object' && !Array.isArray(data.hotkeys)) {
-            try {
+            if (data.hotkeys && typeof data.hotkeys === 'object' && !Array.isArray(data.hotkeys)) {
                 if (merge) {
                     this._mergeHotkeyOverrides(data.hotkeys);
                 } else {
                     this.setHotkeyOverrides(data.hotkeys);
                 }
                 result.applied.hotkeys = true;
-            } catch (e) {
-                result.errors.push('hotkeys: ' + e.message);
             }
-        }
 
-        if (data.windowGroupCollapsed && typeof data.windowGroupCollapsed === 'object') {
-            try {
+            if (data.windowGroupCollapsed && typeof data.windowGroupCollapsed === 'object') {
                 if (merge) {
                     for (var k in data.windowGroupCollapsed) {
                         if (!Object.prototype.hasOwnProperty.call(data.windowGroupCollapsed, k)) continue;
                         this._windowGroupCollapsed[k] = !!data.windowGroupCollapsed[k];
                     }
                 } else {
-                    this._windowGroupCollapsed = deepCopy(data.windowGroupCollapsed);
+                    this._windowGroupCollapsed = deepClone(data.windowGroupCollapsed);
                 }
                 this._saveGroupCollapsed();
                 this._notify('windowGroupCollapsed', this._windowGroupCollapsed);
                 result.applied.windowGroupCollapsed = true;
-            } catch (e) {
-                result.errors.push('windowGroupCollapsed: ' + e.message);
             }
+        } catch (e) {
+            this._restoreState(backup);
+            result.applied = {
+                account: false,
+                theme: false,
+                hotkeys: false,
+                windowGroupCollapsed: false
+            };
+            result.errors.push('import failed: ' + (e && e.message ? e.message : String(e)));
+            result.ok = false;
+            return result;
         }
 
         result.ok = result.errors.length === 0;
@@ -953,6 +982,31 @@
         this._saveHotkeyOverrides();
         this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
+
+    // ============================================================
+    // 14. DESTROY
+    // ============================================================
+
+    AppState.prototype.destroy = function() {
+        if (this._themeTimer) {
+            clearInterval(this._themeTimer);
+            this._themeTimer = null;
+        }
+
+        this._listeners = {};
+        this._globalListeners = [];
+        this._hotkeyOverrides = {
+            _version: HOTKEY_OVERRIDES_VERSION,
+            global: {},
+            windows: {}
+        };
+        this._windowGroupCollapsed = {};
+        this._account = null;
+    };
+
+    // ============================================================
+    // ЭКСПОРТ
+    // ============================================================
 
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {

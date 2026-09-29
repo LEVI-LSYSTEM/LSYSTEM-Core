@@ -1,5 +1,5 @@
 // core/window/WindowChrome.js
-// Версия 5.1.0
+// Версия 6.0.0
 
 (function() {
     'use strict';
@@ -51,7 +51,6 @@
 
         this._resizeObserver = null;
         this._resizeRAF = null;
-        this._resizeTimeout = null;
         this._lastSize = { width: 0, height: 0, dpr: 1 };
         this._zeroAttempts = 0;
         this._maxZeroAttempts = 10;
@@ -66,7 +65,7 @@
     }
 
     // ============================================================
-    // 1. DOM
+    // 1. DOM BUILD
     // ============================================================
 
     WindowChrome.prototype._buildDOM = function() {
@@ -230,7 +229,7 @@
     };
 
     // ============================================================
-    // 2. RESIZE
+    // 2. RESIZE OBSERVER
     // ============================================================
 
     WindowChrome.prototype._setupResizeObserver = function() {
@@ -364,49 +363,78 @@
         this._headerIcon.style.maxWidth = iconW + 'px';
     };
 
+    // ============================================================
+    // 4. MEASURE BASE WIDTHS — ЧЕРЕЗ OFF-SCREEN КЛОН
+    // ============================================================
+
     WindowChrome.prototype.measureBaseWidths = function() {
         if (!this._header || !this._headerItems) return;
+        if (this._isDestroyed) return;
 
-        var vars = [
-            '--rw-btn-gap-active',
-            '--rw-btn-pad-x',
-            '--rw-label-opacity',
-            '--rw-label-maxw'
-        ];
-
-        var prevVars = {};
-        for (var i = 0; i < vars.length; i++) {
-            prevVars[vars[i]] = this._header.style.getPropertyValue(vars[i]);
+        var sourceChildren = this._headerItems.children;
+        if (sourceChildren.length === 0) {
+            this._itemsFullW = 0;
+            this._itemsMinW = 0;
+            return;
         }
 
-        var prevMaxWidth = this._headerItems.style.maxWidth;
-        var prevMinWidth = this._headerItems.style.minWidth;
+        var style = getComputedStyle(this._headerItems);
+        var gapPx = parseFloat(style.gap) || 0;
 
-        this._headerItems.style.maxWidth = 'none';
-        this._headerItems.style.minWidth = '0';
+        var clone = this._headerItems.cloneNode(true);
 
-        this._header.style.setProperty('--rw-btn-gap-active', '4px');
-        this._header.style.setProperty('--rw-btn-pad-x', '8px');
-        this._header.style.setProperty('--rw-label-opacity', '1');
-        this._header.style.setProperty('--rw-label-maxw', '80px');
+        clone.style.cssText = [
+            'display:flex',
+            'justify-content:flex-end',
+            'align-items:center',
+            'flex:0 0 auto',
+            'min-width:0',
+            'gap:4px',
+            'height:100%',
+            'overflow:visible',
+            'position:absolute',
+            'top:0',
+            'left:0',
+            'visibility:hidden',
+            'pointer-events:none',
+            'z-index:-1',
+            '--rw-btn-pad-x:8px',
+            '--rw-btn-gap-active:4px',
+            '--rw-label-opacity:1',
+            '--rw-label-maxw:80px'
+        ].join(';');
 
-        void this._headerItems.offsetWidth;
+        var host = document.createElement('div');
+        host.style.cssText = [
+            'position:fixed',
+            'top:-10000px',
+            'left:-10000px',
+            'width:auto',
+            'height:' + HEADER_HEIGHT + 'px',
+            'visibility:hidden',
+            'pointer-events:none'
+        ].join(';');
 
-        var itemsStyle = getComputedStyle(this._headerItems);
-        var gapPx = parseFloat(itemsStyle.gap) || 0;
+        host.appendChild(clone);
+        document.body.appendChild(host);
 
         var fullW = 0;
         var visible = 0;
-        var children = Array.from(this._headerItems.children);
 
-        for (var j = 0; j < children.length; j++) {
-            var el = children[j];
-            if (el.style.display === 'none') continue;
-            var r = el.getBoundingClientRect();
-            if (r.width === 0) continue;
-            visible++;
-            fullW += r.width;
+        try {
+            var children = clone.children;
+            for (var i = 0; i < children.length; i++) {
+                var el = children[i];
+                if (el.style.display === 'none') continue;
+                var r = el.getBoundingClientRect();
+                if (r.width === 0) continue;
+                visible++;
+                fullW += r.width;
+            }
+        } finally {
+            if (host.parentNode) host.parentNode.removeChild(host);
         }
+
         fullW += gapPx * Math.max(0, visible - 1);
         this._itemsFullW = Math.ceil(fullW);
 
@@ -415,23 +443,10 @@
             ? visible * btnHBase + Math.max(0, visible - 1) * gapPx
             : 0;
         this._itemsMinW = Math.ceil(this._itemsMinW);
-
-        for (var m = 0; m < vars.length; m++) {
-            if (prevVars[vars[m]]) {
-                this._header.style.setProperty(vars[m], prevVars[vars[m]]);
-            } else {
-                this._header.style.removeProperty(vars[m]);
-            }
-        }
-
-        this._headerItems.style.maxWidth = prevMaxWidth || '';
-        this._headerItems.style.minWidth = '0';
-
-        void this._headerItems.offsetWidth;
     };
 
     // ============================================================
-    // 4. СОСТОЯНИЕ
+    // 5. FULLSCREEN STATE
     // ============================================================
 
     WindowChrome.prototype.setFullscreenState = function(isFullscreen) {
@@ -462,7 +477,7 @@
     };
 
     // ============================================================
-    // 5. ПУБЛИЧНОЕ API
+    // 6. TITLE / ICON
     // ============================================================
 
     WindowChrome.prototype.setTitle = function(title) {
@@ -488,6 +503,10 @@
     WindowChrome.prototype.getIcon = function() {
         return this._icon;
     };
+
+    // ============================================================
+    // 7. CONTENT
+    // ============================================================
 
     WindowChrome.prototype.setContent = function(contentEl) {
         if (!this._content) return;
@@ -591,7 +610,7 @@
     };
 
     // ============================================================
-    // 6. GETTERS
+    // 8. GETTERS
     // ============================================================
 
     WindowChrome.prototype.getRoot = function() { return this._root; };
@@ -607,7 +626,7 @@
     WindowChrome.prototype.isDestroyed = function() { return this._isDestroyed; };
 
     // ============================================================
-    // 7. СОБЫТИЯ
+    // 9. EVENTS
     // ============================================================
 
     WindowChrome.prototype.on = function(event, cb) {
@@ -637,7 +656,7 @@
     };
 
     // ============================================================
-    // 8. DESTROY
+    // 10. DESTROY
     // ============================================================
 
     WindowChrome.prototype.destroy = function() {
@@ -651,10 +670,6 @@
         if (this._resizeRAF) {
             cancelAnimationFrame(this._resizeRAF);
             this._resizeRAF = null;
-        }
-        if (this._resizeTimeout) {
-            clearTimeout(this._resizeTimeout);
-            this._resizeTimeout = null;
         }
         if (this._headerRAF) {
             cancelAnimationFrame(this._headerRAF);

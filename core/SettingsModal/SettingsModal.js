@@ -1,529 +1,256 @@
 // core/settingsModal/SettingsModal.js
-// Версия 13.1.0
-// - Hotkeys: работа с entry.original / entry.overridden.
-// - Строки с переопределённой комбой получают класс is-overridden.
-// - _applyHotkeyChange сверяет конфликты по effective original.
-// - Профиль: настоящий экспорт/импорт через AppState.exportProfile/importProfile.
+// Версия 18.0.0
 
 (function() {
     'use strict';
 
-    var EULA_TEXT = [
-        '# Соглашение о неразглашении (EULA)',
-        '',
-        '**Версия:** 1.0  ',
-        '**Дата:** 2025',
-        '',
-        '## 1. Общие положения',
-        '',
-        'Настоящее Соглашение о неразглашении (далее — «Соглашение») регулирует',
-        'условия использования приложения **LSYSTEM** (далее — «Приложение»).',
-        '',
-        '## 2. Обязательства пользователя',
-        '',
-        '2.1. Пользователь обязуется не разглашать конфиденциальную информацию,',
-        '     полученную в процессе работы с Приложением.',
-        '',
-        '2.2. Пользователь обязуется не передавать доступ к Приложению третьим лицам.',
-        '',
-        '2.3. Пользователь обязуется использовать Приложение только в законных целях.',
-        '',
-        '## 3. Конфиденциальность',
-        '',
-        '3.1. Все данные, созданные в Приложении, являются конфиденциальными.',
-        '',
-        '3.2. Пользователь несёт ответственность за сохранность своих данных.',
-        '',
-        '## 4. Срок действия',
-        '',
-        '4.1. Соглашение вступает в силу с момента принятия.',
-        '',
-        '4.2. Соглашение действует бессрочно.',
-        '',
-        '## 5. Ответственность',
-        '',
-        '5.1. Пользователь несёт ответственность за нарушение условий Соглашения.',
-        '',
-        '---',
-        '',
-        '**© 2025 LSYSTEM. Все права защищены.**'
-    ].join('\n');
+    var SETTINGS_HTML_PATH = 'core/settingsModal/SettingsModal.html';
 
-    var SETTINGS_HTML = [
-        '<div class="settings-modal-overlay" id="settingsModalOverlay">',
-        '    <div class="settings-modal" id="settingsModal" role="dialog" aria-modal="true">',
-        '        <div class="settings-modal__header">',
-        '            <div class="settings-modal__title-wrap">',
-        '                <svg class="icon-svg settings-modal__title-icon"><use href="#icon-settings"></use></svg>',
-        '                <h2 class="settings-modal__title">Настройки</h2>',
-        '            </div>',
-        '            <button class="settings-modal__close" id="settingsCloseBtn" type="button" title="Закрыть (Esc)">',
-        '                <svg class="icon-svg"><use href="#icon-close"></use></svg>',
-        '            </button>',
-        '        </div>',
-        '        <div class="settings-modal__body">',
+    var _htmlCache = null;
+    var _htmlPromise = null;
 
-        '            <section class="settings-group">',
-        '                <header class="settings-group__header">',
-        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-user"></use></svg>',
-        '                    <span class="settings-group__title">Профиль</span>',
-        '                </header>',
-        '                <div class="settings-group__body">',
+    function loadHtml() {
+        if (_htmlCache) return Promise.resolve(_htmlCache);
+        if (_htmlPromise) return _htmlPromise;
 
-        '                    <div class="settings-row">',
-        '                        <label class="settings-row__label" for="profileName">Имя / Организация</label>',
-        '                        <div class="settings-row__control">',
-        '                            <input class="settings-input" id="profileName" type="text" placeholder="Введите имя или организацию..." autocomplete="off" />',
-        '                        </div>',
-        '                    </div>',
+        _htmlPromise = fetch(SETTINGS_HTML_PATH)
+            .then(function(response) {
+                if (!response.ok) {
+                    throw new Error('SettingsModal.html status: ' + response.status);
+                }
+                return response.text();
+            })
+            .then(function(html) {
+                _htmlCache = html;
+                _htmlPromise = null;
+                return html;
+            })
+            .catch(function(err) {
+                _htmlPromise = null;
+                console.error('[SettingsModal] Failed to load HTML:', err);
+                return null;
+            });
 
-        '                    <div class="settings-nda" id="eulaBlock">',
-        '                        <div class="settings-nda__text">',
-        '                            <div class="settings-nda__title">Соглашение о неразглашении (EULA)</div>',
-        '                            <div class="settings-nda__desc">Ознакомьтесь с условиями использования приложения. Используя приложение, вы принимаете соглашение.</div>',
-        '                            <div class="settings-actions-row">',
-        '                                <button class="settings-btn settings-btn--ghost" id="eulaDownloadBtn" type="button">',
-        '                                    <svg class="icon-svg"><use href="#icon-download"></use></svg>',
-        '                                    <span>Скачать .md</span>',
-        '                                </button>',
-        '                                <button class="settings-btn settings-btn--ghost" id="eulaOpenBtn" type="button">',
-        '                                    <svg class="icon-svg"><use href="#icon-data"></use></svg>',
-        '                                    <span>Открыть EULA</span>',
-        '                                </button>',
-        '                            </div>',
-        '                        </div>',
-        '                    </div>',
-
-        '                    <div class="settings-group__actions">',
-        '                        <button class="settings-btn settings-btn--ghost" id="profileExportBtn" type="button" title="Экспорт профиля">',
-        '                            <svg class="icon-svg"><use href="#icon-download"></use></svg>',
-        '                            <span>Экспорт</span>',
-        '                        </button>',
-        '                        <button class="settings-btn settings-btn--ghost" id="profileImportBtn" type="button" title="Импорт профиля">',
-        '                            <svg class="icon-svg"><use href="#icon-load"></use></svg>',
-        '                            <span>Импорт</span>',
-        '                        </button>',
-        '                        <button class="settings-btn settings-btn--ghost" id="profileClearBtn" type="button">',
-        '                            <svg class="icon-svg"><use href="#icon-trash"></use></svg>',
-        '                            <span>Сбросить</span>',
-        '                        </button>',
-        '                        <button class="settings-btn settings-btn--primary" id="profileSaveBtn" type="button">',
-        '                            <svg class="icon-svg"><use href="#icon-save"></use></svg>',
-        '                            <span>Сохранить</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                </div>',
-        '            </section>',
-
-        '            <section class="settings-group">',
-        '                <header class="settings-group__header">',
-        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-layout"></use></svg>',
-        '                    <span class="settings-group__title">Тема</span>',
-        '                </header>',
-        '                <div class="settings-group__body">',
-
-        '                    <div class="theme-switch" id="themeSwitch" data-mode="auto" tabindex="0">',
-        '                        <span class="theme-switch__thumb" aria-hidden="true"></span>',
-        '                        <button class="theme-switch__opt" data-mode="auto" type="button" title="Авто">',
-        '                            <svg class="icon-svg"><use href="#icon-history"></use></svg>',
-        '                            <span>Авто</span>',
-        '                        </button>',
-        '                        <button class="theme-switch__opt" data-mode="dark" type="button" title="Тёмная">',
-        '                            <svg class="icon-svg"><use href="#icon-eye-off"></use></svg>',
-        '                            <span>Тёмная</span>',
-        '                        </button>',
-        '                        <button class="theme-switch__opt" data-mode="light" type="button" title="Светлая">',
-        '                            <svg class="icon-svg"><use href="#icon-eye"></use></svg>',
-        '                            <span>Светлая</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                    <div class="theme-auto" id="themeAutoPanel">',
-        '                        <div class="theme-auto__inner">',
-        '                            <div class="theme-auto__row">',
-        '                                <span class="theme-auto__caption">Тёмная тема с</span>',
-        '                                <div class="time-field">',
-        '                                    <input type="number" min="0" max="23" id="themeDarkStart" class="time-field__input" />',
-        '                                    <span class="time-field__suffix">:00</span>',
-        '                                </div>',
-        '                                <span class="theme-auto__caption">до</span>',
-        '                                <div class="time-field">',
-        '                                    <input type="number" min="0" max="23" id="themeDarkEnd" class="time-field__input" />',
-        '                                    <span class="time-field__suffix">:00</span>',
-        '                                </div>',
-        '                            </div>',
-        '                            <div class="theme-auto__timeline" id="themeTimeline">',
-        '                                <div class="theme-auto__bar"></div>',
-        '                                <div class="theme-auto__night" id="themeNightBand"></div>',
-        '                                <div class="theme-auto__ticks">',
-        '                                    <span>0</span><span>6</span><span>12</span><span>18</span><span>24</span>',
-        '                                </div>',
-        '                            </div>',
-        '                            <div class="theme-auto__now" id="themeNowHint">Сейчас: —</div>',
-        '                        </div>',
-        '                    </div>',
-
-        '                </div>',
-        '            </section>',
-
-        '            <section class="settings-group">',
-        '                <header class="settings-group__header">',
-        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-window-type"></use></svg>',
-        '                    <span class="settings-group__title">Плагины</span>',
-        '                </header>',
-        '                <div class="settings-group__body">',
-
-        '                    <div class="settings-folder-banner" id="pluginsFolderBanner" style="display:none;">',
-        '                        <svg class="icon-svg settings-folder-banner__icon"><use href="#icon-warning"></use></svg>',
-        '                        <div class="settings-folder-banner__text">',
-        '                            <div class="settings-folder-banner__title">Требуется доступ к папке плагинов</div>',
-        '                            <div class="settings-folder-banner__desc">Разрешите чтение файлов, чтобы загрузить установленные плагины.</div>',
-        '                        </div>',
-        '                        <button class="settings-btn settings-btn--primary" id="pluginsGrantAccessBtn" type="button">',
-        '                            <span>Разрешить</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                    <div class="settings-row">',
-        '                        <span class="settings-row__label">Рабочая папка</span>',
-        '                        <div class="settings-row__control">',
-        '                            <code class="settings-path" id="pluginsWorkingFolder">— не выбрана —</code>',
-        '                            <button class="settings-btn settings-btn--ghost" id="pluginsChooseFolderBtn" type="button" title="Выбрать директорию">',
-        '                                <svg class="icon-svg"><use href="#icon-folder"></use></svg>',
-        '                            </button>',
-        '                            <button class="settings-btn settings-btn--ghost" id="pluginsScanFolderBtn" type="button" title="Пересканировать папку">',
-        '                                <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
-        '                            </button>',
-        '                            <button class="settings-btn settings-btn--ghost" id="pluginsForgetFolderBtn" type="button" title="Забыть папку">',
-        '                                <svg class="icon-svg"><use href="#icon-close"></use></svg>',
-        '                            </button>',
-        '                        </div>',
-        '                    </div>',
-
-        '                    <div class="plugins-tabs" id="pluginsTabs">',
-        '                        <button type="button" class="plugins-tab is-active" data-tab="active">',
-        '                            <span>Активные</span>',
-        '                            <span class="plugins-tab__count" id="pluginsActiveCount">0</span>',
-        '                        </button>',
-        '                        <button type="button" class="plugins-tab" data-tab="hidden">',
-        '                            <span>Скрытые</span>',
-        '                            <span class="plugins-tab__count" id="pluginsHiddenCount">0</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                    <div class="plugins-toolbar">',
-        '                        <div class="plugins-search">',
-        '                            <svg class="plugins-search__icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>',
-        '                            <input type="text" class="plugins-search__input" id="pluginsSearchInput" placeholder="Поиск плагинов..." autocomplete="off" />',
-        '                        </div>',
-        '                        <button class="settings-btn settings-btn--ghost" id="pluginsInstallUrlBtn" type="button" title="Установить по URL">',
-        '                            <svg class="icon-svg"><use href="#icon-plus"></use></svg>',
-        '                            <span>+ URL</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                    <div class="plugins-list" id="pluginsList"></div>',
-
-        '                    <div class="settings-group__actions">',
-        '                        <button class="settings-btn settings-btn--ghost" id="pluginsCheckUpdatesBtn" type="button" title="Проверить обновления URL-плагинов">',
-        '                            <svg class="icon-svg"><use href="#icon-download"></use></svg>',
-        '                            <span>Проверить обновления</span>',
-        '                        </button>',
-        '                        <button class="settings-btn settings-btn--primary" id="pluginsReloadBtn" type="button">',
-        '                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
-        '                            <span>Перезагрузить</span>',
-        '                        </button>',
-        '                    </div>',
-
-        '                </div>',
-        '            </section>',
-
-        '            <section class="settings-group">',
-        '                <header class="settings-group__header">',
-        '                    <svg class="icon-svg settings-group__icon"><use href="#icon-settings"></use></svg>',
-        '                    <span class="settings-group__title">Горячие клавиши</span>',
-        '                </header>',
-        '                <div class="settings-group__body">',
-        '                    <div class="settings-hotkeys__hint">',
-        '                        Кликните по комбинации, чтобы изменить. <kbd>Esc</kbd> отменяет ввод.',
-        '                    </div>',
-        '                    <div class="settings-subgroup">',
-        '                        <div class="settings-subgroup__title">Глобальные</div>',
-        '                        <div class="settings-hotkeys" id="hotkeysGlobalList"></div>',
-        '                    </div>',
-        '                    <div class="settings-subgroup">',
-        '                        <div class="settings-subgroup__title">Оконные</div>',
-        '                        <div class="settings-hotkeys" id="hotkeysWindowList"></div>',
-        '                    </div>',
-        '                    <div class="settings-group__actions">',
-        '                        <button class="settings-btn settings-btn--ghost" id="hotkeysResetBtn" type="button">',
-        '                            <svg class="icon-svg"><use href="#icon-refresh"></use></svg>',
-        '                            <span>Сбросить все</span>',
-        '                        </button>',
-        '                    </div>',
-        '                </div>',
-        '            </section>',
-
-        '        </div>',
-        '        <div class="settings-modal__footer">',
-        '            <span class="settings-modal__brand">',
-        '                LSYSTEM <span class="settings-modal__sep">|</span> Core',
-        '            </span>',
-        '            <button class="settings-btn settings-btn--primary" id="settingsApplyBtn" type="button">',
-        '                <svg class="icon-svg"><use href="#icon-success"></use></svg>',
-        '                <span>Готово</span>',
-        '            </button>',
-        '        </div>',
-        '    </div>',
-        '</div>'
-    ].join('\n');
-
-    var EULA_MODAL_HTML = [
-        '<div class="eula-modal-overlay" id="eulaModalOverlay">',
-        '    <div class="eula-modal" role="dialog" aria-modal="true">',
-        '        <div class="eula-modal__header">',
-        '            <div class="eula-modal__title-wrap">',
-        '                <svg class="icon-svg eula-modal__icon"><use href="#icon-data"></use></svg>',
-        '                <h2 class="eula-modal__title">Соглашение о неразглашении</h2>',
-        '            </div>',
-        '            <button class="eula-modal__close" id="eulaModalCloseBtn" type="button" title="Закрыть (Esc)">',
-        '                <svg class="icon-svg"><use href="#icon-close"></use></svg>',
-        '            </button>',
-        '        </div>',
-        '        <div class="eula-modal__body" id="eulaModalBody" tabindex="0">',
-        '            <div class="eula-modal__content" id="eulaModalContent"></div>',
-        '        </div>',
-        '        <div class="eula-modal__footer">',
-        '            <div class="eula-modal__footer-left">',
-        '                <button class="settings-btn settings-btn--ghost" id="eulaModalDownloadBtn" type="button">',
-        '                    <svg class="icon-svg"><use href="#icon-download"></use></svg>',
-        '                    <span>Скачать .md</span>',
-        '                </button>',
-        '            </div>',
-        '            <div class="eula-modal__footer-right">',
-        '                <button class="settings-btn settings-btn--primary" id="eulaModalCloseBtnBottom" type="button">',
-        '                    <span>Закрыть</span>',
-        '                </button>',
-        '            </div>',
-        '        </div>',
-        '    </div>',
-        '</div>'
-    ].join('\n');
-
-    function escapeHtml(s) {
-        if (s == null) return '';
-        return String(s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
+        return _htmlPromise;
     }
 
-    function renderMarkdown(md) {
-        if (!md) return '';
+    function parseOverlay(html) {
+        if (!html) return null;
 
-        var lines = md.split('\n');
-        var html = [];
-        var inUl = false;
-        var inOl = false;
-        var paragraph = [];
+        var trimmed = html.trim();
 
-        function flushParagraph() {
-            if (paragraph.length > 0) {
-                html.push('<p>' + paragraph.join(' ') + '</p>');
-                paragraph = [];
+        try {
+            var parser = new DOMParser();
+            var doc = parser.parseFromString(trimmed, 'text/html');
+            var node = doc.querySelector('#settingsModalOverlay');
+            if (node) {
+                return document.importNode(node, true);
             }
+        } catch (e) {
+            console.warn('[SettingsModal] DOMParser failed, trying innerHTML:', e);
         }
 
-        function closeLists() {
-            if (inUl) { html.push('</ul>'); inUl = false; }
-            if (inOl) { html.push('</ol>'); inOl = false; }
+        try {
+            var tmp = document.createElement('div');
+            tmp.innerHTML = trimmed;
+            var fallback = tmp.querySelector('#settingsModalOverlay');
+            if (fallback) return fallback;
+        } catch (e) {
+            console.warn('[SettingsModal] innerHTML parse failed:', e);
         }
 
-        function inline(text) {
-            var t = escapeHtml(text);
-            t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            t = t.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
-            t = t.replace(/`([^`]+?)`/g, '<code>$1</code>');
-            return t;
-        }
-
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i];
-            var trimmed = line.trim();
-
-            if (trimmed === '') {
-                flushParagraph();
-                closeLists();
-                continue;
-            }
-
-            if (/^---+$/.test(trimmed)) {
-                flushParagraph();
-                closeLists();
-                html.push('<hr>');
-                continue;
-            }
-
-            var hMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-            if (hMatch) {
-                flushParagraph();
-                closeLists();
-                var level = hMatch[1].length;
-                html.push('<h' + level + '>' + inline(hMatch[2]) + '</h' + level + '>');
-                continue;
-            }
-
-            var olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
-            if (olMatch) {
-                flushParagraph();
-                if (inUl) { html.push('</ul>'); inUl = false; }
-                if (!inOl) { html.push('<ol>'); inOl = true; }
-                html.push('<li>' + inline(olMatch[1]) + '</li>');
-                continue;
-            }
-
-            var ulMatch = trimmed.match(/^[-*+]\s+(.+)$/);
-            if (ulMatch) {
-                flushParagraph();
-                if (inOl) { html.push('</ol>'); inOl = false; }
-                if (!inUl) { html.push('<ul>'); inUl = true; }
-                html.push('<li>' + inline(ulMatch[1]) + '</li>');
-                continue;
-            }
-
-            paragraph.push(inline(trimmed));
-        }
-
-        flushParagraph();
-        closeLists();
-
-        return html.join('\n');
+        return null;
     }
 
     function SettingsModal() {
         this._overlay = null;
-        this._eulaOverlay = null;
+        this._eula = null;
         this._isOpen = false;
-        this._isEulaOpen = false;
         this._capturingCombo = null;
         this._captureHandler = null;
         this._closeHandlers = [];
+        this._busUnsubs = [];
         this._nowTimer = null;
 
         this._pluginsTab = 'active';
         this._pluginsSearchQuery = '';
 
+        this._htmlLoaded = false;
         this._init();
     }
 
+    // ============================================================
+    // 1. INIT
+    // ============================================================
+
     SettingsModal.prototype._init = function() {
-        var overlay = document.getElementById('settingsModalOverlay');
-        if (!overlay) {
-            var tmp = document.createElement('div');
-            tmp.innerHTML = SETTINGS_HTML.trim();
-            overlay = tmp.firstElementChild;
+        var self = this;
+
+        var existing = document.getElementById('settingsModalOverlay');
+        if (existing) {
+            this._overlay = existing;
+            this._htmlLoaded = true;
+            this._afterHtmlReady();
+            return;
+        }
+
+        loadHtml().then(function(html) {
+            if (!html) {
+                console.error('[SettingsModal] Cannot initialize without HTML');
+                return;
+            }
+
+            var overlay = parseOverlay(html);
+            if (!overlay) {
+                console.error('[SettingsModal] Overlay not found in HTML');
+                return;
+            }
+
             document.body.appendChild(overlay);
-        }
-        this._overlay = overlay;
 
-        var eulaOverlay = document.getElementById('eulaModalOverlay');
-        if (!eulaOverlay) {
-            var tmp2 = document.createElement('div');
-            tmp2.innerHTML = EULA_MODAL_HTML.trim();
-            eulaOverlay = tmp2.firstElementChild;
-            document.body.appendChild(eulaOverlay);
-        }
-        this._eulaOverlay = eulaOverlay;
+            self._overlay = overlay;
+            self._htmlLoaded = true;
+            self._afterHtmlReady();
+        });
+    };
 
-        var content = eulaOverlay.querySelector('#eulaModalContent');
-        if (content) content.innerHTML = renderMarkdown(EULA_TEXT);
+    SettingsModal.prototype._afterHtmlReady = function() {
+        this._eula = new window.EulaModal({
+            onClose: function() {}
+        });
 
         this._bindEvents();
         this._subscribePluginEvents();
     };
 
+    // ============================================================
+    // 2. PLUGIN EVENTS
+    // ============================================================
+
     SettingsModal.prototype._subscribePluginEvents = function() {
         var self = this;
+        var bus = window.eventBus;
 
-        var onChange = function() {
+        if (bus && typeof bus.on === 'function') {
+            var onChange = function() {
+                if (!self._isOpen) return;
+                self._renderPlugins();
+            };
+            var onFolderChange = function() {
+                if (!self._isOpen) return;
+                self._renderWorkingFolder();
+                self._renderPluginsFolderBanner();
+            };
+            var onPermissionNeeded = function() {
+                if (!self._isOpen) return;
+                self._renderPluginsFolderBanner();
+            };
+
+            this._busUnsubs.push(bus.on('plugins:changed', onChange));
+            this._busUnsubs.push(bus.on('plugins:folder-changed', onFolderChange));
+            this._busUnsubs.push(bus.on('plugins:folder-permission-needed', onPermissionNeeded));
+            return;
+        }
+
+        var onChangeDom = function() {
             if (!self._isOpen) return;
             self._renderPlugins();
         };
-        var onFolderChange = function() {
+        var onFolderChangeDom = function() {
             if (!self._isOpen) return;
             self._renderWorkingFolder();
             self._renderPluginsFolderBanner();
         };
-        var onPermissionNeeded = function() {
+        var onPermissionNeededDom = function() {
             if (!self._isOpen) return;
             self._renderPluginsFolderBanner();
         };
 
-        document.addEventListener('plugins:changed', onChange);
-        document.addEventListener('plugins:folder-changed', onFolderChange);
-        document.addEventListener('plugins:folder-permission-needed', onPermissionNeeded);
+        document.addEventListener('plugins:changed', onChangeDom);
+        document.addEventListener('plugins:folder-changed', onFolderChangeDom);
+        document.addEventListener('plugins:folder-permission-needed', onPermissionNeededDom);
 
-        this._closeHandlers.push(function() {
-            document.removeEventListener('plugins:changed', onChange);
-            document.removeEventListener('plugins:folder-changed', onFolderChange);
-            document.removeEventListener('plugins:folder-permission-needed', onPermissionNeeded);
+        this._busUnsubs.push(function() {
+            document.removeEventListener('plugins:changed', onChangeDom);
+            document.removeEventListener('plugins:folder-changed', onFolderChangeDom);
+            document.removeEventListener('plugins:folder-permission-needed', onPermissionNeededDom);
         });
+    };
+
+    // ============================================================
+    // 3. BIND EVENTS
+    // ============================================================
+
+    SettingsModal.prototype._bind = function(selector, event, handler) {
+        var el = this._overlay.querySelector(selector);
+        if (!el) {
+            console.warn('[SettingsModal] element not found for binding:', selector);
+            return null;
+        }
+        el.addEventListener(event, handler);
+        return el;
     };
 
     SettingsModal.prototype._bindEvents = function() {
         var self = this;
         var overlay = this._overlay;
-        var eulaOverlay = this._eulaOverlay;
 
         overlay.addEventListener('click', function(e) {
             if (e.target === overlay) self.close();
         });
 
-        eulaOverlay.addEventListener('click', function(e) {
-            if (e.target === eulaOverlay) self._closeEulaModal();
+        this._bind('#settingsCloseBtn', 'click', function() { self.close(); });
+
+        this._bind('#profileSaveBtn', 'click', function() { self._saveProfile(); });
+        this._bind('#profileClearBtn', 'click', function() { self._clearProfile(); });
+        this._bind('#profileExportBtn', 'click', function() { self._exportProfile(); });
+        this._bind('#profileImportBtn', 'click', function() { self._importProfile(); });
+
+        this._bind('#eulaDownloadBtn', 'click', function() {
+            if (self._eula) self._eula.download();
+        });
+        this._bind('#eulaOpenBtn', 'click', function() {
+            if (self._eula) self._eula.open();
         });
 
-        overlay.querySelector('#settingsCloseBtn').addEventListener('click', function() {
+        this._bind('#profileName', 'input', function() { self._updateSaveState(); });
+
+        this._bindThemeEvents();
+        this._bindPluginsEvents();
+
+        this._bind('#hotkeysResetBtn', 'click', function() { self._resetHotkeys(); });
+        this._bind('#settingsApplyBtn', 'click', function() { self._applyAll(); });
+
+        var onKeyDown = function(e) {
+            if (e.key !== 'Escape') return;
+
+            if (self._eula && self._eula.isOpen()) {
+                e.preventDefault();
+                e.stopPropagation();
+                self._eula.close();
+                return;
+            }
+
+            if (!self._isOpen) return;
+            if (self._capturingCombo) return;
+
+            e.preventDefault();
+            e.stopPropagation();
             self.close();
+        };
+        document.addEventListener('keydown', onKeyDown, true);
+        this._closeHandlers.push(function() {
+            document.removeEventListener('keydown', onKeyDown, true);
         });
+    };
 
-        eulaOverlay.querySelector('#eulaModalCloseBtn').addEventListener('click', function() {
-            self._closeEulaModal();
-        });
-        eulaOverlay.querySelector('#eulaModalCloseBtnBottom').addEventListener('click', function() {
-            self._closeEulaModal();
-        });
+    // ============================================================
+    // 4. THEME EVENTS
+    // ============================================================
 
-        overlay.querySelector('#profileSaveBtn').addEventListener('click', function() {
-            self._saveProfile();
-        });
-        overlay.querySelector('#profileClearBtn').addEventListener('click', function() {
-            self._clearProfile();
-        });
-
-        overlay.querySelector('#profileExportBtn').addEventListener('click', function() {
-            self._exportProfile();
-        });
-        overlay.querySelector('#profileImportBtn').addEventListener('click', function() {
-            self._importProfile();
-        });
-
-        overlay.querySelector('#eulaDownloadBtn').addEventListener('click', function() {
-            self._downloadEULA();
-        });
-        overlay.querySelector('#eulaOpenBtn').addEventListener('click', function() {
-            self._openEulaModal();
-        });
-        eulaOverlay.querySelector('#eulaModalDownloadBtn').addEventListener('click', function() {
-            self._downloadEULA();
-        });
-
-        overlay.querySelector('#profileName').addEventListener('input', function() {
-            self._updateSaveState();
-        });
+    SettingsModal.prototype._bindThemeEvents = function() {
+        var self = this;
+        var overlay = this._overlay;
 
         var themeSwitch = overlay.querySelector('#themeSwitch');
         if (themeSwitch) {
@@ -578,41 +305,30 @@
             darkEndInput.addEventListener('change', applyHours);
             darkEndInput.addEventListener('blur', applyHours);
         }
-
-        this._bindPluginsEvents();
-
-        overlay.querySelector('#hotkeysResetBtn').addEventListener('click', function() {
-            self._resetHotkeys();
-        });
-
-        overlay.querySelector('#settingsApplyBtn').addEventListener('click', function() {
-            self._applyAll();
-        });
-
-        var onKeyDown = function(e) {
-            if (e.key !== 'Escape') return;
-
-            if (self._isEulaOpen) {
-                e.preventDefault();
-                e.stopPropagation();
-                self._closeEulaModal();
-                return;
-            }
-
-            if (!self._isOpen) return;
-            if (self._capturingCombo) return;
-
-            e.preventDefault();
-            e.stopPropagation();
-            self.close();
-        };
-        document.addEventListener('keydown', onKeyDown, true);
-        this._closeHandlers.push(function() {
-            document.removeEventListener('keydown', onKeyDown, true);
-        });
     };
 
+    // ============================================================
+    // 5. OPEN / CLOSE / TOGGLE
+    // ============================================================
+
     SettingsModal.prototype.open = function() {
+        if (!this._htmlLoaded || !this._overlay) {
+            var self = this;
+            loadHtml().then(function(html) {
+                if (!html) return;
+                if (!self._overlay) {
+                    var overlay = parseOverlay(html);
+                    if (!overlay) return;
+                    document.body.appendChild(overlay);
+                    self._overlay = overlay;
+                    self._htmlLoaded = true;
+                    self._afterHtmlReady();
+                }
+                self.open();
+            });
+            return;
+        }
+
         this._isOpen = true;
         this._overlay.classList.add('is-open');
 
@@ -654,7 +370,9 @@
         this._isOpen = false;
         this._overlay.classList.remove('is-open');
 
-        this._closeEulaModal();
+        if (this._eula && this._eula.isOpen()) {
+            this._eula.close();
+        }
         this._cancelCapture();
         this._stopNowTimer();
     };
@@ -666,27 +384,13 @@
 
     SettingsModal.prototype.isOpen = function() { return this._isOpen; };
 
-    SettingsModal.prototype._openEulaModal = function() {
-        if (this._isEulaOpen) return;
-        this._isEulaOpen = true;
-        this._eulaOverlay.classList.add('is-open');
-
-        var body = this._eulaOverlay.querySelector('#eulaModalBody');
-        if (body) {
-            body.scrollTop = 0;
-            setTimeout(function() {
-                try { body.focus(); } catch (e) {}
-            }, 250);
-        }
+    SettingsModal.prototype.isEulaOpen = function() {
+        return !!(this._eula && this._eula.isOpen());
     };
 
-    SettingsModal.prototype._closeEulaModal = function() {
-        if (!this._isEulaOpen) return;
-        this._isEulaOpen = false;
-        this._eulaOverlay.classList.remove('is-open');
-    };
-
-    SettingsModal.prototype.isEulaOpen = function() { return this._isEulaOpen; };
+    // ============================================================
+    // 6. PROFILE
+    // ============================================================
 
     SettingsModal.prototype._renderProfile = function() {
         var acc = window.appState ? window.appState.getAccount() : null;
@@ -844,9 +548,12 @@
                 self._renderThemeMode();
                 self._renderHotkeys();
 
-                document.dispatchEvent(new CustomEvent('profile:imported', {
-                    detail: { applied: res.applied, errors: res.errors }
-                }));
+                if (window.eventBus) {
+                    window.eventBus.emit('profile:imported', {
+                        applied: res.applied,
+                        errors: res.errors
+                    });
+                }
 
                 if (input.parentNode) input.parentNode.removeChild(input);
             };
@@ -866,25 +573,9 @@
         input.click();
     };
 
-    SettingsModal.prototype._downloadEULA = function() {
-        try {
-            var blob = new Blob([EULA_TEXT], { type: 'text/markdown;charset=utf-8' });
-            var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url;
-            a.download = 'EULA.md';
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
-
-            if (window.__lsystem) window.__lsystem.showNotification('EULA.md скачан', 'success');
-        } catch (e) {
-            console.error('[SettingsModal] Download EULA error:', e);
-            if (window.__lsystem) window.__lsystem.showNotification('Ошибка скачивания', 'error');
-        }
-    };
+    // ============================================================
+    // 7. THEME RENDER
+    // ============================================================
 
     SettingsModal.prototype._renderThemeMode = function() {
         var appState = window.appState;
@@ -990,6 +681,10 @@
         }
     };
 
+    // ============================================================
+    // 8. WORKING FOLDER
+    // ============================================================
+
     SettingsModal.prototype._renderWorkingFolder = function() {
         var el = this._overlay.querySelector('#pluginsWorkingFolder');
         if (!el) return;
@@ -1031,6 +726,10 @@
             banner.style.display = 'none';
         }
     };
+
+    // ============================================================
+    // 9. PLUGINS EVENTS
+    // ============================================================
 
     SettingsModal.prototype._bindPluginsEvents = function() {
         var self = this;
@@ -1194,6 +893,10 @@
             });
         }
     };
+
+    // ============================================================
+    // 10. PLUGINS LIST
+    // ============================================================
 
     SettingsModal.prototype._renderPlugins = function() {
         var listEl = this._overlay.querySelector('#pluginsList');
@@ -1372,6 +1075,10 @@
         return row;
     };
 
+    // ============================================================
+    // 11. INSTALL URL MODAL
+    // ============================================================
+
     SettingsModal.prototype._openInstallUrlModal = function() {
         var overlay = document.createElement('div');
         overlay.className = 'plugin-install-overlay';
@@ -1502,6 +1209,10 @@
             if (e.target === overlay) document.body.removeChild(overlay);
         });
     };
+
+    // ============================================================
+    // 12. HOTKEYS
+    // ============================================================
 
     SettingsModal.prototype._renderHotkeys = function() {
         var appState = window.appState;
@@ -1746,6 +1457,10 @@
         if (window.__lsystem) window.__lsystem.showNotification('Хоткеи сброшены', 'info');
     };
 
+    // ============================================================
+    // 13. APPLY ALL / DESTROY
+    // ============================================================
+
     SettingsModal.prototype._applyAll = function() {
         this._saveProfile();
         this.close();
@@ -1754,21 +1469,22 @@
         }
     };
 
-    SettingsModal.prototype._notifyStub = function(title, message) {
-        if (window.__lsystem) {
-            window.__lsystem.showNotification(title + ' — ' + message, 'info', 2400);
-        } else {
-            console.warn('[SettingsModal stub]', title, '—', message);
-        }
-    };
-
     SettingsModal.prototype.destroy = function() {
         this._cancelCapture();
         this._stopNowTimer();
-        this._closeEulaModal();
 
-        for (var i = 0; i < this._closeHandlers.length; i++) {
-            try { this._closeHandlers[i](); } catch (e) {}
+        if (this._eula) {
+            try { this._eula.destroy(); } catch (e) {}
+            this._eula = null;
+        }
+
+        for (var i = 0; i < this._busUnsubs.length; i++) {
+            try { this._busUnsubs[i](); } catch (e) {}
+        }
+        this._busUnsubs = [];
+
+        for (var j = 0; j < this._closeHandlers.length; j++) {
+            try { this._closeHandlers[j](); } catch (e) {}
         }
         this._closeHandlers = [];
 
@@ -1776,20 +1492,19 @@
             this._overlay.parentNode.removeChild(this._overlay);
         }
         this._overlay = null;
-
-        if (this._eulaOverlay && this._eulaOverlay.parentNode) {
-            this._eulaOverlay.parentNode.removeChild(this._eulaOverlay);
-        }
-        this._eulaOverlay = null;
+        this._htmlLoaded = false;
     };
 
+    // ============================================================
+    // ЭКСПОРТ
+    // ============================================================
+
     if (typeof module !== 'undefined' && module.exports) {
-        module.exports = { SettingsModal: SettingsModal, EULA_TEXT: EULA_TEXT };
+        module.exports = { SettingsModal: SettingsModal };
     }
 
     if (typeof window !== 'undefined') {
         window.SettingsModal = SettingsModal;
-        window.SettingsModal.EULA_TEXT = EULA_TEXT;
     }
 
 })();

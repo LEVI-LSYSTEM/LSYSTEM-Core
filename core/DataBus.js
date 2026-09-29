@@ -1,5 +1,5 @@
 // core/DataBus.js
-// Версия 5.0.0
+// Версия 6.1.0
 
 (function() {
     'use strict';
@@ -213,63 +213,25 @@
             this._slotCounters = new Map();
             this._pendingUpdates = new Map();
 
+            this._notifyQueue = [];
+            this._notifyFlushing = false;
+
             this._debug = !!options.debug;
         }
 
-        _deepCopy(obj) {
-            if (obj === null || obj === undefined) return obj;
-            if (typeof obj !== 'object') return obj;
-
-            if (ArrayBuffer.isView(obj)) return obj;
-            if (obj instanceof ArrayBuffer) return obj;
-
-            if (obj instanceof Map) {
-                var mapResult = new Map();
-                var self1 = this;
-                obj.forEach(function(value, key) {
-                    mapResult.set(self1._deepCopy(key), self1._deepCopy(value));
-                });
-                return mapResult;
-            }
-            if (obj instanceof Set) {
-                var setResult = new Set();
-                var self2 = this;
-                obj.forEach(function(value) {
-                    setResult.add(self2._deepCopy(value));
-                });
-                return setResult;
-            }
-            if (Array.isArray(obj)) {
-                var arrResult = [];
-                for (var i = 0; i < obj.length; i++) {
-                    arrResult.push(this._deepCopy(obj[i]));
-                }
-                return arrResult;
-            }
-            if (obj instanceof Date) {
-                return new Date(obj.getTime());
-            }
-            if (obj instanceof RegExp) {
-                return new RegExp(obj.source, obj.flags);
-            }
-
-            if (isPlainObject(obj)) {
-                var result = {};
-                for (var key in obj) {
-                    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-                    result[key] = this._deepCopy(obj[key]);
-                }
-                return result;
-            }
-
-            return obj;
-        }
+        // ============================================================
+        // 1. ID GENERATION
+        // ============================================================
 
         _generateSlotId(typeId) {
             var counter = (this._slotCounters.get(typeId) || 0) + 1;
             this._slotCounters.set(typeId, counter);
             return typeId + '-' + counter;
         }
+
+        // ============================================================
+        // 2. TYPE INDEX
+        // ============================================================
 
         _addToTypeIndex(typeId, slotId) {
             if (!this._typeIndex.has(typeId)) {
@@ -286,6 +248,10 @@
                 this._typeIndex.delete(typeId);
             }
         }
+
+        // ============================================================
+        // 3. SLOT CRUD
+        // ============================================================
 
         createSlot(typeId, options) {
             options = options || {};
@@ -317,15 +283,14 @@
             var slot = {
                 id: slotId,
                 type: typeId,
-                data: options.data !== undefined ? this._deepCopy(options.data) : null,
-                metadata: this._deepCopy(options.metadata || {}),
-                uiState: this._deepCopy(options.uiState || {}),
+                data: options.data !== undefined ? deepClone(options.data) : null,
+                metadata: deepClone(options.metadata || {}),
+                uiState: deepClone(options.uiState || {}),
                 archived: false,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
                 archivedAt: null,
-                attachedWindows: new Set(),
-                _isUpdating: false
+                attachedWindows: new Set()
             };
 
             this._slots.set(slotId, slot);
@@ -420,11 +385,7 @@
                 }
             };
 
-            if (typeId) {
-                source.forEach(iterate);
-            } else {
-                source.forEach(iterate);
-            }
+            source.forEach(iterate);
 
             return oldest;
         }
@@ -436,6 +397,10 @@
             });
             return result;
         }
+
+        // ============================================================
+        // 4. QUERIES BY TYPE
+        // ============================================================
 
         getActiveSlotsByType(typeId) {
             var ids = this._typeIndex.get(typeId);
@@ -493,15 +458,23 @@
             return Array.from(ids);
         }
 
+        // ============================================================
+        // 5. SLOT DATA — READ
+        // ============================================================
+
         getSlotData(slotId) {
             var slot = this._slots.get(String(slotId));
             if (!slot) return null;
             return {
-                metadata: this._deepCopy(slot.metadata),
-                data: this._deepCopy(slot.data),
-                uiState: this._deepCopy(slot.uiState)
+                metadata: deepClone(slot.metadata),
+                data: deepClone(slot.data),
+                uiState: deepClone(slot.uiState)
             };
         }
+
+        // ============================================================
+        // 6. SLOT DATA — WRITE
+        // ============================================================
 
         setSlotData(slotId, payload) {
             payload = payload || {};
@@ -512,7 +485,7 @@
                 return false;
             }
 
-            if (slot._isUpdating) {
+            if (this._notifyFlushing) {
                 if (!this._pendingUpdates.has(sid)) {
                     this._pendingUpdates.set(sid, []);
                 }
@@ -525,22 +498,26 @@
             }
 
             if (payload.metadata !== undefined) {
-                slot.metadata = this._deepCopy(payload.metadata);
+                slot.metadata = deepClone(payload.metadata);
             }
             if (payload.data !== undefined) {
-                slot.data = this._deepCopy(payload.data);
+                slot.data = deepClone(payload.data);
             }
             if (payload.uiState !== undefined) {
-                slot.uiState = this._deepCopy(payload.uiState);
+                slot.uiState = deepClone(payload.uiState);
             }
 
             slot.updatedAt = Date.now();
             this._markDirty();
 
-            this._notifySlot(sid);
+            this._enqueueNotify(sid);
 
             return true;
         }
+
+        // ============================================================
+        // 7. WINDOW ATTACHMENT
+        // ============================================================
 
         attachWindowToSlot(slotId, windowId) {
             var sid = String(slotId);
@@ -591,6 +568,10 @@
             return this._windowSlotIndex.get(String(windowId)) || null;
         }
 
+        // ============================================================
+        // 8. SUBSCRIPTIONS
+        // ============================================================
+
         subscribeToSlot(slotId, callback) {
             var sid = String(slotId);
             if (!this._slotSubscribers.has(sid)) {
@@ -626,87 +607,109 @@
             };
         }
 
-        _notifySlot(slotId) {
+        // ============================================================
+        // 9. NOTIFY QUEUE
+        // ============================================================
+
+        _enqueueNotify(slotId) {
             var sid = String(slotId);
 
-            var depth = 0;
+            if (this._notifyQueue.indexOf(sid) === -1) {
+                this._notifyQueue.push(sid);
+            }
 
-            while (true) {
-                var slot = this._slots.get(sid);
-                if (!slot) return;
+            if (this._notifyFlushing) return;
 
-                if (depth >= MAX_NOTIFY_DEPTH) {
-                    console.error(
-                        '[DataBus] _notifySlot: depth exceeded (' + MAX_NOTIFY_DEPTH + ') for slot "' + sid + '" — ' +
-                        'possible subscriber loop. Dropping pending updates.'
-                    );
-                    slot._isUpdating = false;
+            this._flushNotify();
+        }
+
+        _flushNotify() {
+            this._notifyFlushing = true;
+
+            try {
+                var iterations = 0;
+
+                while (this._notifyQueue.length > 0) {
+                    iterations++;
+                    if (iterations > MAX_NOTIFY_DEPTH) {
+                        console.error(
+                            '[DataBus] _flushNotify: depth exceeded (' + MAX_NOTIFY_DEPTH + ') — ' +
+                            'possible subscriber loop. Dropping pending updates.'
+                        );
+                        this._notifyQueue = [];
+                        this._pendingUpdates.clear();
+                        return;
+                    }
+
+                    var sid = this._notifyQueue.shift();
+                    var slot = this._slots.get(sid);
+                    if (!slot) continue;
+
+                    var payload = {
+                        slotId: sid,
+                        type: slot.type,
+                        metadata: deepClone(slot.metadata),
+                        data: deepClone(slot.data),
+                        uiState: deepClone(slot.uiState)
+                    };
+
+                    this._dispatchNotify(sid, slot, payload);
+
+                    var pending = this._pendingUpdates.get(sid);
+                    if (!pending || pending.length === 0) continue;
+
                     this._pendingUpdates.delete(sid);
-                    return;
-                }
 
-                slot._isUpdating = true;
-
-                var payload = {
-                    slotId: sid,
-                    type: slot.type,
-                    metadata: this._deepCopy(slot.metadata),
-                    data: this._deepCopy(slot.data),
-                    uiState: this._deepCopy(slot.uiState)
-                };
-
-                try {
-                    var slotSubs = this._slotSubscribers.get(sid);
-                    if (slotSubs) {
-                        slotSubs.forEach(function(cb) {
-                            try { cb(payload); } catch (e) {
-                                console.error('[DataBus] Slot subscriber error:', e);
-                            }
-                        });
+                    var merged = {};
+                    var hasAny = false;
+                    for (var i = 0; i < pending.length; i++) {
+                        var p = pending[i];
+                        if (p.metadata !== undefined) { merged.metadata = p.metadata; hasAny = true; }
+                        if (p.data !== undefined) { merged.data = p.data; hasAny = true; }
+                        if (p.uiState !== undefined) { merged.uiState = p.uiState; hasAny = true; }
                     }
 
-                    var typeSubs = this._typeSubscribers.get(slot.type);
-                    if (typeSubs) {
-                        typeSubs.forEach(function(cb) {
-                            try { cb(payload); } catch (e) {
-                                console.error('[DataBus] Type subscriber error:', e);
-                            }
-                        });
+                    if (!hasAny) continue;
+
+                    if (merged.metadata !== undefined) slot.metadata = deepClone(merged.metadata);
+                    if (merged.data !== undefined) slot.data = deepClone(merged.data);
+                    if (merged.uiState !== undefined) slot.uiState = deepClone(merged.uiState);
+
+                    slot.updatedAt = Date.now();
+                    this._markDirty();
+
+                    if (this._notifyQueue.indexOf(sid) === -1) {
+                        this._notifyQueue.push(sid);
                     }
-                } finally {
-                    slot._isUpdating = false;
                 }
-
-                var pending = this._pendingUpdates.get(sid);
-                if (!pending || pending.length === 0) {
-                    return;
-                }
-
-                this._pendingUpdates.delete(sid);
-
-                var merged = {};
-                var hasAny = false;
-                for (var i = 0; i < pending.length; i++) {
-                    var p = pending[i];
-                    if (p.metadata !== undefined) { merged.metadata = p.metadata; hasAny = true; }
-                    if (p.data !== undefined) { merged.data = p.data; hasAny = true; }
-                    if (p.uiState !== undefined) { merged.uiState = p.uiState; hasAny = true; }
-                }
-
-                if (!hasAny) {
-                    return;
-                }
-
-                if (merged.metadata !== undefined) slot.metadata = this._deepCopy(merged.metadata);
-                if (merged.data !== undefined) slot.data = this._deepCopy(merged.data);
-                if (merged.uiState !== undefined) slot.uiState = this._deepCopy(merged.uiState);
-
-                slot.updatedAt = Date.now();
-                this._markDirty();
-
-                depth++;
+            } finally {
+                this._notifyFlushing = false;
             }
         }
+
+        _dispatchNotify(sid, slot, payload) {
+            var slotSubs = this._slotSubscribers.get(sid);
+            if (slotSubs) {
+                slotSubs.forEach(function(cb) {
+                    try { cb(payload); } catch (e) {
+                        console.error('[DataBus] Slot subscriber error:', e);
+                    }
+                });
+            }
+
+            var typeSubs = this._typeSubscribers.get(slot.type);
+            if (typeSubs) {
+                typeSubs.forEach(function(cb) {
+                    try { cb(payload); } catch (e) {
+                        console.error('[DataBus] Type subscriber error:', e);
+                    }
+                });
+            }
+        }
+
+        // ============================================================
+        // 10. EXPORT / IMPORT
+        // ============================================================
 
         exportSlots() {
             var slots = {};
@@ -758,6 +761,7 @@
                 this._typeSubscribers.clear();
                 this._slotCounters.clear();
                 this._pendingUpdates.clear();
+                this._notifyQueue = [];
 
                 if (data.counters && typeof data.counters === 'object') {
                     for (var typeId in data.counters) {
@@ -807,8 +811,7 @@
                 createdAt: source.createdAt || Date.now(),
                 updatedAt: source.updatedAt || Date.now(),
                 archivedAt: source.archivedAt || (archived ? Date.now() : null),
-                attachedWindows: new Set(),
-                _isUpdating: false
+                attachedWindows: new Set()
             };
 
             this._slots.set(sid, slot);
@@ -822,6 +825,56 @@
         importSnapshot(snapshot) {
             return this.importSlots(snapshot);
         }
+
+        // ============================================================
+        // 11. RECONCILE
+        // ============================================================
+
+        ensureSlotForWindow(slotId, typeId) {
+            var sid = String(slotId);
+            if (this._slots.has(sid)) return sid;
+
+            var type = typeId || sid.replace(/-\d+$/, '') || 'unknown';
+            var activeCount = this.getActiveSlotsByType(type).length
+                + this.getFreeActiveSlotsByType(type).length;
+
+            if (activeCount >= LIMITS.ACTIVE_PER_TYPE) {
+                console.warn('[DataBus] ensureSlotForWindow: active limit reached for type', type);
+                return null;
+            }
+
+            var slot = {
+                id: sid,
+                type: type,
+                data: null,
+                metadata: {},
+                uiState: {},
+                archived: false,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                archivedAt: null,
+                attachedWindows: new Set()
+            };
+
+            this._slots.set(sid, slot);
+            this._addToTypeIndex(type, sid);
+
+            var match = sid.match(/-(\d+)$/);
+            if (match) {
+                var num = parseInt(match[1], 10);
+                if (!isNaN(num)) {
+                    var cur = this._slotCounters.get(type) || 0;
+                    if (num > cur) this._slotCounters.set(type, num);
+                }
+            }
+
+            this._markDirty();
+            return sid;
+        }
+
+        // ============================================================
+        // 12. STATS / DIRTY
+        // ============================================================
 
         getStats() {
             var active = 0;
@@ -848,6 +901,7 @@
                 byType: byType,
                 attachedWindows: this._windowSlotIndex.size,
                 pendingUpdates: this._pendingUpdates.size,
+                notifyQueue: this._notifyQueue.length,
                 limits: {
                     ACTIVE_PER_TYPE: LIMITS.ACTIVE_PER_TYPE,
                     ARCHIVED_PER_TYPE: LIMITS.ARCHIVED_PER_TYPE,
@@ -877,6 +931,10 @@
             this._version++;
         }
 
+        // ============================================================
+        // 13. LIFECYCLE
+        // ============================================================
+
         clearAll() {
             this._slots.clear();
             this._typeIndex.clear();
@@ -885,6 +943,7 @@
             this._typeSubscribers.clear();
             this._slotCounters.clear();
             this._pendingUpdates.clear();
+            this._notifyQueue = [];
             this._markDirty();
         }
 
@@ -899,6 +958,7 @@
             this._typeSubscribers.clear();
             this._slotCounters.clear();
             this._pendingUpdates.clear();
+            this._notifyQueue = [];
         }
     }
 

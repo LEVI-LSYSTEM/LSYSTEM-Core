@@ -1,5 +1,5 @@
 // core/MessageBus.js
-// Версия 2.4.0
+// Версия 3.0.0
 
 (function() {
     'use strict';
@@ -28,14 +28,17 @@
 
             this._layoutListener = null;
 
-            this._pendingRequests = new Map();
-            this._requestUnsubscribes = new Map();
+            this._pending = new Map();
             this._defaultRequestTimeout = options.requestTimeout || DEFAULT_REQUEST_TIMEOUT;
 
             this._requestHandlers = new Set();
 
             this._deliveryDepth = 0;
         }
+
+        // ============================================================
+        // 1. LAYOUT MANAGER
+        // ============================================================
 
         setLayoutManager(layoutManager) {
             if (this._layoutListener) {
@@ -145,6 +148,10 @@
                 .filter(w => w.type === typeId && w.slotId === slotId)
                 .map(w => w.id);
         }
+
+        // ============================================================
+        // 2. SEND
+        // ============================================================
 
         send(senderId, channel, data, targetId = null) {
             if (!senderId) {
@@ -266,6 +273,10 @@
             return this.send(senderId, channel, data, null);
         }
 
+        // ============================================================
+        // 3. RPC — REQUEST
+        // ============================================================
+
         request(senderId, targetId, channel, data = {}, options = {}) {
             return new Promise((resolve, reject) => {
                 if (!senderId) {
@@ -291,17 +302,30 @@
 
                 const self = this;
 
-                const unsub = this.subscribe(
+                const entry = {
+                    requestId: requestId,
+                    senderId: senderId,
+                    targetId: targetId,
+                    channel: channel,
+                    createdAt: Date.now(),
+                    resolve: resolve,
+                    reject: reject,
+                    timer: null,
+                    unsub: null,
+                    settled: false
+                };
+
+                entry.unsub = this.subscribe(
                     senderId,
                     responseChannel,
                     (fromSenderId, responseData) => {
                         if (!responseData) return;
                         if (String(responseData.requestId) !== String(requestId)) return;
 
-                        const pending = self._pendingRequests.get(requestId);
-                        if (!pending) return;
+                        if (entry.settled) return;
+                        entry.settled = true;
 
-                        self._cleanupRequest(requestId);
+                        self._settlePending(requestId);
 
                         if (responseData.ok === false) {
                             const err = new Error(
@@ -316,11 +340,11 @@
                     }
                 );
 
-                const timer = setTimeout(() => {
-                    const pending = self._pendingRequests.get(requestId);
-                    if (!pending) return;
+                entry.timer = setTimeout(() => {
+                    if (entry.settled) return;
+                    entry.settled = true;
 
-                    self._cleanupRequest(requestId);
+                    self._settlePending(requestId);
 
                     const err = new Error(
                         `RPC request timeout (${timeoutMs}ms): ${channel} → ${targetId}`
@@ -331,16 +355,7 @@
                     reject(err);
                 }, timeoutMs);
 
-                this._pendingRequests.set(requestId, {
-                    resolve: resolve,
-                    reject: reject,
-                    timer: timer,
-                    senderId: senderId,
-                    targetId: targetId,
-                    channel: channel,
-                    createdAt: Date.now()
-                });
-                this._requestUnsubscribes.set(requestId, unsub);
+                this._pending.set(requestId, entry);
 
                 const payload = {
                     requestId: requestId,
@@ -350,7 +365,9 @@
                 const sent = this.send(senderId, requestChannel, payload, targetId);
 
                 if (!sent) {
-                    this._cleanupRequest(requestId);
+                    entry.settled = true;
+                    this._settlePending(requestId);
+
                     const err = new Error(
                         `RPC request not sent: ${channel} → ${targetId}`
                     );
@@ -360,6 +377,27 @@
                 }
             });
         }
+
+        _settlePending(requestId) {
+            const entry = this._pending.get(requestId);
+            if (!entry) return;
+
+            if (entry.timer) {
+                try { clearTimeout(entry.timer); } catch (e) {}
+                entry.timer = null;
+            }
+
+            if (entry.unsub) {
+                try { entry.unsub(); } catch (e) {}
+                entry.unsub = null;
+            }
+
+            this._pending.delete(requestId);
+        }
+
+        // ============================================================
+        // 4. RPC — RESPOND
+        // ============================================================
 
         respond(senderId, requestId, channel, response, targetId = null) {
             if (!senderId) {
@@ -408,6 +446,10 @@
 
             return this.send(senderId, responseChannel, payload, targetId);
         }
+
+        // ============================================================
+        // 5. RPC — HANDLER
+        // ============================================================
 
         onRequest(senderId, channel, handler) {
             if (!senderId) {
@@ -485,25 +527,13 @@
             };
         }
 
-        _cleanupRequest(requestId) {
-            const pending = this._pendingRequests.get(requestId);
-            if (pending) {
-                if (pending.timer) {
-                    try { clearTimeout(pending.timer); } catch (e) {}
-                }
-                this._pendingRequests.delete(requestId);
-            }
-
-            const unsub = this._requestUnsubscribes.get(requestId);
-            if (unsub) {
-                try { unsub(); } catch (e) {}
-                this._requestUnsubscribes.delete(requestId);
-            }
-        }
-
         getPendingRequestCount() {
-            return this._pendingRequests.size;
+            return this._pending.size;
         }
+
+        // ============================================================
+        // 6. DELIVERY
+        // ============================================================
 
         _enterDelivery() {
             this._deliveryDepth++;
@@ -601,6 +631,10 @@
             }
         }
 
+        // ============================================================
+        // 7. SUBSCRIBE
+        // ============================================================
+
         subscribe(windowId, channel, callback) {
             if (!windowId) {
                 console.error('[MessageBus] windowId is required');
@@ -694,6 +728,10 @@
             this._globalSubscribers.delete(wid);
         }
 
+        // ============================================================
+        // 8. HISTORY / STATS
+        // ============================================================
+
         getHistory(channel = null, senderId = null, targetId = null) {
             let history = this._history;
 
@@ -728,7 +766,7 @@
                 registeredTypes: this._typeRegistry.size,
                 registeredSlots: this._slotRegistry.size,
                 layoutManagerAttached: !!this._layoutManager,
-                pendingRequests: this._pendingRequests.size,
+                pendingRequests: this._pending.size,
                 requestHandlers: this._requestHandlers.size,
                 deliveryDepth: this._deliveryDepth
             };
@@ -770,6 +808,10 @@
             this._debug = false;
         }
 
+        // ============================================================
+        // 9. DESTROY
+        // ============================================================
+
         destroy() {
             if (this._layoutListener) {
                 try {
@@ -783,20 +825,20 @@
             }
             this._requestHandlers.clear();
 
-            const pendingIds = Array.from(this._pendingRequests.keys());
+            const pendingIds = Array.from(this._pending.keys());
             for (const requestId of pendingIds) {
-                const pending = this._pendingRequests.get(requestId);
-                if (pending && typeof pending.reject === 'function') {
+                const entry = this._pending.get(requestId);
+                if (entry && typeof entry.reject === 'function' && !entry.settled) {
                     try {
+                        entry.settled = true;
                         const err = new Error('MessageBus destroyed during pending RPC');
                         err.code = 'RPC_BUS_DESTROYED';
-                        pending.reject(err);
+                        entry.reject(err);
                     } catch (e) {}
                 }
-                this._cleanupRequest(requestId);
+                this._settlePending(requestId);
             }
-            this._pendingRequests.clear();
-            this._requestUnsubscribes.clear();
+            this._pending.clear();
 
             this._subscribers.clear();
             this._globalSubscribers.clear();

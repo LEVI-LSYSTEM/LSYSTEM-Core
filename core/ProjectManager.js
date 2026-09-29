@@ -1,5 +1,5 @@
 // core/ProjectManager.js
-// Версия 4.2.0
+// Версия 5.1.0
 
 (function() {
     'use strict';
@@ -10,7 +10,7 @@
         LAST_PROJECT: 'lsystem_last_project'
     };
 
-    var PROJECT_FORMAT_VERSION = '4.2.0';
+    var PROJECT_FORMAT_VERSION = '5.1.0';
 
     function sanitizeFilename(name) {
         if (!name) return 'project.lsp';
@@ -47,13 +47,19 @@
             this._autoSaveTimer = null;
             this._autoSaveInterval = options.autoSaveInterval || 30000;
 
+            this._busUnsubs = [];
+
             if (options.autoSave !== false) {
                 this._startAutoSave();
             }
 
             if (this._dataBus && typeof document !== 'undefined') {
-                document.addEventListener('data-changed', () => {
+                var onDataChanged = () => {
                     this._markDirty();
+                };
+                document.addEventListener('data-changed', onDataChanged);
+                this._busUnsubs.push(function() {
+                    document.removeEventListener('data-changed', onDataChanged);
                 });
             }
         }
@@ -357,7 +363,9 @@
                     this._created = migrated.metadata.created || new Date().toISOString();
 
                     if (migrated.metadata.theme) {
-                        if (typeof document !== 'undefined') {
+                        if (window.appState && typeof window.appState.setThemeMode === 'function') {
+                            window.appState.setThemeMode(migrated.metadata.theme);
+                        } else if (typeof document !== 'undefined') {
                             document.documentElement.setAttribute('data-theme', migrated.metadata.theme);
                         }
                     }
@@ -497,17 +505,22 @@
             this._created = new Date().toISOString();
             this._projectMetadata = {};
 
+            if (this._layoutManager) {
+                try {
+                    if (typeof this._layoutManager.closeAll === 'function') {
+                        this._layoutManager.closeAll();
+                    }
+                    if (typeof this._layoutManager.loadDefaultState === 'function') {
+                        this._layoutManager.loadDefaultState();
+                    }
+                } catch (e) {
+                    console.error('[ProjectManager] newProject: layout reset error:', e);
+                }
+            }
+
             if (this._dataBus) {
                 this._dataBus.clearAll();
                 this._dataBus.markSaved();
-            }
-
-            if (typeof document !== 'undefined') {
-                const event = new CustomEvent('project-new', {
-                    detail: { name: this._projectName },
-                    bubbles: true
-                });
-                document.dispatchEvent(event);
             }
 
             this._notify('new', { name: this._projectName });
@@ -651,12 +664,14 @@
                 });
             }
 
-            if (typeof document !== 'undefined') {
-                const customEvent = new CustomEvent('project-' + event, {
-                    detail: data,
-                    bubbles: true
-                });
-                document.dispatchEvent(customEvent);
+            if (window.eventBus && typeof window.eventBus.emit === 'function') {
+                try {
+                    window.eventBus.emit('project:' + event, data);
+                } catch (e) {}
+            }
+
+            if (this._eventBus && this._eventBus !== window.eventBus) {
+                try { this._eventBus.emit('project:' + event, data); } catch (e) {}
             }
         }
 
@@ -678,6 +693,12 @@
 
         destroy() {
             this._stopAutoSave();
+
+            for (var i = 0; i < this._busUnsubs.length; i++) {
+                try { this._busUnsubs[i](); } catch (e) {}
+            }
+            this._busUnsubs = [];
+
             this._listeners = {};
         }
     }

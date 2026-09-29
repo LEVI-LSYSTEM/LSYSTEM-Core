@@ -1,33 +1,5 @@
 // core/plugins/PluginLoader.js
-// Версия 5.0.0 — авто-скан без манифеста.
-//
-// Модель:
-//   - Никакого manifest.json. Папка сканируется рекурсивно.
-//   - Все .js загружаются в алфавитном порядке пути.
-//   - Файлы с префиксом "_" или "." игнорируются.
-//   - После выполнения файла ищем в module.exports классы с static meta.id.
-//     Найденные — регистрируем как окна. Остальное остаётся доступным
-//     через module.exports и/или globalThis.
-//   - require() работает синхронно из предзагруженного кэша.
-//
-// API:
-//   new PluginLoader({ folderSource, registry })
-//   await scan()
-//   await loadAll()
-//   await reloadFile(path)
-//   listFolder(folderName)
-//   listFolderByRelPath(folderName)
-//   readFile(path)
-//   readAsset(name)
-//   resolveAsset(name)
-//   getAssetIndex()
-//   getSortedFiles()
-//   getLoadedIds()
-//   getPluginFileMap()
-//   getFilePluginMap()
-//   getDisabledIds()
-//   isDisabled(id) / setDisabled(id, bool)
-//   reset() / resetFull()
+// Версия 5.1.0
 
 (function() {
     'use strict';
@@ -35,7 +7,10 @@
     var DISABLED_KEY = 'lsystem-plugin-disabled';
     var MAX_SCAN_DEPTH = 32;
 
-    function _endsWithJs(name) {
+    function _isJsFileName(name) {
+        if (window.LsFileTypes && typeof window.LsFileTypes.isJsFile === 'function') {
+            return window.LsFileTypes.isJsFile(name);
+        }
         return /\.js$/i.test(name);
     }
 
@@ -99,6 +74,7 @@
             this.registry = opts.registry || null;
 
             this._sortedFiles = [];
+            this._pathIndex = new Map();
             this._assetIndex = new Map();
             this._assetDuplicates = [];
             this._pluginFileMap = new Map();
@@ -143,6 +119,7 @@
 
         async scan() {
             this._sortedFiles = [];
+            this._pathIndex.clear();
             this._assetIndex.clear();
             this._assetDuplicates = [];
             this._fileCache.clear();
@@ -165,6 +142,7 @@
 
             for (var i = 0; i < this._sortedFiles.length; i++) {
                 var fp = this._sortedFiles[i].path;
+                this._pathIndex.set(fp, i);
                 try {
                     var content = await this.folderSource.readFile(fp);
                     this._fileCache.set(fp, content);
@@ -202,7 +180,7 @@
                     continue;
                 }
 
-                if (_endsWithJs(name)) {
+                if (_isJsFileName(name)) {
                     jsFiles.push(fullPath);
                     continue;
                 }
@@ -385,12 +363,11 @@
             }
 
             var target = null;
-            for (var j = 0; j < this._sortedFiles.length; j++) {
-                var p = this._sortedFiles[j].path;
-                for (var k = 0; k < candidates.length; k++) {
-                    if (p === candidates[k]) { target = p; break; }
+            for (var k = 0; k < candidates.length; k++) {
+                if (this._pathIndex.has(candidates[k])) {
+                    target = candidates[k];
+                    break;
                 }
-                if (target) break;
             }
 
             if (!target) {
@@ -606,6 +583,7 @@
 
         reset() {
             this._sortedFiles = [];
+            this._pathIndex.clear();
             this._assetIndex.clear();
             this._assetDuplicates = [];
             this._pluginFileMap.clear();

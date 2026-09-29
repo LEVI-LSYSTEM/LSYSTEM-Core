@@ -1,5 +1,5 @@
 // core/window/HeaderController.js
-// Версия 4.0.0
+// Версия 5.0.0
 
 (function() {
     'use strict';
@@ -43,6 +43,8 @@
 
         this._buttonsVersion = 0;
         this._measuredVersion = -1;
+
+        this._swapController = null;
 
         this._build();
     }
@@ -340,276 +342,28 @@
     };
 
     // ============================================================
-    // 6. DRAG-SWAP ОКОН
+    // 6. DRAG-SWAP — ДЕЛЕГИРОВАНИЕ В WindowSwapController
     // ============================================================
 
     HeaderController.prototype._setupDragSwap = function() {
         if (!this._chrome || !this._baseWindow || !this._layoutManager) return;
 
+        if (typeof window.WindowSwapController !== 'function') {
+            console.warn('[HeaderController] WindowSwapController not available');
+            return;
+        }
+
         var headerLeft = this._chrome.getHeaderLeft();
         var header = this._chrome.getHeader();
         if (!headerLeft || !header) return;
 
-        var self = this;
-
-        var dragData = null;
-        var activeHandlers = null;
-
-        var detach = function() {
-            if (!activeHandlers) return;
-            document.removeEventListener('mousemove', activeHandlers.onMouseMove);
-            document.removeEventListener('mouseup', activeHandlers.onMouseUp);
-            document.removeEventListener('pointercancel', activeHandlers.onCancel);
-            window.removeEventListener('blur', activeHandlers.onCancel);
-            activeHandlers = null;
-        };
-
-        var isNoDragTarget = function(target) {
-            if (!target || typeof target.closest !== 'function') return false;
-            var el = target.closest('[data-no-drag]');
-            if (!el) return false;
-            var raw = el.getAttribute('data-no-drag');
-            var v = (raw == null ? '' : String(raw)).trim().toLowerCase();
-            if (v === '') return true;
-            if (v === 'true' || v === '1' || v === 'yes') return true;
-            if (v === 'false' || v === '0' || v === 'no') return false;
-            return true;
-        };
-
-        headerLeft.addEventListener('mousedown', function(e) {
-            if (e.button !== 0) return;
-            if (activeHandlers) return;
-
-            var count = self._layoutManager ? self._layoutManager.getWindowCount() : 1;
-            if (count <= 1) return;
-
-            if (e.target.closest('button')) return;
-            if (isNoDragTarget(e.target)) return;
-
-            dragData = {
-                windowId: self._id,
-                startX: e.clientX,
-                startY: e.clientY,
-                offsetX: 12,
-                offsetY: 12,
-                isDragging: false,
-                ghost: null,
-                targetId: null
-            };
-
-            headerLeft.style.cursor = 'grabbing';
-            header.style.opacity = '0.85';
-
-            var onMouseMove = function(ev) {
-                if (ev.buttons === 0) {
-                    onCancel();
-                    return;
-                }
-
-                var dx = ev.clientX - dragData.startX;
-                var dy = ev.clientY - dragData.startY;
-
-                if (!dragData.isDragging && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
-                    dragData.isDragging = true;
-                    startDrag(dragData);
-                }
-
-                if (dragData.isDragging && dragData.ghost) {
-                    dragData.ghost.style.left = (ev.clientX - dragData.offsetX) + 'px';
-                    dragData.ghost.style.top = (ev.clientY - dragData.offsetY) + 'px';
-
-                    var target = findWindowAtPoint(ev.clientX, ev.clientY);
-                    dragData.targetId = target;
-                    highlightTarget(target);
-                }
-            };
-
-            var onMouseUp = function() {
-                if (dragData.isDragging && dragData.targetId) {
-                    try {
-                        self._layoutManager.swapWindows(dragData.windowId, dragData.targetId);
-                    } catch (err) {
-                        console.error('[HeaderController] swap error:', err);
-                    }
-                }
-                endDrag(dragData);
-                headerLeft.style.cursor = '';
-                header.style.opacity = '1';
-                detach();
-                dragData = null;
-            };
-
-            var onCancel = function() {
-                if (dragData) endDrag(dragData);
-                headerLeft.style.cursor = '';
-                header.style.opacity = '1';
-                detach();
-                dragData = null;
-            };
-
-            activeHandlers = {
-                onMouseMove: onMouseMove,
-                onMouseUp: onMouseUp,
-                onCancel: onCancel
-            };
-
-            document.addEventListener('mousemove', onMouseMove);
-            document.addEventListener('mouseup', onMouseUp);
-            document.addEventListener('pointercancel', onCancel);
-            window.addEventListener('blur', onCancel);
+        this._swapController = new window.WindowSwapController({
+            layoutManager: this._layoutManager,
+            baseWindow: this._baseWindow,
+            headerLeft: headerLeft,
+            header: header,
+            autoInstall: true
         });
-
-        var startDrag = function(data) {
-            var ghost = document.createElement('div');
-            ghost.className = 'window-ghost';
-            ghost.style.cssText = [
-                'position:fixed',
-                'pointer-events:none',
-                'z-index:99999',
-                'opacity:0.92',
-                'background:var(--bg-panel, #1a1a1a)',
-                'border:2px solid var(--accent-red, #cc2233)',
-                'border-radius:var(--radius, 6px)',
-                'box-shadow:0 20px 80px rgba(0,0,0,0.6)',
-                'padding:10px 20px',
-                'font-size:13px',
-                'color:var(--text-primary, #e0d8cc)',
-                'width:200px',
-                'overflow:hidden',
-                'text-overflow:ellipsis',
-                'white-space:nowrap',
-                'backdrop-filter:blur(12px)'
-            ].join(';');
-
-            var iconHtml;
-            var icon = self._chrome.getIcon();
-            if (icon && icon.indexOf('icon-') === 0) {
-                iconHtml = '<svg class="icon-svg" style="width:18px;height:18px;fill:currentColor;display:block;flex-shrink:0;"><use href="#' + escapeAttr(icon) + '"></use></svg>';
-            } else {
-                iconHtml = '<span style="font-size:18px;flex-shrink:0;">' + escapeHtml(icon || '📄') + '</span>';
-            }
-
-            var title = self._chrome.getTitle();
-
-            ghost.innerHTML = [
-                '<div style="display:flex;align-items:center;gap:8px;">',
-                iconHtml,
-                '<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(title) + '</span>',
-                '</div>'
-            ].join('');
-
-            ghost.style.left = (data.startX - data.offsetX) + 'px';
-            ghost.style.top = (data.startY - data.offsetY) + 'px';
-
-            document.body.appendChild(ghost);
-            data.ghost = ghost;
-
-            showDragHint('📌 Drop on any window to swap positions');
-        };
-
-        var endDrag = function(data) {
-            if (data.ghost && data.ghost.parentNode) {
-                data.ghost.remove();
-            }
-
-            document.querySelectorAll('.window-container.drag-target').forEach(function(el) {
-                el.classList.remove('drag-target');
-                el.style.borderColor = '';
-                el.style.boxShadow = '';
-                el.style.transform = '';
-                el.style.backgroundColor = '';
-            });
-
-            var hint = document.querySelector('.drag-hint');
-            if (hint) hint.remove();
-        };
-
-        var findWindowAtPoint = function(x, y) {
-            var padding = 30;
-            var myId = String(self._id);
-
-            var windows = self._layoutManager.getVisibleWindows
-                ? self._layoutManager.getVisibleWindows()
-                : self._layoutManager.getWindows();
-
-            for (var i = 0; i < windows.length; i++) {
-                var w = windows[i];
-                if (String(w.id) === myId) continue;
-                var node = self._layoutManager._domMap
-                    ? self._layoutManager._domMap.get(w.nodeId)
-                    : null;
-                if (!node) continue;
-                var rect = node.getBoundingClientRect();
-                if (x >= rect.left - padding && x <= rect.right + padding &&
-                    y >= rect.top - padding && y <= rect.bottom + padding) {
-                    return w.id;
-                }
-            }
-            return null;
-        };
-
-        var highlightTarget = function(targetId) {
-            document.querySelectorAll('.window-container.drag-target').forEach(function(el) {
-                el.classList.remove('drag-target');
-                el.style.borderColor = '';
-                el.style.boxShadow = '';
-                el.style.transform = '';
-                el.style.backgroundColor = '';
-            });
-
-            if (!targetId) return;
-
-            var el = null;
-            var windows = self._layoutManager.getVisibleWindows
-                ? self._layoutManager.getVisibleWindows()
-                : self._layoutManager.getWindows();
-            for (var i = 0; i < windows.length; i++) {
-                if (String(windows[i].id) === String(targetId)) {
-                    el = self._layoutManager._domMap
-                        ? self._layoutManager._domMap.get(windows[i].nodeId)
-                        : null;
-                    break;
-                }
-            }
-            if (!el) {
-                el = document.querySelector('.window-container[data-window-id="' + targetId + '"]');
-            }
-
-            if (el) {
-                el.classList.add('drag-target');
-                el.style.borderColor = 'var(--accent-red, #cc2233)';
-                el.style.boxShadow = 'inset 0 0 40px rgba(204, 34, 51, 0.15), 0 0 30px rgba(204, 34, 51, 0.05)';
-                el.style.backgroundColor = 'rgba(204, 34, 51, 0.03)';
-            }
-        };
-
-        var showDragHint = function(text) {
-            var existing = document.querySelector('.drag-hint');
-            if (existing) existing.remove();
-
-            var hint = document.createElement('div');
-            hint.className = 'drag-hint';
-            hint.style.cssText = [
-                'position:fixed',
-                'bottom:40px',
-                'left:50%',
-                'transform:translateX(-50%)',
-                'background:rgba(0,0,0,0.85)',
-                'color:var(--text-primary, #e0d8cc)',
-                'padding:10px 24px',
-                'border-radius:var(--radius, 6px)',
-                'font-size:13px',
-                'z-index:99999',
-                'backdrop-filter:blur(12px)',
-                'border:1px solid var(--border-color, rgba(200, 184, 154, 0.12))',
-                'pointer-events:none',
-                'opacity:0.95',
-                'box-shadow:0 8px 32px rgba(0,0,0,0.4)',
-                'font-weight:500'
-            ].join(';');
-            hint.textContent = text;
-            document.body.appendChild(hint);
-        };
     };
 
     // ============================================================
@@ -649,6 +403,11 @@
     HeaderController.prototype.destroy = function() {
         if (this._isDestroyed) return;
         this._isDestroyed = true;
+
+        if (this._swapController) {
+            try { this._swapController.destroy(); } catch (e) {}
+            this._swapController = null;
+        }
 
         for (var i = 0; i < this._headerItems.length; i++) {
             var item = this._headerItems[i];
