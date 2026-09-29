@@ -1,8 +1,9 @@
 // core/settingsModal/SettingsModal.js
-// Версия 13.0.0
+// Версия 13.1.0
 // - Hotkeys: работа с entry.original / entry.overridden.
 // - Строки с переопределённой комбой получают класс is-overridden.
 // - _applyHotkeyChange сверяет конфликты по effective original.
+// - Профиль: настоящий экспорт/импорт через AppState.exportProfile/importProfile.
 
 (function() {
     'use strict';
@@ -504,10 +505,10 @@
         });
 
         overlay.querySelector('#profileExportBtn').addEventListener('click', function() {
-            self._notifyStub('Экспорт профиля', 'LSUManager будет подключён следующей итерацией');
+            self._exportProfile();
         });
         overlay.querySelector('#profileImportBtn').addEventListener('click', function() {
-            self._notifyStub('Импорт профиля', 'LSUManager будет подключён следующей итерацией');
+            self._importProfile();
         });
 
         overlay.querySelector('#eulaDownloadBtn').addEventListener('click', function() {
@@ -624,10 +625,28 @@
         this._renderHotkeys();
         this._renderWorkingFolder();
         this._renderPluginsFolderBanner();
-        this._renderPlugins();
+
+        // Форсируем загрузку (если ещё не загружено) и только потом рендерим.
+        var self = this;
+        var ps = window.pluginSystem;
+
+        if (ps && typeof ps.loadAll === 'function') {
+            Promise.resolve(ps.loadAll())
+                .catch(function(err) {
+                    console.warn('[SettingsModal] pluginSystem.loadAll failed:', err);
+                })
+                .then(function() {
+                    if (!self._isOpen) return;
+                    self._renderWorkingFolder();
+                    self._renderPluginsFolderBanner();
+                    self._renderPlugins();
+                });
+        } else {
+            this._renderPlugins();
+        }
+
         this._startNowTimer();
 
-        var self = this;
         setTimeout(function() {
             var inp = self._overlay.querySelector('#profileName');
             if (inp) inp.focus();
@@ -722,6 +741,148 @@
         if (window.appState) window.appState.clearAccount();
         this._renderProfile();
         if (window.__lsystem) window.__lsystem.showNotification('Профиль сброшен', 'info');
+    };
+
+    // ============================================================
+    // ПРОФИЛЬ — ЭКСПОРТ / ИМПОРТ
+    // ============================================================
+
+    SettingsModal.prototype._exportProfile = function() {
+        if (!window.appState) {
+            if (window.__lsystem) window.__lsystem.showNotification('appState не загружен', 'error');
+            return;
+        }
+
+        try {
+            var name = '';
+            var nameEl = this._overlay.querySelector('#profileName');
+            if (nameEl) name = (nameEl.value || '').trim();
+
+            var profile = window.appState.exportProfile({
+                appName: 'LSYSTEM',
+                appVersion: (window.__lsystem && window.__lsystem.version) || 'unknown',
+                userLabel: name || null
+            });
+
+            var json = JSON.stringify(profile, null, 2);
+            var blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+            var url = URL.createObjectURL(blob);
+
+            var ts = new Date();
+            var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+            var stamp = ts.getFullYear() +
+                pad(ts.getMonth() + 1) +
+                pad(ts.getDate()) + '-' +
+                pad(ts.getHours()) +
+                pad(ts.getMinutes()) +
+                pad(ts.getSeconds());
+
+            var safeName = (name || 'profile')
+                .replace(/[^\wа-яА-ЯёЁ\-]+/gi, '_')
+                .slice(0, 32);
+
+            var fileName = 'lsystem-profile_' + safeName + '_' + stamp + '.json';
+
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+
+            if (window.__lsystem) {
+                window.__lsystem.showNotification('Профиль экспортирован: ' + fileName, 'success');
+            }
+        } catch (e) {
+            console.error('[SettingsModal] Export profile error:', e);
+            if (window.__lsystem) {
+                window.__lsystem.showNotification('Ошибка экспорта профиля', 'error');
+            }
+        }
+    };
+
+    SettingsModal.prototype._importProfile = function() {
+        if (!window.appState) {
+            if (window.__lsystem) window.__lsystem.showNotification('appState не загружен', 'error');
+            return;
+        }
+
+        var self = this;
+
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.style.display = 'none';
+
+        input.addEventListener('change', function() {
+            var file = input.files && input.files[0];
+            if (!file) {
+                if (input.parentNode) input.parentNode.removeChild(input);
+                return;
+            }
+
+            var reader = new FileReader();
+
+            reader.onload = function(ev) {
+                var text = String(ev.target.result || '');
+                var parsed;
+
+                try {
+                    parsed = JSON.parse(text);
+                } catch (err) {
+                    console.error('[SettingsModal] Import parse error:', err);
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Файл повреждён или не JSON', 'error');
+                    }
+                    if (input.parentNode) input.parentNode.removeChild(input);
+                    return;
+                }
+
+                var res = window.appState.importProfile(parsed, { merge: false });
+
+                if (!res.ok) {
+                    console.warn('[SettingsModal] Import issues:', res.errors);
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification(
+                            'Импорт с ошибками: ' + res.errors.join('; '),
+                            'warning',
+                            3500
+                        );
+                    }
+                } else {
+                    if (window.__lsystem) {
+                        window.__lsystem.showNotification('Профиль импортирован', 'success');
+                    }
+                }
+
+                // Перерисовываем UI поверх нового состояния
+                self._renderProfile();
+                self._renderThemeMode();
+                self._renderHotkeys();
+
+                // Уведомляем остальную систему
+                document.dispatchEvent(new CustomEvent('profile:imported', {
+                    detail: { applied: res.applied, errors: res.errors }
+                }));
+
+                if (input.parentNode) input.parentNode.removeChild(input);
+            };
+
+            reader.onerror = function() {
+                console.error('[SettingsModal] FileReader error');
+                if (window.__lsystem) {
+                    window.__lsystem.showNotification('Не удалось прочитать файл', 'error');
+                }
+                if (input.parentNode) input.parentNode.removeChild(input);
+            };
+
+            reader.readAsText(file, 'utf-8');
+        });
+
+        document.body.appendChild(input);
+        input.click();
     };
 
     SettingsModal.prototype._downloadEULA = function() {
@@ -1108,10 +1269,17 @@
         if (current.length === 0) {
             var empty = document.createElement('div');
             empty.className = 'plugins-list__empty';
+
+            var folderState = ps.getFolderState ? ps.getFolderState() : 'none';
+
             if (query) {
                 empty.textContent = 'Ничего не найдено';
             } else if (this._pluginsTab === 'hidden') {
                 empty.textContent = 'Скрытых плагинов нет';
+            } else if (folderState === 'prompt' || folderState === 'denied') {
+                empty.textContent = 'Папка плагинов недоступна — разрешите доступ, чтобы увидеть установленные окна.';
+            } else if (folderState === 'none') {
+                empty.textContent = 'Папка плагинов не выбрана.';
             } else {
                 empty.textContent = 'Активных плагинов нет';
             }

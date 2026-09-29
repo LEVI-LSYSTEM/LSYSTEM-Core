@@ -1,5 +1,5 @@
 /* core/settingsModal/SettingsModal.css */
-/* Версия 14.0.0 — компактный редизайн секции плагинов */
+/* Версия 14.1.0 — компактный редизайн секции плагинов + доступ к папкам ПК */
 
 :root {
     --sm-radius-card:   8px;
@@ -1793,6 +1793,639 @@
 }
 
 /* ================================================================ */
+/* ============ FOLDER PERMISSION — BANNER ======================== */
+/* ================================================================ */
+
+.settings-folder-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 11px 12px;
+    margin-bottom: 12px;
+    border-radius: var(--sm-radius-card);
+    background: linear-gradient(
+        135deg,
+        rgba(255, 170, 51, 0.10) 0%,
+        rgba(255, 170, 51, 0.04) 100%
+    );
+    border: 1px solid rgba(255, 170, 51, 0.28);
+    box-shadow:
+        0 0 0 1px rgba(255, 170, 51, 0.04) inset,
+        0 4px 18px rgba(0, 0, 0, 0.18);
+    box-sizing: border-box;
+    animation: folderBannerIn 0.45s var(--sm-spring) both;
+    position: relative;
+    overflow: hidden;
+}
+
+.settings-folder-banner::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: linear-gradient(
+        180deg,
+        rgba(255, 190, 90, 0.95),
+        rgba(255, 150, 40, 0.75)
+    );
+    box-shadow: 0 0 12px rgba(255, 170, 51, 0.5);
+}
+
+@keyframes folderBannerIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+[data-theme="light"] .settings-folder-banner {
+    background: linear-gradient(
+        135deg,
+        rgba(255, 170, 51, 0.14) 0%,
+        rgba(255, 170, 51, 0.06) 100%
+    );
+    border-color: rgba(200, 130, 20, 0.35);
+    box-shadow: 0 4px 18px rgba(120, 80, 0, 0.08);
+}
+
+.settings-folder-banner__icon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    margin-top: 1px;
+    color: rgba(255, 190, 90, 0.95);
+    fill: currentColor;
+    animation: folderWarnPulse 2.4s var(--sm-ease) infinite;
+}
+
+[data-theme="light"] .settings-folder-banner__icon {
+    color: rgba(200, 130, 20, 0.95);
+}
+
+@keyframes folderWarnPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.7; transform: scale(1.08); }
+}
+
+.settings-folder-banner__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.settings-folder-banner__title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--text-primary, #e0d8cc);
+    letter-spacing: 0.2px;
+    line-height: 1.35;
+    transition: color 0.5s ease;
+}
+
+[data-theme="light"] .settings-folder-banner__title {
+    color: #4a3f35;
+}
+
+.settings-folder-banner__desc {
+    font-size: 10.5px;
+    line-height: 1.55;
+    color: var(--text-muted, rgba(200, 184, 154, 0.7));
+    transition: color 0.5s ease;
+}
+
+[data-theme="light"] .settings-folder-banner__desc {
+    color: rgba(74, 63, 53, 0.7);
+}
+
+.settings-folder-banner .settings-btn {
+    flex: 0 0 auto;
+    align-self: center;
+    white-space: nowrap;
+    padding: 7px 12px;
+    font-size: 11px;
+    box-shadow: 0 4px 14px rgba(204, 34, 51, 0.25);
+}
+
+.settings-folder-banner .settings-btn:disabled {
+    opacity: 0.55;
+    box-shadow: none;
+}
+
+/* ================================================================ */
+/* ============ FOLDER PERMISSION — STATE CHIPS =================== */
+/* ================================================================ */
+
+.plugin-folder-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    line-height: 1.6;
+    flex-shrink: 0;
+    font-family: monospace;
+    transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+.plugin-folder-state::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+    flex-shrink: 0;
+}
+
+.plugin-folder-state--granted {
+    background: rgba(120, 200, 140, 0.12);
+    color: rgba(120, 200, 140, 0.95);
+    border: 1px solid rgba(120, 200, 140, 0.3);
+}
+
+.plugin-folder-state--prompt {
+    background: rgba(255, 170, 51, 0.12);
+    color: rgba(255, 170, 51, 0.95);
+    border: 1px solid rgba(255, 170, 51, 0.32);
+}
+
+.plugin-folder-state--denied {
+    background: rgba(204, 34, 51, 0.12);
+    color: rgba(204, 34, 51, 0.95);
+    border: 1px solid rgba(204, 34, 51, 0.35);
+}
+
+.plugin-folder-state--none {
+    background: rgba(200, 184, 154, 0.08);
+    color: var(--text-muted, rgba(200, 184, 154, 0.6));
+    border: 1px solid rgba(200, 184, 154, 0.15);
+}
+
+[data-theme="light"] .plugin-folder-state--granted {
+    background: rgba(40, 140, 80, 0.12);
+    color: rgba(40, 140, 80, 0.95);
+    border-color: rgba(40, 140, 80, 0.3);
+}
+
+[data-theme="light"] .plugin-folder-state--prompt {
+    background: rgba(200, 130, 20, 0.12);
+    color: rgba(200, 130, 20, 0.95);
+    border-color: rgba(200, 130, 20, 0.3);
+}
+
+[data-theme="light"] .plugin-folder-state--denied {
+    background: rgba(184, 31, 46, 0.1);
+    color: #b81f2e;
+    border-color: rgba(184, 31, 46, 0.35);
+}
+
+/* ================================================================ */
+/* ============ FOLDER PICKER — DRAG & DROP ZONE ================== */
+/* ================================================================ */
+
+.settings-folder-drop {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 22px 16px;
+    margin-top: 10px;
+    border-radius: var(--sm-radius-card);
+    border: 1.5px dashed rgba(200, 184, 154, 0.28);
+    background: rgba(200, 184, 154, 0.03);
+    text-align: center;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition:
+        border-color 0.3s var(--sm-ease),
+        background 0.3s var(--sm-ease),
+        transform 0.35s var(--sm-spring),
+        box-shadow 0.35s var(--sm-ease);
+    outline: none;
+}
+
+.settings-folder-drop:hover {
+    border-color: rgba(200, 184, 154, 0.55);
+    background: rgba(200, 184, 154, 0.07);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+
+.settings-folder-drop:focus-visible {
+    border-color: rgba(200, 184, 154, 0.7);
+    box-shadow: 0 0 0 3px rgba(200, 184, 154, 0.14);
+}
+
+.settings-folder-drop.is-dragover {
+    border-color: rgba(200, 184, 154, 0.85);
+    background: rgba(200, 184, 154, 0.12);
+    transform: translateY(-2px) scale(1.01);
+    box-shadow:
+        0 0 0 4px rgba(200, 184, 154, 0.10),
+        0 12px 32px rgba(0, 0, 0, 0.28);
+    animation: folderDropPulse 1.4s var(--sm-ease) infinite;
+}
+
+@keyframes folderDropPulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(200, 184, 154, 0.10), 0 12px 32px rgba(0, 0, 0, 0.28); }
+    50%      { box-shadow: 0 0 0 8px rgba(200, 184, 154, 0.04), 0 12px 32px rgba(0, 0, 0, 0.28); }
+}
+
+.settings-folder-drop__icon {
+    width: 30px;
+    height: 30px;
+    color: var(--beige, #c8b89a);
+    fill: currentColor;
+    opacity: 0.75;
+    transition: transform 0.4s var(--sm-spring), opacity 0.3s ease, color 0.5s ease;
+}
+
+.settings-folder-drop:hover .settings-folder-drop__icon,
+.settings-folder-drop.is-dragover .settings-folder-drop__icon {
+    opacity: 1;
+    transform: scale(1.12) translateY(-2px);
+}
+
+.settings-folder-drop__title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary, #e0d8cc);
+    letter-spacing: 0.2px;
+    transition: color 0.5s ease;
+}
+
+.settings-folder-drop__hint {
+    font-size: 10.5px;
+    color: var(--text-muted, rgba(200, 184, 154, 0.55));
+    line-height: 1.5;
+    transition: color 0.5s ease;
+}
+
+.settings-folder-drop__hint kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    font-family: monospace;
+    font-size: 9.5px;
+    background: var(--bg-input, #2a2a2a);
+    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+    border-radius: var(--sm-radius-sm);
+    color: var(--text-primary, #e0d8cc);
+    margin: 0 1px;
+}
+
+[data-theme="light"] .settings-folder-drop {
+    background: rgba(74, 63, 53, 0.03);
+    border-color: rgba(74, 63, 53, 0.22);
+}
+
+[data-theme="light"] .settings-folder-drop:hover,
+[data-theme="light"] .settings-folder-drop.is-dragover {
+    background: rgba(74, 63, 53, 0.06);
+    border-color: rgba(74, 63, 53, 0.45);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .settings-folder-drop__icon {
+    color: #6a5a4a;
+}
+
+[data-theme="light"] .settings-folder-drop__title {
+    color: #4a3f35;
+}
+
+/* ================================================================ */
+/* ============ FOLDER PATH — REFINED ============================= */
+/* ================================================================ */
+
+.settings-path--folder {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px 7px 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: var(--text-secondary, #a09888);
+    background: var(--bg-input, #2a2a2a);
+    border: 1px dashed var(--border-color, rgba(200, 184, 154, 0.22));
+    border-radius: var(--sm-radius-input);
+    max-width: 100%;
+    overflow: hidden;
+    transition: border-color 0.3s ease, background 0.5s ease, color 0.5s ease;
+}
+
+.settings-path--folder:hover {
+    border-color: rgba(200, 184, 154, 0.45);
+    color: var(--text-primary, #e0d8cc);
+}
+
+.settings-path--folder .icon-svg {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+    margin: 0;
+    color: var(--beige, #c8b89a);
+    opacity: 0.75;
+    transition: opacity 0.3s ease, transform 0.35s var(--sm-spring);
+}
+
+.settings-path--folder:hover .icon-svg {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.settings-path--folder span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* ================================================================ */
+/* ============ ACCESS ACTIONS ROW ================================ */
+/* ================================================================ */
+
+.settings-folder-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.settings-folder-actions .settings-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    min-width: 0;
+}
+
+.settings-folder-actions .settings-btn .icon-svg {
+    width: 12px;
+    height: 12px;
+    margin-right: 0;
+}
+
+/* ================================================================ */
+/* ============ FOLDER INFO CARD ================================== */
+/* ================================================================ */
+
+.settings-folder-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    border-radius: var(--sm-radius-btn);
+    background: var(--bg-panel, #1a1a1a);
+    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.08));
+    box-sizing: border-box;
+    transition:
+        background 0.4s ease,
+        border-color 0.35s var(--sm-ease),
+        box-shadow 0.35s var(--sm-ease);
+}
+
+.settings-folder-info:hover {
+    border-color: rgba(200, 184, 154, 0.2);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="light"] .settings-folder-info {
+    background: rgba(255, 255, 255, 0.55);
+}
+
+[data-theme="light"] .settings-folder-info:hover {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+.settings-folder-info__icon {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    background: rgba(200, 184, 154, 0.08);
+    color: var(--beige, #c8b89a);
+    transition: background 0.3s ease, transform 0.35s var(--sm-spring);
+}
+
+[data-theme="light"] .settings-folder-info__icon {
+    background: rgba(74, 63, 53, 0.07);
+    color: #6a5a4a;
+}
+
+.settings-folder-info:hover .settings-folder-info__icon {
+    background: rgba(200, 184, 154, 0.14);
+    transform: scale(1.06);
+}
+
+.settings-folder-info__icon .icon-svg {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    fill: currentColor;
+}
+
+.settings-folder-info__body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.settings-folder-info__name {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-primary, #e0d8cc);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.5s ease;
+}
+
+.settings-folder-info__path {
+    font-family: monospace;
+    font-size: 10px;
+    color: var(--text-muted, rgba(200, 184, 154, 0.5));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.5s ease;
+}
+
+/* ================================================================ */
+/* ============ INSTALL URL MODAL ================================= */
+/* ================================================================ */
+
+.plugin-install-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000001;
+    padding: 20px;
+    opacity: 0;
+    animation: pluginInstallFadeIn 0.3s var(--sm-ease) forwards;
+    box-sizing: border-box;
+}
+
+.plugin-install-overlay.is-closing {
+    animation: pluginInstallFadeOut 0.25s var(--sm-ease) forwards;
+}
+
+@keyframes pluginInstallFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes pluginInstallFadeOut {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+}
+
+[data-theme="light"] .plugin-install-overlay {
+    background: rgba(200, 190, 180, 0.65);
+}
+
+.plugin-install-modal {
+    width: 100%;
+    max-width: min(480px, 92vw);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-panel, #1a1a1a);
+    border: 1px solid var(--border-color, rgba(200, 184, 154, 0.12));
+    border-radius: var(--sm-radius-modal);
+    box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.6),
+        0 0 80px rgba(200, 184, 154, 0.05);
+    padding: 20px 22px;
+    box-sizing: border-box;
+    transform: translateY(-16px) scale(0.96);
+    opacity: 0;
+    animation: pluginInstallSlideIn 0.4s var(--sm-spring) 0.05s forwards;
+}
+
+@keyframes pluginInstallSlideIn {
+    to {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+}
+
+[data-theme="light"] .plugin-install-modal {
+    box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.15),
+        0 0 80px rgba(184, 31, 46, 0.04);
+}
+
+.plugin-install-modal__header {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 12px;
+}
+
+.plugin-install-modal__icon {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+    color: var(--beige, #c8b89a);
+    fill: currentColor;
+    transition: transform 0.4s var(--sm-spring);
+}
+
+.plugin-install-modal:hover .plugin-install-modal__icon {
+    transform: rotate(-8deg) scale(1.08);
+}
+
+.plugin-install-modal__title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary, #e0d8cc);
+    letter-spacing: 0.3px;
+    transition: color 0.5s ease;
+}
+
+.plugin-install-modal__hint {
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--text-muted, rgba(200, 184, 154, 0.6));
+    margin-bottom: 12px;
+    transition: color 0.5s ease;
+}
+
+.plugin-install-modal__input {
+    width: 100%;
+    margin-bottom: 16px;
+}
+
+.plugin-install-modal__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+}
+
+.plugin-install-modal__actions .settings-btn {
+    flex: 0 0 auto;
+}
+
+.plugin-install-modal__actions .settings-btn--primary {
+    min-width: 110px;
+    justify-content: center;
+}
+
+.plugin-install-modal__error {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: var(--sm-radius-btn);
+    background: var(--sm-danger-bg);
+    border: 1px solid var(--sm-danger-border);
+    color: var(--sm-danger);
+    font-size: 11px;
+    line-height: 1.5;
+    animation: pluginInstallShake 0.4s var(--sm-ease);
+}
+
+.plugin-install-modal__error .icon-svg {
+    width: 13px;
+    height: 13px;
+    flex: 0 0 13px;
+    margin: 0;
+    fill: currentColor;
+}
+
+@keyframes pluginInstallShake {
+    0%, 100% { transform: translateX(0); }
+    20%      { transform: translateX(-5px); }
+    40%      { transform: translateX(5px); }
+    60%      { transform: translateX(-3px); }
+    80%      { transform: translateX(3px); }
+}
+
+/* ================================================================ */
 /* ============ СВЕТЛАЯ ТЕМА ====================================== */
 /* ================================================================ */
 
@@ -1983,6 +2616,25 @@
     .plugins-list {
         max-height: 260px;
     }
+    .settings-folder-banner {
+        flex-wrap: wrap;
+        padding: 10px;
+        gap: 8px;
+    }
+    .settings-folder-banner .settings-btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .settings-folder-drop {
+        padding: 18px 12px;
+    }
+    .settings-folder-drop__icon {
+        width: 26px;
+        height: 26px;
+    }
+    .plugin-install-modal {
+        padding: 16px 18px;
+    }
 }
 
 @media (max-width: 480px) {
@@ -2131,6 +2783,48 @@
         flex: 1 1 auto;
         justify-content: center;
     }
+    .settings-folder-banner {
+        padding: 9px 10px;
+    }
+    .settings-folder-banner__title {
+        font-size: 11px;
+    }
+    .settings-folder-banner__desc {
+        font-size: 10px;
+    }
+    .settings-folder-drop {
+        padding: 16px 10px;
+        gap: 6px;
+    }
+    .settings-folder-drop__icon {
+        width: 24px;
+        height: 24px;
+    }
+    .settings-folder-drop__title {
+        font-size: 11.5px;
+    }
+    .settings-folder-drop__hint {
+        font-size: 10px;
+    }
+    .settings-folder-actions {
+        flex-direction: column;
+    }
+    .settings-folder-actions .settings-btn {
+        width: 100%;
+    }
+    .plugin-install-modal {
+        padding: 14px 16px;
+    }
+    .plugin-install-modal__title {
+        font-size: 13px;
+    }
+    .plugin-install-modal__actions {
+        flex-direction: column-reverse;
+    }
+    .plugin-install-modal__actions .settings-btn {
+        width: 100%;
+        justify-content: center;
+    }
 }
 
 @media (max-width: 360px) {
@@ -2192,12 +2886,48 @@
     .plugins-tab {
         min-height: 36px;
     }
+    .settings-folder-banner:hover,
+    .settings-folder-drop:hover {
+        transform: none;
+        box-shadow: none;
+    }
+    .settings-folder-drop {
+        min-height: 120px;
+    }
+    .settings-folder-actions .settings-btn {
+        min-height: 38px;
+    }
 }
+
+/* ================================================================ */
+/* ============ REDUCED MOTION ==================================== */
+/* ================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+    .settings-folder-banner,
+    .settings-folder-banner__icon,
+    .settings-folder-drop,
+    .settings-folder-drop.is-dragover,
+    .plugin-install-overlay,
+    .plugin-install-modal,
+    .plugin-install-modal__error {
+        animation: none !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+/* ================================================================ */
+/* ============ THEME TRANSITION ================================== */
+/* ================================================================ */
 
 .theme-transition .settings-modal *,
 .theme-transition .settings-modal-overlay *,
 .theme-transition .eula-modal *,
-.theme-transition .eula-modal-overlay * {
+.theme-transition .eula-modal-overlay *,
+.theme-transition .settings-folder-banner *,
+.theme-transition .settings-folder-drop *,
+.theme-transition .settings-folder-info *,
+.theme-transition .plugin-install-modal * {
     transition:
         background 0.5s ease,
         color 0.5s ease,

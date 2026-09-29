@@ -1,5 +1,5 @@
 // core/PluginSystem.js
-// Версия 13.0.0 — без манифеста.
+// Версия 14.0.0 — без манифеста.
 //
 // Модель:
 //   - Один рабочий каталог плагинов. Никакого manifest.json.
@@ -7,6 +7,14 @@
 //   - Плагин = окно (класс с static meta.id в module.exports).
 //   - Выключенные плагины — снимаются из реестра, но остаются в списке.
 //   - URL-плагины живут отдельно (IndexedDB, .lsu).
+//
+// Изменения относительно 13.0.0:
+//   - _doLoadAll: при state === 'prompt' пытается «мягко» восстановить папку.
+//   - _tryRestoreFolder: сохраняет _folderName даже при state === 'none'.
+//   - Добавлен _trySoftRestoreFolder() — requestPermission без модалки + scan/load.
+//   - Добавлен _reloadFolderPlugins() — единая точка scan/load/refresh/emit.
+//   - getAllPlugins: добавлен _lazySyncFromLoader() — подтягивает folder-плагины,
+//     даже если _refreshPluginsFromRegistry по какой-то причине не отработал.
 //
 // API:
 //   loadAll / reload
@@ -143,6 +151,18 @@
                 } catch (err) {
                     console.warn('[PluginSystem] load from folder failed:', err);
                 }
+            } else if (this._folderState === 'prompt' && this._loader) {
+                // Папка сохранена, но нужно разрешение.
+                // Пробуем «мягко» достучаться: read-попытка часто триггерит
+                // нативный запрос без явного requestPermission.
+                try {
+                    var soft = await this._trySoftRestoreFolder();
+                    if (soft) {
+                        await this._reloadFolderPlugins();
+                    }
+                } catch (err) {
+                    console.warn('[PluginSystem] soft restore failed:', err);
+                }
             }
 
             if (this._urlStorage) {
@@ -231,7 +251,7 @@
                         this._folderName = this._folderSource.getDisplayName() || '';
                     } else {
                         this._folderState = 'none';
-                        this._folderName = '';
+                        this._folderName = this._folderSource.getDisplayName() || '';
                     }
                 }
             } catch (err) {
@@ -243,6 +263,56 @@
                 state: this._folderState,
                 name: this._folderName
             });
+        }
+
+        async _trySoftRestoreFolder() {
+            if (!this._folderSource || !this._loader) return false;
+
+            // Пробуем разрешение без модалки (браузер сам решит).
+            var ok = await this._folderSource.requestPermission();
+            if (!ok) return false;
+
+            this._folderState = 'granted';
+            this._folderName = this._folderSource.getDisplayName() || this._folderName;
+
+            try {
+                var scanOk = await this._loader.scan();
+                if (scanOk) {
+                    await this._loader.loadAll();
+                    this._refreshPluginsFromRegistry();
+                }
+            } catch (e) {
+                console.warn('[PluginSystem] soft scan failed:', e);
+                return false;
+            }
+
+            this._emit('plugins:folder-changed', {
+                state: this._folderState,
+                name: this._folderName
+            });
+            this._emit('plugins:changed', { plugins: this.getAllPlugins() });
+            return true;
+        }
+
+        async _reloadFolderPlugins() {
+            if (!this._loader) return false;
+
+            this._clearFolderPlugins();
+            this._loader.reset();
+
+            try {
+                var ok = await this._loader.scan();
+                if (!ok) return false;
+
+                await this._loader.loadAll();
+                this._refreshPluginsFromRegistry();
+
+                this._emit('plugins:changed', { plugins: this.getAllPlugins() });
+                return true;
+            } catch (err) {
+                console.error('[PluginSystem] _reloadFolderPlugins error:', err);
+                return false;
+            }
         }
 
         async pickFolder() {
@@ -367,35 +437,91 @@
         // ============================================================
 
         getAllPlugins() {
-            var out = [];
+            this._lazySyncFromLoader();
 
+            var out = [];
+            var seen = Object.create(null);
             if (this._registry && typeof this._registry.getAllTypes === 'function') {
                 var types = this._registry.getAllTypes() || [];
                 for (var i = 0; i < types.length; i++) {
                     var t = types[i];
-                    if (this._plugins.has(t.id)) continue;
+                    if (!t || !t.id) continue;
+
+                    var id = String(t.id);
+                    if (seen[id]) continue;
+                    seen[id] = true;
+
                     var meta = t.metadata || {};
+                    var extra = this._plugins.get(id) || null;
+
                     out.push({
-                        id: t.id,
-                        name: t.name || t.id,
+                        id: id,
+                        name: t.name || id,
                         version: meta.version || '1.0.0',
-                        author: meta.author || 'LSYSTEM',
-                        icon: t.icon || 'icon-layout',
-                        description: t.description || '',
-                        source: 'core',
+                        author: meta.author || (extra && extra.author) || 'LSYSTEM',
+                        icon: t.icon || (extra && extra.icon) || 'icon-layout',
+                        description: t.description || (extra && extra.description) || '',
+                        source: (extra && extra.source) || 'core',
                         enabled: true,
-                        url: null,
-                        file: null,
-                        installedAt: 0
+                        url: (extra && extra.url) || null,
+                        file: (extra && extra.file) || null,
+                        installedAt: (extra && extra.installedAt) || 0
                     });
                 }
             }
 
-            this._plugins.forEach(function(p) {
-                out.push(Object.assign({}, p));
+            var self = this;
+            this._plugins.forEach(function(p, id) {
+                if (seen[id]) return;
+                seen[id] = true;
+
+                out.push({
+                    id: id,
+                    name: p.name || id,
+                    version: p.version || '1.0.0',
+                    author: p.author || '',
+                    icon: p.icon || 'icon-layout',
+                    description: p.description || '',
+                    source: p.source || 'folder',
+                    enabled: !!p.enabled,
+                    url: p.url || null,
+                    file: p.file || null,
+                    installedAt: p.installedAt || 0
+                });
             });
 
             return out;
+        }
+
+        _lazySyncFromLoader() {
+            if (!this._loader || !this._registry) return;
+
+            var loadedIds = this._loader.getLoadedIds() || [];
+            var fileMap = this._loader.getPluginFileMap();
+            var disabledSet = new Set(this._loader.getDisabledIds());
+
+            for (var i = 0; i < loadedIds.length; i++) {
+                var id = String(loadedIds[i]);
+                if (this._plugins.has(id)) continue;
+
+                var typeConfig = this._registry.getType(id);
+                if (!typeConfig) continue;
+
+                var meta = typeConfig.metadata || {};
+                this._plugins.set(id, {
+                    id: id,
+                    name: typeConfig.name || id,
+                    version: meta.version || '1.0.0',
+                    author: meta.author || '',
+                    icon: typeConfig.icon || 'icon-layout',
+                    description: typeConfig.description || '',
+                    source: 'folder',
+                    enabled: !disabledSet.has(id),
+                    url: null,
+                    file: fileMap[id] || '',
+                    installedAt: 0
+                });
+            }
         }
 
         getActivePlugins() {

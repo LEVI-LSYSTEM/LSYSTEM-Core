@@ -45,7 +45,25 @@
 
     function _normalizePath(p) {
         if (!p) return '';
-        return String(p).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+
+        var s = String(p)
+            .replace(/\\/g, '/')
+            .replace(/^\/+/, '');
+
+        var parts = s.split('/');
+        var stack = [];
+
+        for (var i = 0; i < parts.length; i++) {
+            var seg = parts[i];
+            if (seg === '' || seg === '.') continue;
+            if (seg === '..') {
+                if (stack.length > 0) stack.pop();
+                continue;
+            }
+            stack.push(seg);
+        }
+
+        return stack.join('/');
     }
 
     function _dirnameOf(path) {
@@ -610,6 +628,14 @@
 
         getLoadedIds() {
             return Array.from(this._loadedIds);
+        }
+
+        hasLoaded(id) {
+            return this._loadedIds.has(String(id));
+        }
+
+        getLoadedCount() {
+            return this._loadedIds.size;
         }
 
         getPluginFileMap() {

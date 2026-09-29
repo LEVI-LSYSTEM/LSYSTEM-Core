@@ -1,8 +1,5 @@
 // core/AppState.js
-// Версия 6.0.0
-// - Hotkey overrides: версия формата, синхронизация с дефолтами, миграция v1 → v2.
-// - Запись хранит: combo, original, label, action, overridden.
-// - Мёртвые записи (для несуществующих дефолтов) удаляются автоматически.
+// Версия 6.1.0
 
 (function() {
     'use strict';
@@ -815,6 +812,205 @@
         };
         this._windowGroupCollapsed = {};
         this._account = null;
+    };
+
+    // ============================================================
+    // 11. ПРОФИЛЬ — ЭКСПОРТ / ИМПОРТ
+    // ============================================================
+
+    /**
+     * Собирает полный снапшот состояния приложения (профиль).
+     * @param {Object} [meta] — произвольные метаданные (appVersion и т.п.)
+     * @returns {Object}
+     */
+    AppState.prototype.exportProfile = function(meta) {
+        var profile = {
+            _format: 'lsystem-profile',
+            _version: 1,
+            exportedAt: new Date().toISOString(),
+            app: (meta && typeof meta === 'object') ? deepCopy(meta) : {},
+            account: this.getAccount(),
+            theme: {
+                mode: this._themeMode,
+                autoHours: this.getAutoThemeHours()
+            },
+            hotkeys: deepCopy(this._hotkeyOverrides),
+            windowGroupCollapsed: deepCopy(this._windowGroupCollapsed)
+        };
+
+        return profile;
+    };
+
+    /**
+     * Применяет профиль к текущему состоянию.
+     * Возвращает { ok: Boolean, applied: Object, errors: Array }.
+     *
+     * @param {Object} data — результат exportProfile() (или совместимый объект).
+     * @param {Object} [opts]
+     * @param {Boolean} [opts.merge=false] — если true, объединяет хоткеи/группы
+     *                                       с текущими, а не заменяет.
+     * @returns {{ok: boolean, applied: Object, errors: string[]}}
+     */
+    AppState.prototype.importProfile = function(data, opts) {
+        opts = opts || {};
+        var merge = !!opts.merge;
+
+        var result = {
+            ok: false,
+            applied: {
+                account: false,
+                theme: false,
+                hotkeys: false,
+                windowGroupCollapsed: false
+            },
+            errors: []
+        };
+
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            result.errors.push('Некорректный формат профиля');
+            return result;
+        }
+
+        if (data._format && data._format !== 'lsystem-profile') {
+            result.errors.push('Неизвестный формат профиля: ' + data._format);
+            return result;
+        }
+
+        if (data.account && typeof data.account === 'object') {
+            try {
+                var acc = {
+                    id: String(data.account.id || 'u_' + Date.now().toString(36)),
+                    name: String(data.account.name || '')
+                };
+                this._account = acc;
+                this._saveAccount();
+                this._notify('account', this.getAccount());
+                result.applied.account = true;
+            } catch (e) {
+                result.errors.push('account: ' + e.message);
+            }
+        }
+
+        if (data.theme && typeof data.theme === 'object') {
+            try {
+                var mode = data.theme.mode;
+                if (mode === 'auto' || mode === 'dark' || mode === 'light') {
+                    this.setThemeMode(mode);
+                    result.applied.theme = true;
+                }
+
+                if (data.theme.autoHours && typeof data.theme.autoHours === 'object') {
+                    this.setAutoThemeHours(data.theme.autoHours);
+                    result.applied.theme = true;
+                }
+            } catch (e) {
+                result.errors.push('theme: ' + e.message);
+            }
+        }
+
+        if (data.hotkeys && typeof data.hotkeys === 'object' && !Array.isArray(data.hotkeys)) {
+            try {
+                if (merge) {
+                    this._mergeHotkeyOverrides(data.hotkeys);
+                } else {
+                    this.setHotkeyOverrides(data.hotkeys);
+                }
+                result.applied.hotkeys = true;
+            } catch (e) {
+                result.errors.push('hotkeys: ' + e.message);
+            }
+        }
+
+        if (data.windowGroupCollapsed && typeof data.windowGroupCollapsed === 'object') {
+            try {
+                if (merge) {
+                    for (var k in data.windowGroupCollapsed) {
+                        if (!Object.prototype.hasOwnProperty.call(data.windowGroupCollapsed, k)) continue;
+                        this._windowGroupCollapsed[k] = !!data.windowGroupCollapsed[k];
+                    }
+                } else {
+                    this._windowGroupCollapsed = deepCopy(data.windowGroupCollapsed);
+                }
+                this._saveGroupCollapsed();
+                this._notify('windowGroupCollapsed', this._windowGroupCollapsed);
+                result.applied.windowGroupCollapsed = true;
+            } catch (e) {
+                result.errors.push('windowGroupCollapsed: ' + e.message);
+            }
+        }
+
+        result.ok = result.errors.length === 0;
+        return result;
+    };
+
+    AppState.prototype._mergeHotkeyOverrides = function(incoming) {
+        var migrated = (incoming._version && incoming._version >= HOTKEY_OVERRIDES_VERSION)
+            ? incoming
+            : this._migrateHotkeyOverridesV1toV2(incoming);
+
+        if (migrated.global && typeof migrated.global === 'object') {
+            for (var key in migrated.global) {
+                if (!Object.prototype.hasOwnProperty.call(migrated.global, key)) continue;
+                var rec = migrated.global[key];
+                if (!rec) continue;
+                var original = rec.original || key;
+                var existing = this._hotkeyOverrides.global[original];
+
+                if (existing) {
+                    existing.combo = rec.combo || existing.combo || original;
+                    existing.label = rec.label || existing.label || original;
+                    existing.action = rec.action !== undefined ? rec.action : existing.action;
+                    existing.overridden = !!rec.overridden;
+                } else {
+                    this._hotkeyOverrides.global[original] = {
+                        combo: rec.combo || original,
+                        original: original,
+                        label: rec.label || original,
+                        action: rec.action || null,
+                        overridden: !!rec.overridden
+                    };
+                }
+            }
+        }
+
+        if (migrated.windows && typeof migrated.windows === 'object') {
+            for (var typeId in migrated.windows) {
+                if (!Object.prototype.hasOwnProperty.call(migrated.windows, typeId)) continue;
+                var bucketIn = migrated.windows[typeId];
+                if (!bucketIn || typeof bucketIn !== 'object') continue;
+
+                if (!this._hotkeyOverrides.windows[typeId]) {
+                    this._hotkeyOverrides.windows[typeId] = {};
+                }
+                var bucketOut = this._hotkeyOverrides.windows[typeId];
+
+                for (var k2 in bucketIn) {
+                    if (!Object.prototype.hasOwnProperty.call(bucketIn, k2)) continue;
+                    var r2 = bucketIn[k2];
+                    if (!r2) continue;
+                    var orig2 = r2.original || k2;
+                    var ex2 = bucketOut[orig2];
+
+                    if (ex2) {
+                        ex2.combo = r2.combo || ex2.combo || orig2;
+                        ex2.label = r2.label || ex2.label || orig2;
+                        ex2.action = r2.action !== undefined ? r2.action : ex2.action;
+                        ex2.overridden = !!r2.overridden;
+                    } else {
+                        bucketOut[orig2] = {
+                            combo: r2.combo || orig2,
+                            original: orig2,
+                            label: r2.label || orig2,
+                            action: r2.action || null,
+                            overridden: !!r2.overridden
+                        };
+                    }
+                }
+            }
+        }
+
+        this._saveHotkeyOverrides();
+        this._notify('hotkeyOverrides', this._hotkeyOverrides);
     };
 
     // ============================================================
