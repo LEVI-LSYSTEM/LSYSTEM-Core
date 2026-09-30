@@ -1,5 +1,5 @@
 // core/ProjectManager.js
-// Версия 5.1.0
+// Версия 5.2.0
 
 (function() {
     'use strict';
@@ -9,8 +9,6 @@
         RECENT_PROJECTS: 'lsystem_recent_projects',
         LAST_PROJECT: 'lsystem_last_project'
     };
-
-    var PROJECT_FORMAT_VERSION = '5.1.0';
 
     function sanitizeFilename(name) {
         if (!name) return 'project.lsp';
@@ -354,27 +352,30 @@
                 return false;
             }
 
+            if (!data.slots || typeof data.slots !== 'object') {
+                console.error('[ProjectManager] Invalid project format: missing slots');
+                return false;
+            }
+
             try {
-                const migrated = this._migrateProject(data);
+                if (data.metadata) {
+                    this._projectMetadata = { ...data.metadata };
+                    this._projectName = data.metadata.name || 'Untitled';
+                    this._created = data.metadata.created || new Date().toISOString();
 
-                if (migrated.metadata) {
-                    this._projectMetadata = { ...migrated.metadata };
-                    this._projectName = migrated.metadata.name || 'Untitled';
-                    this._created = migrated.metadata.created || new Date().toISOString();
-
-                    if (migrated.metadata.theme) {
+                    if (data.metadata.theme) {
                         if (window.appState && typeof window.appState.setThemeMode === 'function') {
-                            window.appState.setThemeMode(migrated.metadata.theme);
+                            window.appState.setThemeMode(data.metadata.theme);
                         } else if (typeof document !== 'undefined') {
-                            document.documentElement.setAttribute('data-theme', migrated.metadata.theme);
+                            document.documentElement.setAttribute('data-theme', data.metadata.theme);
                         }
                     }
                 }
 
                 const slotsPayload = {
-                    slots: migrated.slots || {},
-                    archive: migrated.archive || {},
-                    counters: migrated.counters || {}
+                    slots: data.slots,
+                    archive: data.archive || {},
+                    counters: data.counters || {}
                 };
 
                 const slotsResult = this._dataBus.importSlots(slotsPayload);
@@ -383,20 +384,20 @@
                     return false;
                 }
 
-                if (migrated.layout && this._layoutManager) {
-                    this._layoutManager.loadProjectData(migrated.layout);
-                    if (migrated.layoutStyle) {
-                        this._layoutManager.currentLayoutStyle = migrated.layoutStyle;
+                if (data.layout && this._layoutManager) {
+                    this._layoutManager.loadProjectData(data.layout);
+                    if (data.layoutStyle) {
+                        this._layoutManager.currentLayoutStyle = data.layoutStyle;
                     }
                     this._layoutManager.render();
                     if (typeof this._layoutManager._scheduleResize === 'function') {
                         this._layoutManager._scheduleResize();
                     }
-                } else if (migrated.layout && typeof document !== 'undefined') {
+                } else if (data.layout && typeof document !== 'undefined') {
                     const event = new CustomEvent('project-restore-layout', {
                         detail: {
-                            layoutData: migrated.layout,
-                            layoutStyle: migrated.layoutStyle || 'four-grid-2x2'
+                            layoutData: data.layout,
+                            layoutStyle: data.layoutStyle || 'four-grid-2x2'
                         },
                         bubbles: true
                     });
@@ -414,84 +415,6 @@
                 console.error('[ProjectManager] Import error:', error);
                 return false;
             }
-        }
-
-        _migrateProject(data) {
-            if (data.slots && typeof data.slots === 'object') {
-                return data;
-            }
-
-            if (data.windows && typeof data.windows === 'object') {
-                const slots = {};
-                const archive = {};
-                const counters = {};
-
-                for (const [windowId, windowData] of Object.entries(data.windows)) {
-                    const typeId = windowData.type || 'unknown';
-                    const slotId = String(windowId);
-
-                    slots[slotId] = {
-                        id: slotId,
-                        type: typeId,
-                        metadata: windowData.metadata || {},
-                        data: windowData.data !== undefined ? windowData.data : null,
-                        uiState: windowData.uiState || {},
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                        archivedAt: null
-                    };
-
-                    const match = slotId.match(/-(\d+)$/);
-                    if (match) {
-                        const num = parseInt(match[1], 10);
-                        if (!counters[typeId] || num > counters[typeId]) {
-                            counters[typeId] = num;
-                        }
-                    } else {
-                        counters[typeId] = (counters[typeId] || 0) + 1;
-                    }
-                }
-
-                const migratedLayout = this._migrateLayout(data.layout);
-
-                return {
-                    version: PROJECT_FORMAT_VERSION,
-                    timestamp: data.timestamp || new Date().toISOString(),
-                    metadata: data.metadata || {},
-                    layout: migratedLayout,
-                    layoutStyle: data.layoutStyle || 'four-grid-2x2',
-                    slots: slots,
-                    archive: archive,
-                    counters: counters
-                };
-            }
-
-            return data;
-        }
-
-        _migrateLayout(layoutData) {
-            if (!layoutData || !layoutData.layout) return layoutData;
-
-            const migrateNode = (node) => {
-                if (!node) return node;
-
-                if (node.type === 'leaf' && node.windowData) {
-                    if (!node.windowData.slotId) {
-                        node.windowData.slotId = String(node.windowData.id);
-                    }
-                }
-
-                if (node.children && Array.isArray(node.children)) {
-                    node.children = node.children.map(migrateNode);
-                }
-
-                return node;
-            };
-
-            return {
-                ...layoutData,
-                layout: migrateNode(layoutData.layout)
-            };
         }
 
         newProject(options = {}) {

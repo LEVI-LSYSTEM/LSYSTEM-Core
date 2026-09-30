@@ -1,5 +1,5 @@
 // core/AppState.js
-// Версия 7.0.0
+// Версия 7.1.0
 
 (function() {
     'use strict';
@@ -476,14 +476,10 @@
     AppState.prototype.setHotkeyOverrides = function(data) {
         if (!data || typeof data !== 'object') return;
 
-        var migrated = (data._version && data._version >= HOTKEY_OVERRIDES_VERSION)
-            ? data
-            : this._migrateHotkeyOverridesV1toV2(data);
-
         this._hotkeyOverrides = {
             _version: HOTKEY_OVERRIDES_VERSION,
-            global: (migrated.global && typeof migrated.global === 'object') ? migrated.global : {},
-            windows: (migrated.windows && typeof migrated.windows === 'object') ? migrated.windows : {}
+            global: (data.global && typeof data.global === 'object') ? data.global : {},
+            windows: (data.windows && typeof data.windows === 'object') ? data.windows : {}
         };
 
         this._saveHotkeyOverrides();
@@ -614,10 +610,6 @@
             if (hotkeysStr) {
                 var hk = JSON.parse(hotkeysStr);
                 if (hk && typeof hk === 'object' && !Array.isArray(hk)) {
-                    if (!hk._version || hk._version < HOTKEY_OVERRIDES_VERSION) {
-                        hk = this._migrateHotkeyOverridesV1toV2(hk);
-                    }
-
                     this._hotkeyOverrides = {
                         _version: HOTKEY_OVERRIDES_VERSION,
                         global: (hk.global && typeof hk.global === 'object' && !Array.isArray(hk.global))
@@ -640,44 +632,6 @@
         } catch (e) {
             console.warn('[AppState] Storage load error:', e);
         }
-    };
-
-    AppState.prototype._migrateHotkeyOverridesV1toV2 = function(old) {
-        var result = {
-            _version: HOTKEY_OVERRIDES_VERSION,
-            global: {},
-            windows: {}
-        };
-
-        var migrateBucket = function(bucket) {
-            var out = {};
-            for (var key in bucket) {
-                if (!Object.prototype.hasOwnProperty.call(bucket, key)) continue;
-                var rec = bucket[key] || {};
-                var combo = rec.combo || key;
-                out[key] = {
-                    combo: combo,
-                    original: key,
-                    label: rec.label || key,
-                    action: rec.action || null,
-                    overridden: combo !== key
-                };
-            }
-            return out;
-        };
-
-        if (old && old.global) {
-            result.global = migrateBucket(old.global);
-        }
-
-        if (old && old.windows) {
-            for (var tid in old.windows) {
-                if (!Object.prototype.hasOwnProperty.call(old.windows, tid)) continue;
-                result.windows[tid] = migrateBucket(old.windows[tid]);
-            }
-        }
-
-        return result;
     };
 
     // ============================================================
@@ -914,14 +868,10 @@
     };
 
     AppState.prototype._mergeHotkeyOverrides = function(incoming) {
-        var migrated = (incoming._version && incoming._version >= HOTKEY_OVERRIDES_VERSION)
-            ? incoming
-            : this._migrateHotkeyOverridesV1toV2(incoming);
-
-        if (migrated.global && typeof migrated.global === 'object') {
-            for (var key in migrated.global) {
-                if (!Object.prototype.hasOwnProperty.call(migrated.global, key)) continue;
-                var rec = migrated.global[key];
+        if (incoming.global && typeof incoming.global === 'object') {
+            for (var key in incoming.global) {
+                if (!Object.prototype.hasOwnProperty.call(incoming.global, key)) continue;
+                var rec = incoming.global[key];
                 if (!rec) continue;
                 var original = rec.original || key;
                 var existing = this._hotkeyOverrides.global[original];
@@ -943,10 +893,10 @@
             }
         }
 
-        if (migrated.windows && typeof migrated.windows === 'object') {
-            for (var typeId in migrated.windows) {
-                if (!Object.prototype.hasOwnProperty.call(migrated.windows, typeId)) continue;
-                var bucketIn = migrated.windows[typeId];
+        if (incoming.windows && typeof incoming.windows === 'object') {
+            for (var typeId in incoming.windows) {
+                if (!Object.prototype.hasOwnProperty.call(incoming.windows, typeId)) continue;
+                var bucketIn = incoming.windows[typeId];
                 if (!bucketIn || typeof bucketIn !== 'object') continue;
 
                 if (!this._hotkeyOverrides.windows[typeId]) {
