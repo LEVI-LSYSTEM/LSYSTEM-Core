@@ -92,7 +92,6 @@
                 const slotsData = this._dataBus.exportSlots();
 
                 const projectData = {
-                    version: PROJECT_FORMAT_VERSION,
                     timestamp: new Date().toISOString(),
                     metadata: {
                         name: this._projectName,
@@ -458,7 +457,6 @@
             const slotsData = this._dataBus.exportSlots();
 
             return {
-                version: PROJECT_FORMAT_VERSION,
                 timestamp: new Date().toISOString(),
                 metadata: {
                     name: this._projectName,
